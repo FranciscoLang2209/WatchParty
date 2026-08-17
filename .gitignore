@@ -1,0 +1,8 @@
+node_modules
+dist
+coverage
+.pnpm-store
+.env*
+!.env.example
+**/.vercel
+supabase/.temp
