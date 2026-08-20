@@ -39,7 +39,10 @@ pnpm build          # compila todas las apps
 
 ## Estructura
 
-Monorepo gestionado con pnpm workspaces (`apps/*`). Actualmente en configuración inicial; las aplicaciones (`apps/web`, `apps/api`) se agregarán en tickets posteriores.
+Monorepo gestionado con pnpm workspaces (`apps/*`).
+
+- `apps/api`: backend (Node + Express + TypeScript). Ver [`apps/api/README.md`](./apps/api/README.md).
+- `apps/web`: frontend (por agregar en un ticket posterior).
 
 ## Despliegue del frontend (Vercel)
 
