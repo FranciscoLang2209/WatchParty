@@ -37,6 +37,19 @@ pnpm test           # corre los tests
 pnpm build          # compila todas las apps
 ```
 
+## Integración continua
+
+Cada push, Pull Request y ejecución manual dispara el workflow **CI** en GitHub Actions
+(`.github/workflows/ci.yml`), visible como el check **`CI / quality`**. Ejecuta, en orden:
+instalación reproducible (`pnpm install --frozen-lockfile`), formato, lint, typecheck, tests
+y build — sin secretos, despliegues ni Docker/Supabase.
+
+El mismo chequeo se reproduce en local con:
+
+```sh
+pnpm validate
+```
+
 ## Estructura
 
 Monorepo gestionado con pnpm workspaces (`apps/*`).
