@@ -15,7 +15,10 @@
     "test": "pnpm -r --if-present run test",
     "build": "pnpm -r --if-present run build",
     "validate": "pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "prepare": "husky"
+    "prepare": "husky",
+    "supabase:start": "supabase start",
+    "supabase:status": "supabase status",
+    "supabase:stop": "supabase stop"
   },
   "lint-staged": {
     "apps/**/*.{ts,tsx}": [
@@ -36,6 +39,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^17.3.0",
     "prettier": "^3.9.6",
+    "supabase": "2.101.0",
     "typescript": "6.0.3",
     "typescript-eslint": "^8.67.0"
   }

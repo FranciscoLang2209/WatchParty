@@ -7,6 +7,7 @@ Aplicación web social para vivir cada partido de fútbol en tiempo real: salas 
 - [Node.js 24.19.0](https://nodejs.org/) (gestionado vía [nvm](https://github.com/nvm-sh/nvm); ver `.nvmrc`)
 - [pnpm 10.34.0](https://pnpm.io/) (gestionado vía Corepack)
 - [Corepack](https://nodejs.org/api/corepack.html) habilitado (`corepack enable`)
+- [Docker Desktop](https://docs.docker.com/desktop/) en ejecución (requerido por Supabase CLI para levantar el stack local)
 
 ## Instalación
 
@@ -56,6 +57,34 @@ Monorepo gestionado con pnpm workspaces (`apps/*`).
 
 - `apps/api`: backend (Node + Express + TypeScript). Ver [`apps/api/README.md`](./apps/api/README.md).
 - `apps/web`: frontend (por agregar en un ticket posterior).
+
+## Supabase (desarrollo local)
+
+El proyecto usa la [Supabase CLI](https://supabase.com/docs/guides/local-development) para levantar un stack
+local de Supabase (Postgres, Auth, Storage, Realtime, Studio) en contenedores Docker. No hay ningún proyecto
+remoto vinculado: todo corre en tu máquina.
+
+### Precondición
+
+Docker Desktop debe estar abierto y con el motor en ejecución antes de iniciar el stack.
+
+### Ciclo de uso
+
+```sh
+pnpm supabase:start   # levanta el stack local (puede tardar la primera vez por la descarga de imágenes)
+pnpm supabase:status  # muestra el estado y las URLs de los servicios locales
+pnpm supabase:stop    # detiene el stack
+```
+
+Al iniciar, la CLI expone Studio, la API REST/GraphQL, Auth y la base de datos en `127.0.0.1` con claves de
+desarrollo predeterminadas (no son secretos reales; son las mismas para cualquier instancia local).
+
+### Limitación de uso: sólo local
+
+- El stack no está pensado para exponerse públicamente: todos los servicios bindean a `0.0.0.0` y Studio,
+  `pg-meta` y analytics no tienen autenticación.
+- No ejecutar `supabase link` ni commitear `project_ref`, claves ni credenciales de un proyecto remoto.
+- `supabase/.temp` y los datos generados localmente no se versionan (ver `.gitignore`).
 
 ## Despliegue del frontend (Vercel)
 
