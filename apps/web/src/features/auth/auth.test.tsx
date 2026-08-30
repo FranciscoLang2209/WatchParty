@@ -242,6 +242,27 @@ describe('Estado pendiente y navegación entre páginas de acceso', () => {
     expect(await screen.findByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
   });
 
+  it('muestra el logo de WatchParty sobre el nombre, como imagen decorativa', () => {
+    renderAuth('/login');
+
+    const logo = document.querySelector('img[src="/logo.png"]');
+
+    expect(logo).not.toBeNull();
+    expect(logo).toHaveAttribute('aria-hidden', 'true');
+    expect(logo).toHaveAttribute('alt', '');
+    // Decorativo: el nombre visible ya dice WatchParty, no debe anunciarse dos veces.
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    expect(logo?.compareDocumentPosition(screen.getByText('WatchParty'))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it('también muestra el logo en la página de registro', () => {
+    renderAuth('/register');
+
+    expect(document.querySelector('img[src="/logo.png"]')).not.toBeNull();
+  });
+
   it('no incorpora ningún control de cierre de sesión', () => {
     renderAuth('/login');
 

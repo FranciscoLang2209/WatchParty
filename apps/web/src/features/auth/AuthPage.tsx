@@ -40,7 +40,17 @@ export function AuthPage({ mode }: AuthPageProps) {
   return (
     <div className="flex min-h-dvh w-full flex-col items-center justify-center px-4 py-10 sm:px-6">
       <div className="mx-auto flex w-full max-w-md flex-col gap-6">
-        <p className="text-center font-display text-lg font-semibold text-primary">WatchParty</p>
+        <div className="flex flex-col items-center gap-3">
+          <img
+            src="/logo.png"
+            alt=""
+            aria-hidden="true"
+            width={72}
+            height={72}
+            className="h-16 w-16 sm:h-18 sm:w-18"
+          />
+          <p className="font-display text-lg font-semibold text-primary">WatchParty</p>
+        </div>
 
         <Card>
           <CardHeader>
