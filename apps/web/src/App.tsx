@@ -1,5 +1,15 @@
+import { BrowserRouter } from 'react-router-dom';
+import { AuthProvider } from './auth/AuthProvider';
+import { AppRoutes } from './app/router';
+
 function App() {
-  return <h1 className="text-center">WatchParty</h1>;
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </AuthProvider>
+  );
 }
 
 export default App;
