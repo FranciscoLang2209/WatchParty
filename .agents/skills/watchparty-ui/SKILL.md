@@ -5,9 +5,7 @@ description: Apply and preserve the WatchParty design system when creating, edit
 
 # watchparty-ui
 
-Guía para trabajar la interfaz de WatchParty de forma consistente. Aplica a
-cualquier tarea que cree, edite, refactorice o revise UI. **No** aplica a tareas
-exclusivamente de backend o infraestructura.
+Guía para trabajar la interfaz de WatchParty de forma consistente. Aplica a cualquier tarea que cree, edite, refactorice o revise UI. **No** aplica a tareas exclusivamente de backend o infraestructura.
 
 ## Fuente de verdad
 
@@ -16,6 +14,25 @@ viven en un único lugar: [`../../../DESIGN_SYSTEM.md`](../../../DESIGN_SYSTEM.m
 Este skill dice **cuándo** leerlo y **cómo** trabajar; no lo duplica.
 
 Si este skill y `DESIGN_SYSTEM.md` se contradicen, manda `DESIGN_SYSTEM.md`.
+
+## Dirección del producto
+
+```text
+Football × Social × Live
+```
+
+WatchParty se usa mientras hay un partido en curso: es la **segunda pantalla** de
+alguien que está mirando fútbol. Debe sentirse moderno, deportivo, social, rápido
+y limpio, y leerse de un vistazo sin competir con el partido.
+
+Hay que evitar estética de apuestas o casino, gradientes excesivos, interfaces
+recargadas de gaming, glassmorphism exagerado, sombras o glows grandes, emojis
+como iconografía principal y ruido visual innecesario.
+
+Como criterio rápido: **Sora** para títulos y valores destacados, **Inter** para
+interfaz y texto general; el **verde** identifica marca, acciones principales y
+selección; el **rojo** se reserva para LIVE, alertas y errores. Los valores
+concretos están en `DESIGN_SYSTEM.md`.
 
 ## Antes de tocar la interfaz
 
