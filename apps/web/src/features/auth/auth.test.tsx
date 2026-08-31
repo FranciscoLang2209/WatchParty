@@ -242,25 +242,29 @@ describe('Estado pendiente y navegación entre páginas de acceso', () => {
     expect(await screen.findByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
   });
 
-  it('muestra el logo de WatchParty sobre el nombre, como imagen decorativa', () => {
+  it('muestra el logo con el nombre de WatchParty como imagen accesible', () => {
     renderAuth('/login');
 
-    const logo = document.querySelector('img[src="/logo.png"]');
+    const logo = screen.getByRole('img', { name: 'WatchParty' });
 
-    expect(logo).not.toBeNull();
-    expect(logo).toHaveAttribute('aria-hidden', 'true');
-    expect(logo).toHaveAttribute('alt', '');
-    // Decorativo: el nombre visible ya dice WatchParty, no debe anunciarse dos veces.
-    expect(screen.queryByRole('img')).not.toBeInTheDocument();
-    expect(logo?.compareDocumentPosition(screen.getByText('WatchParty'))).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
+    expect(logo).toHaveAttribute('src', '/title_logo.png');
+    // El logo ya contiene el nombre, así que se anuncia en vez de ocultarse.
+    expect(logo).not.toHaveAttribute('aria-hidden');
+    // Dimensiones intrínsecas reales del archivo: reservan el espacio correcto.
+    expect(logo).toHaveAttribute('width', '1600');
+    expect(logo).toHaveAttribute('height', '1095');
+    // Ancho por token responsive, nunca fijo en píxeles.
+    expect(logo.className).toMatch(/\bw-56\b/);
+    expect(logo.className).not.toMatch(/\[\d+px\]/);
   });
 
   it('también muestra el logo en la página de registro', () => {
     renderAuth('/register');
 
-    expect(document.querySelector('img[src="/logo.png"]')).not.toBeNull();
+    expect(screen.getByRole('img', { name: 'WatchParty' })).toHaveAttribute(
+      'src',
+      '/title_logo.png',
+    );
   });
 
   it('no incorpora ningún control de cierre de sesión', () => {
