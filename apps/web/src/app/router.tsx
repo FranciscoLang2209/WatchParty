@@ -1,16 +1,13 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
-import { RequireAuth } from '../auth/RequireAuth';
-import { AppLayout } from '../layouts/AppLayout';
-import { AuthPage } from '../features/auth/AuthPage';
+import { RequireAuth } from '@/auth/RequireAuth';
+import { AppLayout } from '@/layouts/AppLayout';
+import { AuthPage } from '@/features/auth/AuthPage';
+import { HomePage } from '@/features/home/HomePage';
 
 /**
- * Placeholders privados. Los tickets de Home y detalle los reemplazan por sus
- * páginas reales sin crear un router nuevo.
+ * Placeholder privado. El ticket de detalle lo reemplaza por su página real sin
+ * crear un router nuevo.
  */
-function HomePlaceholder() {
-  return <h1>Inicio</h1>;
-}
-
 function MatchDetailPlaceholder() {
   return <h1>Detalle del partido</h1>;
 }
@@ -27,7 +24,7 @@ export function AppRoutes() {
           </RequireAuth>
         }
       >
-        <Route path="/" element={<HomePlaceholder />} />
+        <Route path="/" element={<HomePage />} />
         <Route path="/matches/:matchId" element={<MatchDetailPlaceholder />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
