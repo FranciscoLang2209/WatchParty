@@ -1,1 +1,125 @@
 @import 'tailwindcss';
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Tokens visuales de WatchParty (Football × Social × Live).
+ * Verde para marca y acciones principales; rojo para LIVE, alertas y errores.
+ * Fuente de verdad temporal hasta que el ticket del sistema de diseño publique
+ * DESIGN_SYSTEM.md: los valores deben mantenerse alineados con ese documento.
+ */
+:root {
+  --radius: 0.75rem;
+
+  --font-sans-stack: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display-stack: Sora, Inter, ui-sans-serif, system-ui, sans-serif;
+
+  --background: #f4f7f5;
+  --foreground: #111a15;
+  --card: #ffffff;
+  --card-foreground: #111a15;
+  --popover: #ffffff;
+  --popover-foreground: #111a15;
+  --primary: #00b443;
+  --primary-foreground: #08110a;
+  --secondary: #031e3a;
+  --secondary-foreground: #f8fafc;
+  --muted: #edf3ef;
+  --muted-foreground: #526159;
+  --accent: #edf3ef;
+  --accent-foreground: #111a15;
+  --destructive: #d9363e;
+  --destructive-foreground: #ffffff;
+  --live: #d9363e;
+  --border: #d4dfd7;
+  --input: #d4dfd7;
+  --ring: #00b443;
+}
+
+.dark {
+  --background: #080d16;
+  --foreground: #f8fafc;
+  --card: #131d2c;
+  --card-foreground: #f8fafc;
+  --popover: #131d2c;
+  --popover-foreground: #f8fafc;
+  --primary: #00b443;
+  --primary-foreground: #08110a;
+  --secondary: #031e3a;
+  --secondary-foreground: #f8fafc;
+  --muted: #192638;
+  --muted-foreground: #94a3b8;
+  --accent: #192638;
+  --accent-foreground: #f8fafc;
+  --destructive: #f04444;
+  --destructive-foreground: #f8fafc;
+  --live: #f04444;
+  --border: #253247;
+  --input: #253247;
+  --ring: #00b443;
+}
+
+@theme inline {
+  --font-sans: var(--font-sans-stack);
+  --font-display: var(--font-display-stack);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-live: var(--live);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 8px);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    overflow-x: hidden;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

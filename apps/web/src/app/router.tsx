@@ -1,19 +1,12 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { RequireAuth } from '../auth/RequireAuth';
 import { AppLayout } from '../layouts/AppLayout';
+import { AuthPage } from '../features/auth/AuthPage';
 
 /**
- * Placeholders públicos y privados. Los tickets de acceso, Home y detalle los
- * reemplazan por sus páginas reales sin crear un router nuevo.
+ * Placeholders privados. Los tickets de Home y detalle los reemplazan por sus
+ * páginas reales sin crear un router nuevo.
  */
-function LoginPlaceholder() {
-  return <h1>Iniciar sesión</h1>;
-}
-
-function RegisterPlaceholder() {
-  return <h1>Crear cuenta</h1>;
-}
-
 function HomePlaceholder() {
   return <h1>Inicio</h1>;
 }
@@ -25,8 +18,8 @@ function MatchDetailPlaceholder() {
 export function AppRoutes() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginPlaceholder />} />
-      <Route path="/register" element={<RegisterPlaceholder />} />
+      <Route path="/login" element={<AuthPage mode="login" />} />
+      <Route path="/register" element={<AuthPage mode="register" />} />
       <Route
         element={
           <RequireAuth>
