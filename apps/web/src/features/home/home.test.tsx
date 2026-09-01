@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@supabase/supabase-js';
@@ -81,16 +81,17 @@ describe('HomePage', () => {
   it('no contiene datos de partidos ni contenido simulado', async () => {
     authMock.getSession.mockResolvedValue({ data: { session }, error: null });
 
-    const { container } = renderAt('/');
+    renderAt('/');
     await screen.findByRole('heading', { name: 'Inicio' });
 
-    const main = screen.getByRole('main');
+    // El lienzo privado es la región principal; el Header vive fuera de ella.
+    const main = within(screen.getByRole('main'));
 
-    expect(main.textContent?.replace(/\s/g, '')).toBe('Inicio');
-    expect(container.querySelectorAll('img')).toHaveLength(0);
-    expect(screen.queryByRole('list')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
-    expect(screen.queryByText(/partido|bienvenid|vs\.?/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('main').textContent?.replace(/\s/g, '')).toBe('Inicio');
+    expect(screen.getByRole('main').querySelectorAll('img')).toHaveLength(0);
+    expect(main.queryByRole('list')).not.toBeInTheDocument();
+    expect(main.queryByRole('button')).not.toBeInTheDocument();
+    expect(main.queryByText(/partido|bienvenid|vs\.?/i)).not.toBeInTheDocument();
   });
 
   it('no realiza llamadas HTTP ni consulta tablas de Supabase', async () => {
@@ -103,14 +104,17 @@ describe('HomePage', () => {
     expect(fromMock).not.toHaveBeenCalled();
   });
 
-  it('no incorpora Header ni navegación', async () => {
+  it('la Home no aporta Header ni navegación propios', async () => {
     authMock.getSession.mockResolvedValue({ data: { session }, error: null });
 
     renderAt('/');
     await screen.findByRole('heading', { name: 'Inicio' });
 
-    expect(screen.queryByRole('banner')).not.toBeInTheDocument();
-    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+    // El Header lo monta AppLayout, no la página: dentro de main no hay ninguno.
+    const main = within(screen.getByRole('main'));
+
+    expect(main.queryByRole('banner')).not.toBeInTheDocument();
+    expect(main.queryByRole('navigation')).not.toBeInTheDocument();
   });
 
   it('conserva las rutas públicas de acceso', async () => {
