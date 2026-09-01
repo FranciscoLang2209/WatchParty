@@ -40,12 +40,22 @@ export function AuthPage({ mode }: AuthPageProps) {
   return (
     <div className="flex min-h-dvh w-full flex-col items-center justify-center px-4 py-10 sm:px-6">
       <div className="mx-auto flex w-full max-w-md flex-col gap-6">
+        {/* Dos variantes del mismo logo: el azul de la marca se pierde sobre el
+            fondo oscuro, así que en ese tema se usa una versión aclarada. La
+            clase `dark` del <html> las alterna sin lógica adicional. */}
         <img
           src="/title_logo.png"
           alt="WatchParty"
           width={1600}
           height={1095}
-          className="mx-auto h-auto w-56 object-contain sm:w-64"
+          className="mx-auto h-auto w-56 object-contain sm:w-64 dark:hidden"
+        />
+        <img
+          src="/title_logo-dark.png"
+          alt="WatchParty"
+          width={1600}
+          height={1095}
+          className="mx-auto hidden h-auto w-56 object-contain sm:w-64 dark:block"
         />
 
         <Card>

@@ -58,7 +58,14 @@ describe('AppHeader — marca y navegación', () => {
     const logo = screen.getByRole('link', { name: 'WatchParty, ir al inicio' });
 
     expect(logo).toHaveAttribute('href', '/');
-    expect(logo.querySelector('img')).toHaveAttribute('aria-hidden', 'true');
+
+    // Dos variantes decorativas: el nombre accesible lo aporta el enlace.
+    const imgs = Array.from(logo.querySelectorAll('img'));
+
+    expect(imgs.map((img) => img.getAttribute('src'))).toEqual(['/logo.png', '/logo-dark.png']);
+    for (const img of imgs) expect(img).toHaveAttribute('aria-hidden', 'true');
+    expect(imgs[0]?.className).toMatch(/\bdark:hidden\b/);
+    expect(imgs[1]?.className).toMatch(/\bdark:block\b/);
   });
 
   it('muestra los cuatro destinos de la configuración compartida', () => {

@@ -245,26 +245,45 @@ describe('Estado pendiente y navegación entre páginas de acceso', () => {
   it('muestra el logo con el nombre de WatchParty como imagen accesible', () => {
     renderAuth('/login');
 
-    const logo = screen.getByRole('img', { name: 'WatchParty' });
+    // JSDOM no aplica CSS, así que ambas variantes están en el DOM; en el
+    // navegador la clase `dark` del <html> deja visible sólo una.
+    const logos = screen.getAllByRole('img', { name: 'WatchParty' });
+    expect(logos).toHaveLength(2);
+    const claro = logos[0]!;
+    const oscuro = logos[1]!;
 
-    expect(logo).toHaveAttribute('src', '/title_logo.png');
+    expect(claro).toHaveAttribute('src', '/title_logo.png');
+    expect(oscuro).toHaveAttribute('src', '/title_logo-dark.png');
+
     // El logo ya contiene el nombre, así que se anuncia en vez de ocultarse.
-    expect(logo).not.toHaveAttribute('aria-hidden');
+    expect(claro).not.toHaveAttribute('aria-hidden');
     // Dimensiones intrínsecas reales del archivo: reservan el espacio correcto.
-    expect(logo).toHaveAttribute('width', '1600');
-    expect(logo).toHaveAttribute('height', '1095');
+    expect(claro).toHaveAttribute('width', '1600');
+    expect(claro).toHaveAttribute('height', '1095');
     // Ancho por token responsive, nunca fijo en píxeles.
-    expect(logo.className).toMatch(/\bw-56\b/);
-    expect(logo.className).not.toMatch(/\[\d+px\]/);
+    expect(claro.className).toMatch(/\bw-56\b/);
+    expect(claro.className).not.toMatch(/\[\d+px\]/);
+  });
+
+  it('alterna las variantes del logo según el tema activo', () => {
+    renderAuth('/login');
+
+    const logos = screen.getAllByRole('img', { name: 'WatchParty' });
+    const claro = logos[0]!;
+    const oscuro = logos[1]!;
+
+    // La variante clara desaparece en tema oscuro y viceversa.
+    expect(claro.className).toMatch(/\bdark:hidden\b/);
+    expect(oscuro.className).toMatch(/\bhidden\b/);
+    expect(oscuro.className).toMatch(/\bdark:block\b/);
   });
 
   it('también muestra el logo en la página de registro', () => {
     renderAuth('/register');
 
-    expect(screen.getByRole('img', { name: 'WatchParty' })).toHaveAttribute(
-      'src',
-      '/title_logo.png',
-    );
+    expect(
+      screen.getAllByRole('img', { name: 'WatchParty' }).map((i) => i.getAttribute('src')),
+    ).toEqual(['/title_logo.png', '/title_logo-dark.png']);
   });
 
   it('no incorpora ningún control de cierre de sesión', () => {
