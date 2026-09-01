@@ -66,6 +66,11 @@
 @theme inline {
   --breakpoint-desktop: 981px;
 
+  /* Separación inferior de la navegación móvil y espacio que le reserva el
+     contenido, ambos respetando el área segura del dispositivo. */
+  --spacing-safe-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  --spacing-bottom-nav: calc(5rem + env(safe-area-inset-bottom));
+
   --font-sans: var(--font-sans-stack);
   --font-display: var(--font-display-stack);
 
