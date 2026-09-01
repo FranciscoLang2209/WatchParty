@@ -45,7 +45,18 @@ export function AppHeader({ hasUnreadNotifications = false }: AppHeaderProps) {
         <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-2 px-4 desktop:h-18 desktop:px-6">
           <Button asChild variant="ghost" className="shrink-0 px-2">
             <Link to="/" aria-label="WatchParty, ir al inicio">
-              <img src="/logo.png" alt="" aria-hidden="true" className="size-8 object-contain" />
+              <img
+                src="/logo.png"
+                alt=""
+                aria-hidden="true"
+                className="size-8 object-contain dark:hidden"
+              />
+              <img
+                src="/logo-dark.png"
+                alt=""
+                aria-hidden="true"
+                className="hidden size-8 object-contain dark:block"
+              />
               <span className="font-display text-base font-semibold">WatchParty</span>
             </Link>
           </Button>
