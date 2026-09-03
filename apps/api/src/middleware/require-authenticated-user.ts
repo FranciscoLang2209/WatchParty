@@ -1,31 +1,32 @@
 import type { NextFunction, Request, Response } from 'express';
 import { supabaseAuthClient } from '../auth/supabase-auth-client.js';
+import { UnauthorizedError } from '../errors/http-error.js';
 
 const BEARER_PREFIX = 'Bearer ';
 
 export async function requireAuthenticatedUser(
   req: Request,
-  res: Response,
+  _res: Response,
   next: NextFunction,
 ): Promise<void> {
   const authorization = req.header('Authorization');
 
   if (!authorization?.startsWith(BEARER_PREFIX)) {
-    res.status(401).json({ error: 'No autenticado.' });
+    next(new UnauthorizedError());
     return;
   }
 
   const accessToken = authorization.slice(BEARER_PREFIX.length).trim();
 
   if (!accessToken) {
-    res.status(401).json({ error: 'No autenticado.' });
+    next(new UnauthorizedError());
     return;
   }
 
   const { data, error } = await supabaseAuthClient.auth.getUser(accessToken);
 
   if (error || !data.user?.email) {
-    res.status(401).json({ error: 'No autenticado.' });
+    next(new UnauthorizedError());
     return;
   }
 

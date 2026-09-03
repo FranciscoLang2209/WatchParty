@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import { env } from './config/env.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
+import { LocalMatchCatalog } from './modules/matches/infrastructure/local-match-catalog.js';
+import { createMatchesRouter } from './modules/matches/http/matches-router.js';
 
 const app = express();
 
@@ -21,6 +23,10 @@ app.get('/health', (_req, res) => {
   //request http para ver si está ok el servidor
   res.status(200).json({ status: 'ok' });
 });
+
+const matchCatalog = new LocalMatchCatalog();
+
+app.use('/matches', createMatchesRouter(matchCatalog));
 
 app.use(notFoundHandler);
 app.use(errorHandler);
