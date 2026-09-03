@@ -135,4 +135,66 @@ describe('GET /matches', () => {
     });
     expect(JSON.stringify(response.body)).not.toContain('detalle interno');
   });
+
+  it('ordena correctamente fechas con y sin milisegundos (no como texto)', async () => {
+    const withoutMs: Match = { ...MATCH_EARLY, id: 'ms-1', kickoffAt: '2026-09-06T21:00:00Z' };
+    const withMs: Match = { ...MATCH_EARLY, id: 'ms-2', kickoffAt: '2026-09-06T21:00:00.001Z' };
+
+    mockAuthenticated();
+    const app = buildTestApp(buildCatalog([withMs, withoutMs]));
+
+    const response = await request(app).get('/matches').set('Authorization', 'Bearer good-token');
+
+    expect(response.body.matches.map((match: { id: string }) => match.id)).toEqual([
+      'ms-1',
+      'ms-2',
+    ]);
+  });
+
+  it('con un esquema distinto de Bearer no invoca el catálogo y responde 401 UNAUTHORIZED', async () => {
+    const list = vi.fn();
+    const catalog: MatchCatalog = { list, findById: vi.fn() };
+    const app = buildTestApp(catalog);
+
+    const response = await request(app).get('/matches').set('Authorization', 'Basic abc123');
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      error: { code: 'UNAUTHORIZED', message: expect.any(String) },
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('con un Bearer vacío no invoca el catálogo y responde 401 UNAUTHORIZED', async () => {
+    const list = vi.fn();
+    const catalog: MatchCatalog = { list, findById: vi.fn() };
+    const app = buildTestApp(catalog);
+
+    const response = await request(app).get('/matches').set('Authorization', 'Bearer ');
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      error: { code: 'UNAUTHORIZED', message: expect.any(String) },
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('con un token inválido no invoca el catálogo y responde 401 UNAUTHORIZED', async () => {
+    vi.mocked(supabaseAuthClient.auth.getUser).mockResolvedValueOnce({
+      data: { user: null },
+      error: { message: 'invalid token' },
+    } as GetUserResult);
+
+    const list = vi.fn();
+    const catalog: MatchCatalog = { list, findById: vi.fn() };
+    const app = buildTestApp(catalog);
+
+    const response = await request(app).get('/matches').set('Authorization', 'Bearer bad-token');
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      error: { code: 'UNAUTHORIZED', message: expect.any(String) },
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
 });

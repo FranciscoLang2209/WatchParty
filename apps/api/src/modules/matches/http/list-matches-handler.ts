@@ -4,7 +4,8 @@ import type { MatchCatalog } from '../domain/match-catalog.js';
 import { toMatchResponse } from './match-response.js';
 
 function compareMatches(a: Match, b: Match): number {
-  if (a.kickoffAt !== b.kickoffAt) return a.kickoffAt < b.kickoffAt ? -1 : 1;
+  const kickoffDiff = Date.parse(a.kickoffAt) - Date.parse(b.kickoffAt);
+  if (kickoffDiff !== 0) return kickoffDiff;
   if (a.id === b.id) return 0;
   return a.id < b.id ? -1 : 1;
 }
