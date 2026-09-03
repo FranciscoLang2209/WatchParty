@@ -65,7 +65,7 @@ describe('HomePage', () => {
   it('redirige a /login a una persona sin sesión', async () => {
     renderAt('/');
 
-    expect(await screen.findByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Inicio' })).not.toBeInTheDocument();
   });
 
@@ -119,11 +119,11 @@ describe('HomePage', () => {
 
   it('conserva las rutas públicas de acceso', async () => {
     renderAt('/login');
-    expect(await screen.findByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
   });
 
   it('conserva la ruta pública de registro', async () => {
     renderAt('/register');
-    expect(await screen.findByRole('heading', { name: 'Crear cuenta' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
   });
 });

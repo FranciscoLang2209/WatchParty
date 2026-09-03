@@ -168,12 +168,12 @@ describe('BottomNavigation dentro del layout', () => {
     // Login y registro son públicos: no montan el layout autenticado.
     authMock.getSession.mockResolvedValue({ data: { session: null }, error: null });
     const login = renderRoute('/login');
-    await screen.findByRole('heading', { name: 'Iniciar sesión' });
+    await screen.findByRole('heading', { name: 'Entrá a la tribuna' });
     expect(screen.queryByRole('navigation', { name: 'Navegación móvil' })).not.toBeInTheDocument();
     login.unmount();
 
     renderRoute('/register');
-    await screen.findByRole('heading', { name: 'Crear cuenta' });
+    await screen.findByRole('heading', { name: 'Sumate a la tribuna' });
     expect(screen.queryByRole('navigation', { name: 'Navegación móvil' })).not.toBeInTheDocument();
 
     vi.doUnmock('@/lib/supabase');

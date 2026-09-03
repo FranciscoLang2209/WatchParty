@@ -40,25 +40,25 @@ describe('AppRoutes', () => {
   it('expone /login como ruta pública', async () => {
     renderAt('/login');
 
-    expect(await screen.findByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
   });
 
   it('expone /register como ruta pública', async () => {
     renderAt('/register');
 
-    expect(await screen.findByRole('heading', { name: 'Crear cuenta' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
   });
 
   it('redirige Home a /login sin sesión', async () => {
     renderAt('/');
 
-    expect(await screen.findByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
   });
 
   it('redirige el detalle de partido a /login sin sesión', async () => {
     renderAt('/matches/match-001');
 
-    expect(await screen.findByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
   });
 
   it('renderiza Home dentro del layout privado con sesión', async () => {

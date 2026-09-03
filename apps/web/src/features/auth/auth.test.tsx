@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthError, Session } from '@supabase/supabase-js';
+import type { AuthMode } from './auth-mode';
 
 const { authMock } = vi.hoisted(() => ({
   authMock: {
@@ -16,6 +17,11 @@ vi.mock('../../lib/supabase', () => ({ supabase: { auth: authMock } }));
 const { AuthPage } = await import('./AuthPage');
 
 const session = { access_token: 'token-123', user: { id: 'user-1', email: 'a@b.com' } } as Session;
+
+const SUBMIT_LABEL: Record<AuthMode, string> = {
+  login: 'Ingresar',
+  register: 'Crear cuenta',
+};
 
 function authError(code: string, message: string): AuthError {
   return { name: 'AuthApiError', message, code, status: 400 } as AuthError;
@@ -39,20 +45,24 @@ function renderAuth(path: '/login' | '/register') {
 
 function fields() {
   return {
-    email: screen.getByLabelText('Email'),
+    email: screen.getByLabelText('Correo electrónico'),
     password: screen.getByLabelText('Contraseña'),
   };
 }
 
-async function fillAndSubmit(
-  user: ReturnType<typeof userEvent.setup>,
-  submitName: string | RegExp,
-) {
-  const { email, password } = fields();
+async function fillAndSubmit(user: ReturnType<typeof userEvent.setup>, mode: AuthMode) {
+  if (mode === 'register') {
+    await user.type(screen.getByLabelText('Usuario'), 'martu');
+  }
 
-  await user.type(email, 'persona@watchparty.test');
-  await user.type(password, 'contrasena-segura');
-  await user.click(screen.getByRole('button', { name: submitName }));
+  await user.type(fields().email, 'persona@watchparty.test');
+  await user.type(fields().password, 'contrasena-segura');
+
+  if (mode === 'register') {
+    await user.type(screen.getByLabelText('Confirmar contraseña'), 'contrasena-segura');
+  }
+
+  await user.click(screen.getByRole('button', { name: SUBMIT_LABEL[mode] }));
 }
 
 beforeEach(() => {
@@ -64,15 +74,58 @@ beforeEach(() => {
   });
 });
 
+describe('Presentación de las pantallas de acceso', () => {
+  it('usa el antetítulo y el título del mockup en login', () => {
+    renderAuth('/login');
+
+    expect(screen.getByText('Bienvenido de nuevo')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
+  });
+
+  it('usa el antetítulo, el título y la bajada del mockup en registro', () => {
+    renderAuth('/register');
+
+    expect(screen.getByText('Creá tu cuenta')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
+    expect(
+      screen.getByText('Armá tu perfil para comentar, calificar y guardar cada partido.'),
+    ).toBeInTheDocument();
+  });
+
+  it('el antetítulo se escribe en minúsculas y se muestra en mayúsculas por CSS', () => {
+    renderAuth('/register');
+
+    // Evita que un lector de pantalla deletree el texto letra por letra.
+    expect(screen.getByText('Creá tu cuenta').className).toMatch(/\buppercase\b/);
+  });
+
+  it('permite cambiar de tema desde las pantallas de acceso', () => {
+    renderAuth('/login');
+
+    expect(
+      screen.getByRole('button', { name: /activar modo (claro|oscuro)/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('no envuelve el formulario en una card', () => {
+    renderAuth('/login');
+
+    const form = screen.getByRole('button', { name: 'Ingresar' }).closest('form');
+
+    expect(form?.closest('.bg-card')).toBeNull();
+  });
+});
+
 describe('AuthPage en modo login', () => {
   it('renderiza el formulario de login con email y contraseña únicamente', () => {
     renderAuth('/login');
 
-    expect(screen.getByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
     expect(fields().email).toBeInTheDocument();
     expect(fields().password).toBeInTheDocument();
     expect(screen.getAllByRole('textbox')).toHaveLength(1);
-    expect(screen.queryByLabelText(/nombre/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Usuario')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Confirmar contraseña')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /google|github|oauth/i })).not.toBeInTheDocument();
   });
 
@@ -83,16 +136,19 @@ describe('AuthPage en modo login', () => {
 
     expect(email).toHaveAttribute('type', 'email');
     expect(email).toHaveAttribute('autocomplete', 'email');
+    expect(email).toHaveAttribute('placeholder', 'nombre@ejemplo.com');
     expect(email).toBeRequired();
     expect(password).toHaveAttribute('type', 'password');
     expect(password).toHaveAttribute('autocomplete', 'current-password');
     expect(password).toBeRequired();
+    // El mínimo de 8 caracteres es una regla del registro, no del login.
+    expect(password).not.toHaveAttribute('minlength');
   });
 
   it('llama a signInWithPassword y navega a / cuando el login es exitoso', async () => {
     const { user } = renderAuth('/login');
 
-    await fillAndSubmit(user, 'Iniciar sesión');
+    await fillAndSubmit(user, 'login');
 
     expect(authMock.signInWithPassword).toHaveBeenCalledWith({
       email: 'persona@watchparty.test',
@@ -108,17 +164,17 @@ describe('AuthPage en modo login', () => {
     });
 
     const { user } = renderAuth('/login');
-    await fillAndSubmit(user, 'Iniciar sesión');
+    await fillAndSubmit(user, 'login');
 
     const alert = await screen.findByRole('alert');
 
     expect(alert).toHaveAttribute('aria-live', 'assertive');
     expect(alert).toHaveTextContent('El email o la contraseña no son correctos.');
     expect(alert).not.toHaveTextContent('contrasena-segura');
-    expect(screen.getByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
     expect(fields().email).toHaveValue('persona@watchparty.test');
     expect(fields().email).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Iniciar sesión' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Ingresar' })).toBeEnabled();
   });
 
   it('muestra un error recuperable si el login no devuelve sesión', async () => {
@@ -128,7 +184,7 @@ describe('AuthPage en modo login', () => {
     });
 
     const { user } = renderAuth('/login');
-    await fillAndSubmit(user, 'Iniciar sesión');
+    await fillAndSubmit(user, 'login');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('No pudimos iniciar tu sesión.');
     expect(screen.queryByRole('heading', { name: 'Inicio' })).not.toBeInTheDocument();
@@ -136,30 +192,95 @@ describe('AuthPage en modo login', () => {
 });
 
 describe('AuthPage en modo registro', () => {
-  it('renderiza el formulario de registro con email y contraseña únicamente', () => {
+  it('renderiza los cuatro campos del mockup, en orden', () => {
     renderAuth('/register');
 
-    expect(screen.getByRole('heading', { name: 'Crear cuenta' })).toBeInTheDocument();
-    expect(screen.getAllByRole('textbox')).toHaveLength(1);
-    expect(screen.queryByLabelText(/repetir|confirmar|nombre|avatar/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
+
+    const form = screen.getByRole('button', { name: 'Crear cuenta' }).closest('form');
+    const labels = Array.from(form?.querySelectorAll('label') ?? []).map((l) => l.textContent);
+
+    expect(labels).toEqual(['Usuario', 'Correo electrónico', 'Contraseña', 'Confirmar contraseña']);
   });
 
-  it('usa autocomplete new-password en el registro', () => {
+  it('usa los placeholders del mockup', () => {
     renderAuth('/register');
 
+    expect(screen.getByLabelText('Usuario')).toHaveAttribute('placeholder', 'Nombre de usuario');
+    expect(fields().email).toHaveAttribute('placeholder', 'nombre@ejemplo.com');
+    expect(fields().password).toHaveAttribute('placeholder', 'Mínimo 8 caracteres');
+    expect(screen.getByLabelText('Confirmar contraseña')).toHaveAttribute(
+      'placeholder',
+      'Repetí tu contraseña',
+    );
+  });
+
+  it('configura los atributos de los campos nuevos', () => {
+    renderAuth('/register');
+
+    const username = screen.getByLabelText('Usuario');
+    const confirm = screen.getByLabelText('Confirmar contraseña');
+
+    expect(username).toHaveAttribute('type', 'text');
+    expect(username).toHaveAttribute('autocomplete', 'username');
+    expect(username).toBeRequired();
+
+    expect(confirm).toHaveAttribute('type', 'password');
+    expect(confirm).toHaveAttribute('autocomplete', 'new-password');
+    expect(confirm).toBeRequired();
+
+    // El placeholder «Mínimo 8 caracteres» tiene que ser cierto.
+    expect(fields().password).toHaveAttribute('minlength', '8');
     expect(fields().password).toHaveAttribute('autocomplete', 'new-password');
     expect(fields().email).toHaveAttribute('autocomplete', 'email');
   });
 
-  it('llama a signUp y navega a / cuando el registro devuelve sesión', async () => {
+  it('llama a signUp con el nombre de usuario como metadata y navega a /', async () => {
     const { user } = renderAuth('/register');
 
-    await fillAndSubmit(user, 'Crear cuenta');
+    await fillAndSubmit(user, 'register');
 
     expect(authMock.signUp).toHaveBeenCalledWith({
       email: 'persona@watchparty.test',
       password: 'contrasena-segura',
+      options: { data: { username: 'martu' } },
     });
+    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
+  });
+
+  it('no llama a Supabase si las contraseñas no coinciden', async () => {
+    const { user } = renderAuth('/register');
+
+    await user.type(screen.getByLabelText('Usuario'), 'martu');
+    await user.type(fields().email, 'persona@watchparty.test');
+    await user.type(fields().password, 'contrasena-segura');
+    await user.type(screen.getByLabelText('Confirmar contraseña'), 'otra-contrasena');
+    await user.click(screen.getByRole('button', { name: 'Crear cuenta' }));
+
+    const alert = await screen.findByRole('alert');
+
+    expect(alert).toHaveTextContent('Las contraseñas no coinciden.');
+    expect(alert).not.toHaveTextContent('contrasena-segura');
+    expect(authMock.signUp).not.toHaveBeenCalled();
+    expect(screen.getByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
+  });
+
+  it('limpia el error de confirmación cuando las contraseñas pasan a coincidir', async () => {
+    const { user } = renderAuth('/register');
+
+    await user.type(screen.getByLabelText('Usuario'), 'martu');
+    await user.type(fields().email, 'persona@watchparty.test');
+    await user.type(fields().password, 'contrasena-segura');
+    const confirm = screen.getByLabelText('Confirmar contraseña');
+    await user.type(confirm, 'otra-contrasena');
+    await user.click(screen.getByRole('button', { name: 'Crear cuenta' }));
+    await screen.findByRole('alert');
+
+    await user.clear(confirm);
+    await user.type(confirm, 'contrasena-segura');
+    await user.click(screen.getByRole('button', { name: 'Crear cuenta' }));
+
+    expect(authMock.signUp).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
   });
 
@@ -170,13 +291,13 @@ describe('AuthPage en modo registro', () => {
     });
 
     const { user } = renderAuth('/register');
-    await fillAndSubmit(user, 'Crear cuenta');
+    await fillAndSubmit(user, 'register');
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Creamos tu cuenta pero no pudimos iniciar la sesión automáticamente.',
     );
     expect(screen.queryByRole('heading', { name: 'Inicio' })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Crear cuenta' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
   });
 
   it('no expone detalles internos de un error de Supabase', async () => {
@@ -186,7 +307,7 @@ describe('AuthPage en modo registro', () => {
     });
 
     const { user } = renderAuth('/register');
-    await fillAndSubmit(user, 'Crear cuenta');
+    await fillAndSubmit(user, 'register');
 
     const alert = await screen.findByRole('alert');
 
@@ -200,7 +321,7 @@ describe('Estado pendiente y navegación entre páginas de acceso', () => {
     authMock.signInWithPassword.mockReturnValue(new Promise(() => {}));
 
     const { user } = renderAuth('/login');
-    await fillAndSubmit(user, 'Iniciar sesión');
+    await fillAndSubmit(user, 'login');
 
     const form = screen.getByRole('button', { name: 'Ingresando…' }).closest('form');
 
@@ -210,20 +331,22 @@ describe('Estado pendiente y navegación entre páginas de acceso', () => {
     expect(fields().password).toBeDisabled();
   });
 
-  it('comunica el estado pendiente del registro', async () => {
+  it('comunica el estado pendiente del registro y deshabilita los campos nuevos', async () => {
     authMock.signUp.mockReturnValue(new Promise(() => {}));
 
     const { user } = renderAuth('/register');
-    await fillAndSubmit(user, 'Crear cuenta');
+    await fillAndSubmit(user, 'register');
 
     expect(await screen.findByRole('button', { name: 'Creando cuenta…' })).toBeDisabled();
+    expect(screen.getByLabelText('Usuario')).toBeDisabled();
+    expect(screen.getByLabelText('Confirmar contraseña')).toBeDisabled();
   });
 
   it('impide el envío duplicado mientras la operación está pendiente', async () => {
     authMock.signInWithPassword.mockReturnValue(new Promise(() => {}));
 
     const { user } = renderAuth('/login');
-    await fillAndSubmit(user, 'Iniciar sesión');
+    await fillAndSubmit(user, 'login');
 
     const pendingButton = screen.getByRole('button', { name: 'Ingresando…' });
     await user.click(pendingButton);
@@ -236,10 +359,17 @@ describe('Estado pendiente y navegación entre páginas de acceso', () => {
     const { user } = renderAuth('/login');
 
     await user.click(screen.getByRole('link', { name: 'Crear cuenta' }));
-    expect(await screen.findByRole('heading', { name: 'Crear cuenta' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('link', { name: 'Iniciar sesión' }));
-    expect(await screen.findByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
+    await user.click(screen.getByRole('link', { name: 'Ingresar' }));
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
+  });
+
+  it('usa el texto del mockup para cambiar de pantalla', () => {
+    renderAuth('/register');
+
+    expect(screen.getByText(/¿Ya tenés una cuenta\?/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Ingresar' })).toHaveAttribute('href', '/login');
   });
 
   it('muestra el logo con el nombre de WatchParty como imagen accesible', () => {
@@ -296,7 +426,7 @@ describe('Estado pendiente y navegación entre páginas de acceso', () => {
   it('no aplica anchos fijos en píxeles al contenedor del formulario', () => {
     renderAuth('/login');
 
-    const form = screen.getByRole('button', { name: 'Iniciar sesión' }).closest('form');
+    const form = screen.getByRole('button', { name: 'Ingresar' }).closest('form');
     const container = form?.closest('div.max-w-md');
 
     expect(form).toHaveClass('w-full');
@@ -309,7 +439,7 @@ describe('Cuidado de la contraseña', () => {
   it('no persiste la contraseña fuera de Supabase Auth', async () => {
     const { user } = renderAuth('/login');
 
-    await fillAndSubmit(user, 'Iniciar sesión');
+    await fillAndSubmit(user, 'login');
 
     expect(window.localStorage.getItem('password')).toBeNull();
     expect(JSON.stringify({ ...window.localStorage })).not.toContain('contrasena-segura');

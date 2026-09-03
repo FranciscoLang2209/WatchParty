@@ -69,9 +69,10 @@ Agregarlos recién cuando un ticket los necesite.
 Ambas se declaran con fallback a la pila del sistema. No introducir familias
 nuevas.
 
-> **Pendiente:** las familias están declaradas en los tokens pero las fuentes
-> todavía no se cargan, así que hoy se resuelven al sistema. Incorporarlas es
-> trabajo de un ticket futuro; no asumir que Sora ya está disponible.
+> **Estado:** Sora se carga desde Google Fonts en `apps/web/index.html` (pesos
+> 600 y 700), así que `font-display` ya rinde con la familia real. Inter todavía
+> no se carga: `font-sans` se resuelve a la pila del sistema hasta que un ticket
+> la incorpore.
 
 ## Radios
 
