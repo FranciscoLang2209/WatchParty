@@ -43,6 +43,14 @@ describe('AppRoutes', () => {
     expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
   });
 
+  it('expone /forgot-password como ruta pública', async () => {
+    renderAt('/forgot-password');
+
+    expect(
+      await screen.findByRole('heading', { name: '¿Olvidaste tu contraseña?' }),
+    ).toBeInTheDocument();
+  });
+
   it('expone /register como ruta pública', async () => {
     renderAt('/register');
 

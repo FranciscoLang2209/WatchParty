@@ -1,10 +1,13 @@
 import { useId, useState, type FormEvent, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+import { Checkbox } from '../../components/ui/checkbox';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import {
   AUTH_COPY,
+  LOGIN_EXTRAS,
   MIN_PASSWORD_LENGTH,
   PASSWORD_MISMATCH_MESSAGE,
   REGISTER_FIELDS,
@@ -16,6 +19,8 @@ export interface AuthCredentials {
   password: string;
   /** Sólo en el registro. Se guarda como metadata del usuario en Supabase. */
   username?: string;
+  /** Sólo en el login. Decide si la sesión sobrevive al cierre del navegador. */
+  remember?: boolean;
 }
 
 interface AuthFormProps {
@@ -44,12 +49,15 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
   const emailId = useId();
   const passwordId = useId();
   const confirmPasswordId = useId();
+  const rememberId = useId();
   const errorId = useId();
 
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  // Recordar la sesión es el valor por defecto, igual que en el mockup.
+  const [remember, setRemember] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -72,7 +80,7 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
     setIsSubmitting(true);
 
     try {
-      await onSubmit(isRegister ? { email, password, username } : { email, password });
+      await onSubmit(isRegister ? { email, password, username } : { email, password, remember });
     } catch (error) {
       setErrorMessage(
         error instanceof Error && error.message
@@ -156,6 +164,30 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
           />
         </Field>
       ) : null}
+
+      {isRegister ? null : (
+        <div className="flex w-full flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id={rememberId}
+              name="remember"
+              checked={remember}
+              disabled={isSubmitting}
+              onChange={(event) => setRemember(event.target.checked)}
+            />
+            <Label htmlFor={rememberId} className="cursor-pointer">
+              {LOGIN_EXTRAS.rememberLabel}
+            </Label>
+          </div>
+
+          <Link
+            to={LOGIN_EXTRAS.forgotTo}
+            className="rounded-sm text-sm font-semibold text-primary underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            {LOGIN_EXTRAS.forgotLabel}
+          </Link>
+        </div>
+      )}
 
       <div id={errorId} role="alert" aria-live="assertive" className="empty:hidden">
         {errorMessage !== null ? (
