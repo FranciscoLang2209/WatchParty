@@ -1,12 +1,21 @@
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent, type ReactNode } from 'react';
+import { ChevronRight } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
-import { AUTH_COPY, type AuthMode } from './auth-mode';
+import {
+  AUTH_COPY,
+  MIN_PASSWORD_LENGTH,
+  PASSWORD_MISMATCH_MESSAGE,
+  REGISTER_FIELDS,
+  type AuthMode,
+} from './auth-mode';
 
 export interface AuthCredentials {
   email: string;
   password: string;
+  /** Sólo en el registro. Se guarda como metadata del usuario en Supabase. */
+  username?: string;
 }
 
 interface AuthFormProps {
@@ -18,27 +27,52 @@ interface AuthFormProps {
   onSubmit: (credentials: AuthCredentials) => Promise<void>;
 }
 
+function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+  return (
+    <div className="flex w-full flex-col gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      {children}
+    </div>
+  );
+}
+
 export function AuthForm({ mode, onSubmit }: AuthFormProps) {
   const copy = AUTH_COPY[mode];
+  const isRegister = mode === 'register';
+
+  const usernameId = useId();
   const emailId = useId();
   const passwordId = useId();
+  const confirmPasswordId = useId();
   const errorId = useId();
 
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const invalid = errorMessage !== null;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (isSubmitting) return;
 
-    setIsSubmitting(true);
     setErrorMessage(null);
 
+    // La confirmación se resuelve en el cliente: no tiene sentido pedirle al
+    // proveedor que valide dos campos que ya sabemos que no coinciden.
+    if (isRegister && password !== confirmPassword) {
+      setErrorMessage(PASSWORD_MISMATCH_MESSAGE);
+      return;
+    }
+
+    setIsSubmitting(true);
+
     try {
-      await onSubmit({ email, password });
+      await onSubmit(isRegister ? { email, password, username } : { email, password });
     } catch (error) {
       setErrorMessage(
         error instanceof Error && error.message
@@ -57,35 +91,71 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
       aria-busy={isSubmitting}
       aria-describedby={errorId}
     >
-      <div className="flex w-full flex-col gap-2">
-        <Label htmlFor={emailId}>Email</Label>
+      {isRegister ? (
+        <Field id={usernameId} label={REGISTER_FIELDS.usernameLabel}>
+          <Input
+            id={usernameId}
+            name="username"
+            type="text"
+            autoComplete="username"
+            placeholder={REGISTER_FIELDS.usernamePlaceholder}
+            required
+            value={username}
+            disabled={isSubmitting}
+            aria-invalid={invalid}
+            onChange={(event) => setUsername(event.target.value)}
+          />
+        </Field>
+      ) : null}
+
+      <Field id={emailId} label="Correo electrónico">
         <Input
           id={emailId}
           name="email"
           type="email"
           autoComplete="email"
+          placeholder={copy.emailPlaceholder}
           required
           value={email}
           disabled={isSubmitting}
-          aria-invalid={errorMessage !== null}
+          aria-invalid={invalid}
           onChange={(event) => setEmail(event.target.value)}
         />
-      </div>
+      </Field>
 
-      <div className="flex w-full flex-col gap-2">
-        <Label htmlFor={passwordId}>Contraseña</Label>
+      <Field id={passwordId} label="Contraseña">
         <Input
           id={passwordId}
           name="password"
           type="password"
           autoComplete={copy.passwordAutoComplete}
+          placeholder={copy.passwordPlaceholder}
           required
+          minLength={isRegister ? MIN_PASSWORD_LENGTH : undefined}
           value={password}
           disabled={isSubmitting}
-          aria-invalid={errorMessage !== null}
+          aria-invalid={invalid}
           onChange={(event) => setPassword(event.target.value)}
         />
-      </div>
+      </Field>
+
+      {isRegister ? (
+        <Field id={confirmPasswordId} label={REGISTER_FIELDS.confirmPasswordLabel}>
+          <Input
+            id={confirmPasswordId}
+            name="confirmPassword"
+            type="password"
+            autoComplete="new-password"
+            placeholder={REGISTER_FIELDS.confirmPasswordPlaceholder}
+            required
+            minLength={MIN_PASSWORD_LENGTH}
+            value={confirmPassword}
+            disabled={isSubmitting}
+            aria-invalid={invalid}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+          />
+        </Field>
+      ) : null}
 
       <div id={errorId} role="alert" aria-live="assertive" className="empty:hidden">
         {errorMessage !== null ? (
@@ -95,8 +165,15 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
         ) : null}
       </div>
 
-      <Button type="submit" className="w-full" disabled={isSubmitting}>
-        {isSubmitting ? copy.pendingLabel : copy.submitLabel}
+      <Button type="submit" size="lg" className="w-full font-semibold" disabled={isSubmitting}>
+        {isSubmitting ? (
+          copy.pendingLabel
+        ) : (
+          <>
+            {copy.submitLabel}
+            <ChevronRight aria-hidden="true" />
+          </>
+        )}
       </Button>
     </form>
   );

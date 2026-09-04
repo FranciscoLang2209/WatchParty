@@ -25,7 +25,7 @@ describe('App', () => {
   it('monta el provider de sesión y el router, y protege la ruta inicial', async () => {
     render(<App />);
 
-    expect(await screen.findByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
     expect(authMock.getSession).toHaveBeenCalledTimes(1);
   });
 });
