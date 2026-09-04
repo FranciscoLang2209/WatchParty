@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthError, Session } from '@supabase/supabase-js';
 import type { AuthMode } from './auth-mode';
+import { REMEMBER_SESSION_KEY } from '../../lib/session-storage';
 
 const { authMock } = vi.hoisted(() => ({
   authMock: {
@@ -35,6 +36,7 @@ function renderAuth(path: '/login' | '/register') {
       <Routes>
         <Route path="/login" element={<AuthPage mode="login" />} />
         <Route path="/register" element={<AuthPage mode="register" />} />
+        <Route path="/forgot-password" element={<h1>¿Olvidaste tu contraseña?</h1>} />
         <Route path="/" element={<h1>Inicio</h1>} />
       </Routes>
     </MemoryRouter>,
@@ -67,6 +69,8 @@ async function fillAndSubmit(user: ReturnType<typeof userEvent.setup>, mode: Aut
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear();
+  window.sessionStorage.clear();
   authMock.signUp.mockResolvedValue({ data: { user: session.user, session }, error: null });
   authMock.signInWithPassword.mockResolvedValue({
     data: { user: session.user, session },
@@ -445,5 +449,63 @@ describe('Cuidado de la contraseña', () => {
     expect(JSON.stringify({ ...window.localStorage })).not.toContain('contrasena-segura');
     expect(JSON.stringify({ ...window.sessionStorage })).not.toContain('contrasena-segura');
     expect(document.cookie).not.toContain('contrasena-segura');
+  });
+});
+
+describe('«Recordarme» y recuperación de contraseña', () => {
+  it('el login ofrece los dos controles, con «Recordarme» marcado', () => {
+    renderAuth('/login');
+
+    expect(screen.getByRole('checkbox', { name: 'Recordarme' })).toBeChecked();
+    expect(screen.getByRole('link', { name: 'Olvidé mi contraseña' })).toHaveAttribute(
+      'href',
+      '/forgot-password',
+    );
+  });
+
+  it('el registro no los muestra', () => {
+    renderAuth('/register');
+
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Olvidé mi contraseña' })).not.toBeInTheDocument();
+  });
+
+  it('guarda la preferencia de recordar antes de pedir la sesión', async () => {
+    const { user } = renderAuth('/login');
+
+    await fillAndSubmit(user, 'login');
+
+    expect(window.localStorage.getItem(REMEMBER_SESSION_KEY)).toBe('true');
+    expect(authMock.signInWithPassword).toHaveBeenCalled();
+  });
+
+  it('al desmarcar «Recordarme» la sesión deja de ser persistente', async () => {
+    const { user } = renderAuth('/login');
+
+    await user.click(screen.getByRole('checkbox', { name: 'Recordarme' }));
+    expect(screen.getByRole('checkbox', { name: 'Recordarme' })).not.toBeChecked();
+
+    await fillAndSubmit(user, 'login');
+
+    expect(window.localStorage.getItem(REMEMBER_SESSION_KEY)).toBe('false');
+  });
+
+  it('deshabilita el checkbox mientras la operación está pendiente', async () => {
+    authMock.signInWithPassword.mockReturnValue(new Promise(() => {}));
+
+    const { user } = renderAuth('/login');
+    await fillAndSubmit(user, 'login');
+
+    expect(screen.getByRole('checkbox', { name: 'Recordarme' })).toBeDisabled();
+  });
+
+  it('el enlace de recuperación navega dentro de la SPA', async () => {
+    const { user } = renderAuth('/login');
+
+    await user.click(screen.getByRole('link', { name: 'Olvidé mi contraseña' }));
+
+    expect(
+      await screen.findByRole('heading', { name: '¿Olvidaste tu contraseña?' }),
+    ).toBeInTheDocument();
   });
 });

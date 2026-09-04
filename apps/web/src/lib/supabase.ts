@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { readWebEnv } from './env';
+import { rememberAwareStorage } from './session-storage';
 
 const env = readWebEnv();
 
@@ -12,5 +13,7 @@ export const supabase = createClient(env.supabaseUrl, env.supabaseAnonKey, {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: false,
+    // El destino real lo elige «Recordarme» en cada inicio de sesión.
+    storage: rememberAwareStorage,
   },
 });
