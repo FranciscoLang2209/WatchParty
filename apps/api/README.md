@@ -43,3 +43,34 @@ Chequeo de salud del servicio. No requiere autenticación ni parámetros.
 ```sh
 curl -i http://localhost:3000/health
 ```
+
+## Smoke test local: Auth → Partidos
+
+Script que verifica de punta a punta la cadena Supabase Auth → API, sin mocks:
+registra un usuario temporal contra Supabase, obtiene un access token real y
+valida que `GET /matches` y `GET /matches/:matchId` respondan según lo
+esperado (200 listado, 200 detalle existente, 404 detalle inexistente, 401
+sin token).
+
+**No corre en CI** — necesita Docker, Supabase local y la API levantada al
+mismo tiempo.
+
+### Precondiciones
+
+1. Docker Desktop corriendo.
+2. Supabase local levantado: `pnpm supabase:start` (desde la raíz del repo).
+3. `apps/api/.env` configurado con `SUPABASE_URL` y `SUPABASE_ANON_KEY`
+   (los valores locales salen de `pnpm supabase:status`) y `WEB_ORIGIN`.
+4. La API corriendo: `pnpm --filter @watchparty/api dev`.
+
+### Ejecución
+
+Con las precondiciones de arriba cumplidas, desde la raíz del repo:
+
+```sh
+pnpm --filter @watchparty/api smoke:auth-matches
+```
+
+Cada corrida crea un usuario temporal distinto — no se reutiliza ni se
+versiona ningún usuario, contraseña o token real. El script termina con
+código de salida distinto de 0 si algún chequeo falla.
