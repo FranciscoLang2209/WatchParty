@@ -12,7 +12,8 @@
     "start": "node --env-file-if-exists=.env dist/server.js",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "verify:sports-data": "tsx --env-file-if-exists=.env scripts/verify-sports-data-schema.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
