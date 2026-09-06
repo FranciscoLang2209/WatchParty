@@ -50,11 +50,11 @@ Es el único camino que se usa para los estados alternativos (lista vacía, red 
 Precondiciones:
 
 1. Docker Desktop en ejecución.
-2. `pnpm supabase:start` desde la raíz.
-3. `apps/api/.env` con `SUPABASE_URL`, `SUPABASE_ANON_KEY` y `WEB_ORIGIN=http://localhost:5173`.
-4. `apps/web/.env` (copia de `.env.example`) apuntando a Supabase local y a
+2. `apps/api/.env` con `SUPABASE_URL`, `SUPABASE_ANON_KEY` y `WEB_ORIGIN=http://localhost:5173`.
+3. `apps/web/.env` (copia de `.env.example`) apuntando a Supabase local y a
    `VITE_API_BASE_URL=http://127.0.0.1:3000`.
-5. API arriba (ver [Hallazgos](#hallazgos) si `dev` falla) y `pnpm --filter web dev` en `:5173`.
+4. `pnpm dev` desde la raíz: levanta Supabase local y, después, la API en `:3000` y la web en
+   `:5173`.
 
 Con eso, el usuario se registra o inicia sesión en la web y la Home pide `GET /matches` con el
 bearer de esa sesión. Ningún dato sale de Supabase: la sesión sólo aporta el token.
@@ -143,15 +143,11 @@ el modo dispositivo de DevTools) a cada valor de la tabla, alternando el tema en
 
 ## Hallazgos
 
-1. **`pnpm --filter @watchparty/api dev` no arranca.** El script es
-   `tsx --env-file-if-exists=.env watch src/server.ts`: `tsx` interpreta `watch` como el
-   módulo a ejecutar y falla con `ERR_MODULE_NOT_FOUND … /apps/api/watch`. El subcomando va
-   antes de los flags (`tsx watch --env-file-if-exists=.env src/server.ts`). Fuera del alcance
-   de este ticket; mientras tanto, la API se levanta con:
-
-   ```sh
-   pnpm --filter @watchparty/api exec tsx --env-file-if-exists=.env src/server.ts
-   ```
+1. **`pnpm --filter @watchparty/api dev` no arrancaba.** El script era
+   `tsx --env-file-if-exists=.env watch src/server.ts`: `tsx` interpretaba `watch` como el
+   módulo a ejecutar y fallaba con `ERR_MODULE_NOT_FOUND … /apps/api/watch`. El subcomando va
+   antes de los flags. Corregido en WAT-112 junto con el `pnpm dev` unificado; durante esta
+   validación la API se levantó a mano con el workaround de entonces.
 
 2. **Bundle de web sobre 500 kB.** El build avisa por el chunk único de 549.76 kB
    (163.50 kB gzip). Hoy no bloquea nada; si molesta, se resuelve con code-splitting.
