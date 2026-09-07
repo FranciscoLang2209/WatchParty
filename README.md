@@ -17,6 +17,39 @@ corepack use pnpm@10.34.0
 pnpm install
 ```
 
+## Desarrollo local
+
+Con Docker Desktop en ejecución, un solo comando desde la raíz levanta el stack completo:
+
+```sh
+pnpm dev
+```
+
+Arranca primero Supabase local y, cuando está listo, la API y la web en paralelo:
+
+| Servicio       | URL                        |
+| -------------- | -------------------------- |
+| Web (Vite)     | http://localhost:5173      |
+| API (Express)  | http://127.0.0.1:3000      |
+| Supabase local | ver `pnpm supabase:status` |
+
+Antes de la primera corrida, copiar `apps/api/.env.example` y `apps/web/.env.example` a `.env`
+en cada app y completarlos con los valores locales que imprime `pnpm supabase:status`.
+
+`Ctrl+C` detiene la API y la web. **Supabase sigue corriendo**: sus contenedores se detienen
+siempre de forma explícita.
+
+```sh
+pnpm supabase:stop
+```
+
+Para levantar una sola app, sin Supabase:
+
+```sh
+pnpm dev:api   # sólo la API, en modo watch
+pnpm dev:web   # sólo la web
+```
+
 ## Validación local
 
 Antes de abrir un Pull Request, correr:
@@ -75,6 +108,9 @@ pnpm supabase:start   # levanta el stack local (puede tardar la primera vez por 
 pnpm supabase:status  # muestra el estado y las URLs de los servicios locales
 pnpm supabase:stop    # detiene el stack
 ```
+
+`pnpm dev` ya corre `supabase:start` por vos (ver [Desarrollo local](#desarrollo-local)); `Ctrl+C` no
+detiene los contenedores, así que el `stop` sigue siendo explícito.
 
 Al iniciar, la CLI expone Studio, la API REST/GraphQL, Auth y la base de datos en `127.0.0.1` con claves de
 desarrollo predeterminadas (no son secretos reales; son las mismas para cualquier instancia local).
