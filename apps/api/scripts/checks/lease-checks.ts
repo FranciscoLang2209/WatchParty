@@ -161,5 +161,128 @@ export async function checkLeaseLifecycle(adminClient: SupabaseClient): Promise<
     detail: `last_success_at=${finalState.last_success_at}, lease_token=${finalState.lease_token}`,
   });
 
+  // 8. acquire_provider_sync_lease valida sus entradas: owner vacío o
+  // duración no positiva deben rechazarse antes de tocar la fila.
+  const emptyOwnerResult = await adminClient.rpc('acquire_provider_sync_lease', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+    p_owner: '   ',
+  });
+  results.push({
+    label: 'acquire: rechaza un p_owner vacío',
+    passed: emptyOwnerResult.error !== null,
+    detail: emptyOwnerResult.error ? undefined : 'Debería haber fallado, no devolvió error.',
+  });
+
+  const nonPositiveDurationResult = await adminClient.rpc('acquire_provider_sync_lease', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+    p_owner: 'verify-script-invalid-duration',
+    p_lease_duration: '0 seconds',
+  });
+  results.push({
+    label: 'acquire: rechaza un p_lease_duration no positivo',
+    passed: nonPositiveDurationResult.error !== null,
+    detail: nonPositiveDurationResult.error
+      ? undefined
+      : 'Debería haber fallado, no devolvió error.',
+  });
+
+  // 9. Un lease vencido no debe poder cerrar una sincronización: si
+  // release/record llegaran tarde con un token que ya expiró, no deben
+  // tener efecto (evita que un worker colgado pise el turno de otro).
+  const tokenE = await acquireLease(adminClient, 'verify-script-E');
+  if (!tokenE) {
+    throw new Error('No se pudo adquirir el lease para probar el vencimiento.');
+  }
+
+  const { error: forceExpireEError } = await adminClient
+    .from('provider_sync_state')
+    .update({ lease_expires_at: pastDate })
+    .eq('provider', PROVIDER)
+    .eq('competition_external_id', COMPETITION_EXTERNAL_ID)
+    .eq('season', SEASON);
+  if (forceExpireEError) {
+    throw new Error(`No se pudo simular el vencimiento del lease: ${forceExpireEError.message}`);
+  }
+
+  const recordWithExpiredLease = await adminClient.rpc('record_provider_sync_result', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+    p_lease_token: tokenE,
+    p_success: true,
+  });
+  results.push({
+    label: 'record_provider_sync_result: no cierra la sincronización con un lease ya vencido',
+    passed: recordWithExpiredLease.data === false,
+    detail: recordWithExpiredLease.error?.message,
+  });
+
+  const reclaimExpiredE = await adminClient.rpc('reclaim_expired_provider_sync_lease', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+  });
+  results.push({
+    label: 'reclaim: recupera el lease vencido dejado por el worker colgado',
+    passed: reclaimExpiredE.data === true,
+    detail: reclaimExpiredE.error?.message,
+  });
+
+  const tokenF = await acquireLease(adminClient, 'verify-script-F');
+  results.push({
+    label: 'acquire: adquiere un token nuevo tras recuperar el lease vencido',
+    passed: tokenF !== null,
+    detail: tokenF ? undefined : 'Debería haber devuelto un token, devolvió null.',
+  });
+
+  const staleReleaseAttempt = await adminClient.rpc('release_provider_sync_lease', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+    p_lease_token: tokenE,
+  });
+  results.push({
+    label: 'release: el token vencido no puede liberar el lease nuevo',
+    passed: staleReleaseAttempt.data === false,
+    detail: staleReleaseAttempt.error?.message,
+  });
+
+  const staleRecordAttempt = await adminClient.rpc('record_provider_sync_result', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+    p_lease_token: tokenE,
+    p_success: true,
+  });
+  results.push({
+    label: 'record_provider_sync_result: el token vencido no puede finalizar el lease nuevo',
+    passed: staleRecordAttempt.data === false,
+    detail: staleRecordAttempt.error?.message,
+  });
+
+  const stateAfterStaleAttempts = await readLeaseState(adminClient);
+  results.push({
+    label: 'el lease nuevo sigue en pie después de los intentos con el token vencido',
+    passed:
+      stateAfterStaleAttempts.lease_token === tokenF &&
+      stateAfterStaleAttempts.lease_owner === 'verify-script-F',
+    detail: `lease_owner=${stateAfterStaleAttempts.lease_owner}, lease_token=${stateAfterStaleAttempts.lease_token}`,
+  });
+
+  // Dejamos el registro libre para no interferir con otras corridas del script.
+  const cleanupRelease = await adminClient.rpc('release_provider_sync_lease', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+    p_lease_token: tokenF,
+  });
+  if (cleanupRelease.error || cleanupRelease.data !== true) {
+    throw new Error('No se pudo liberar el lease de prueba al finalizar checkLeaseLifecycle.');
+  }
+
   return results;
 }

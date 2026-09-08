@@ -20,6 +20,14 @@ as $$
 declare
 v_lease_token uuid := gen_random_uuid();
 begin
+if p_owner is null or btrim(p_owner) = '' then
+    raise exception 'p_owner no puede estar vacío';
+end if;
+
+if p_lease_duration is null or p_lease_duration <= interval '0' then
+    raise exception 'p_lease_duration debe ser mayor a cero';
+end if;
+
 insert into provider_sync_state (
     provider, competition_external_id, season,
     last_attempt_at, lease_owner, lease_token, lease_expires_at
@@ -71,6 +79,10 @@ end;
 $$;
 
 -- Libera un lease vigente, solo si el token coincide con el dueño actual.
+-- Un lease ya vencido no puede liberarse por acá: si venció, el único
+-- camino es reclaim_expired_provider_sync_lease (o adquirir uno nuevo),
+-- así un worker que se retrasó y vuelve con el token viejo no puede
+-- pisar el turno de quien ya se lo adjudicó.
 create or replace function release_provider_sync_lease(
   p_provider text,
   p_competition_external_id text,
@@ -88,14 +100,18 @@ set lease_owner = null,
 where provider = p_provider
   and competition_external_id = p_competition_external_id
   and season = p_season
-  and lease_token = p_lease_token;
+  and lease_token = p_lease_token
+  and lease_expires_at > now();
 
 return found;
 end;
 $$;
 
 -- Registra el resultado de un intento de sincronización y libera el lease
--- (el intento termina acá). Exige el token del lease vigente.
+-- (el intento termina acá). Exige el token del lease vigente: igual que en
+-- release_provider_sync_lease, un lease vencido no puede cerrarse por acá,
+-- para que un worker que se colgó no pueda registrar un resultado con un
+-- token que ya no representa el turno actual.
 create or replace function record_provider_sync_result(
   p_provider text,
   p_competition_external_id text,
@@ -122,8 +138,34 @@ set last_attempt_at = now(),
 where provider = p_provider
   and competition_external_id = p_competition_external_id
   and season = p_season
-  and lease_token = p_lease_token;
+  and lease_token = p_lease_token
+  and lease_expires_at > now();
 
 return found;
 end;
 $$;
+
+-- Estas funciones viven en el esquema public, expuesto por la Data API. RLS
+-- protege tablas, no sirve como permiso de entrada para una RPC: aunque hoy
+-- fallen igual por RLS/permisos de tabla al ejecutarse con el rol invocador,
+-- no queremos dejarlas invocables como endpoints públicos. Son de uso
+-- exclusivo del backend (Node) vía service_role key.
+revoke execute on function public.acquire_provider_sync_lease(text, text, text, text, interval)
+  from public, anon, authenticated;
+revoke execute on function public.release_provider_sync_lease(text, text, text, uuid)
+  from public, anon, authenticated;
+revoke execute on function public.reclaim_expired_provider_sync_lease(text, text, text)
+  from public, anon, authenticated;
+revoke execute on function public.record_provider_sync_result(
+  text, text, text, uuid, boolean, text, integer, timestamptz
+) from public, anon, authenticated;
+
+grant execute on function public.acquire_provider_sync_lease(text, text, text, text, interval)
+  to service_role;
+grant execute on function public.release_provider_sync_lease(text, text, text, uuid)
+  to service_role;
+grant execute on function public.reclaim_expired_provider_sync_lease(text, text, text)
+  to service_role;
+grant execute on function public.record_provider_sync_result(
+  text, text, text, uuid, boolean, text, integer, timestamptz
+) to service_role;

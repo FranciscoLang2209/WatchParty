@@ -17,7 +17,7 @@ async function main(): Promise<void> {
 
   const results = [
     ...(await checkConstraints(adminClient)),
-    ...(await checkRls(anonClient, authenticatedClient)),
+    ...(await checkRls(anonClient, authenticatedClient, adminClient)),
     ...(await checkLeaseLifecycle(adminClient)),
   ];
 
