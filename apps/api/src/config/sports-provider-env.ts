@@ -9,7 +9,7 @@ export function loadSportsProviderEnv(env: NodeJS.ProcessEnv = process.env): Spo
   const values = {} as SportsProviderEnv;
 
   for (const name of REQUIRED_SPORTS_PROVIDER_ENV_VARS) {
-    const value = env[name];
+    const value = env[name]?.trim();
 
     if (!value) {
       throw new Error(`Falta la variable de entorno requerida: ${name}`);
