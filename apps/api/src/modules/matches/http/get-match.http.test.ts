@@ -103,6 +103,12 @@ describe('GET /matches/:matchId', () => {
   });
 
   it('con un Bearer vacío no invoca el catálogo y responde 401 UNAUTHORIZED', async () => {
+    vi.mocked(supabaseAuthClient.auth.getUser).mockResolvedValueOnce({
+      //se fija si el token vencio
+      data: { user: null },
+      error: { message: 'jwt expired' },
+    } as GetUserResult);
+
     const findById = vi.fn();
     const catalog: MatchCatalog = { list: vi.fn(), findById };
     const app = buildTestApp(catalog);
