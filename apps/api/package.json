@@ -12,8 +12,9 @@
     "start": "node --env-file-if-exists=.env dist/server.js",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
-    "smoke:auth-matches": "tsx --env-file-if-exists=.env scripts/smoke-auth-matches.ts"
+    "smoke:auth-matches": "tsx --env-file-if-exists=.env scripts/smoke-auth-matches.ts",
+    "verify:sports-data": "tsx --env-file-if-exists=.env scripts/verify-sports-data-schema.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
