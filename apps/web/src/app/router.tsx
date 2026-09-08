@@ -4,14 +4,7 @@ import { AppLayout } from '@/layouts/AppLayout';
 import { AuthPage } from '@/features/auth/AuthPage';
 import { ForgotPasswordPage } from '@/features/auth/ForgotPasswordPage';
 import { HomePage } from '@/features/home/HomePage';
-
-/**
- * Placeholder privado. El ticket de detalle lo reemplaza por su página real sin
- * crear un router nuevo.
- */
-function MatchDetailPlaceholder() {
-  return <h1>Detalle del partido</h1>;
-}
+import { MatchDetailPage } from '@/features/matches/MatchDetailPage';
 
 export function AppRoutes() {
   return (
@@ -27,7 +20,7 @@ export function AppRoutes() {
         }
       >
         <Route path="/" element={<HomePage />} />
-        <Route path="/matches/:matchId" element={<MatchDetailPlaceholder />} />
+        <Route path="/matches/:matchId" element={<MatchDetailPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

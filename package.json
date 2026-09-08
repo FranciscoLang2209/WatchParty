@@ -16,6 +16,9 @@
     "build": "pnpm -r --if-present run build",
     "validate": "pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "prepare": "husky",
+    "dev": "pnpm supabase:start && pnpm --parallel --filter @watchparty/api --filter web run dev",
+    "dev:api": "pnpm --filter @watchparty/api run dev",
+    "dev:web": "pnpm --filter web run dev",
     "supabase:start": "supabase start",
     "supabase:status": "supabase status",
     "supabase:stop": "supabase stop"

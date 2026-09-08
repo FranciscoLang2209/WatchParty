@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@supabase/supabase-js';
 
 const { authMock } = vi.hoisted(() => ({
@@ -12,11 +12,28 @@ const { authMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('../lib/supabase', () => ({ supabase: { auth: authMock } }));
+vi.mock('../lib/env', () => ({
+  readWebEnv: () => ({
+    supabaseUrl: 'https://supabase.test',
+    supabaseAnonKey: 'anon',
+    apiBaseUrl: 'https://api.watchparty.test',
+  }),
+}));
 
 const { AuthProvider } = await import('../auth/AuthProvider');
 const { AppRoutes } = await import('./router');
 
 const session = { access_token: 'token-123', user: { id: 'user-1', email: 'a@b.com' } } as Session;
+
+const partido = {
+  id: 'match-001',
+  homeTeam: 'River Plate',
+  awayTeam: 'Boca Juniors',
+  kickoffAt: '2026-09-06T21:00:00Z',
+  status: 'scheduled',
+};
+
+let fetchSpy: ReturnType<typeof vi.spyOn>;
 
 function renderAt(path: string) {
   return render(
@@ -30,10 +47,26 @@ function renderAt(path: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Las rutas privadas consultan la Node API: se responde desde el test para no
+  // dejar peticiones reales sueltas.
+  fetchSpy = vi
+    .spyOn(globalThis, 'fetch')
+    .mockImplementation((url) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(String(url).endsWith('/matches') ? { matches: [] } : { match: partido }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
   authMock.getSession.mockResolvedValue({ data: { session: null }, error: null });
   authMock.onAuthStateChange.mockReturnValue({
     data: { subscription: { unsubscribe: vi.fn() } },
   });
+});
+
+afterEach(() => {
+  fetchSpy.mockRestore();
 });
 
 describe('AppRoutes', () => {
@@ -83,6 +116,10 @@ describe('AppRoutes', () => {
 
     renderAt('/matches/match-001');
 
-    expect(await screen.findByRole('heading', { name: 'Detalle del partido' })).toBeInTheDocument();
+    // Ya no es un placeholder: la ruta monta la pantalla real, que resuelve su
+    // título con el partido que devuelve la API.
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' }),
+    ).toBeInTheDocument();
   });
 });
