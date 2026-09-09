@@ -66,10 +66,34 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim() !== '';
 }
 
+const ISO_DATE_TIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
 function normalizeKickoffAt(value: unknown): string | null {
   if (typeof value !== 'string') return null;
+
+  const match = ISO_DATE_TIME_PATTERN.exec(value);
+  if (!match) return null;
+
+  const [, yearStr, monthStr, dayStr, hourStr, minuteStr, secondStr] = match;
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  const second = Number(secondStr);
+
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > daysInMonth(year, month)) return null;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) return null;
+
   return new Date(timestamp).toISOString();
 }
 
@@ -112,7 +136,10 @@ function normalizeFixture(
   }
 
   const statusShort = (fixture?.status as Record<string, unknown> | undefined)?.short;
-  const status = typeof statusShort === 'string' ? STATUS_MAP[statusShort] : undefined;
+  const status =
+    typeof statusShort === 'string' && Object.hasOwn(STATUS_MAP, statusShort)
+      ? STATUS_MAP[statusShort]
+      : undefined;
   if (status === undefined) {
     return { ok: false, reason: 'unrepresentable-status' };
   }

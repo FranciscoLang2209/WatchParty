@@ -53,7 +53,10 @@ export function createApiFootballClient({
         let body: unknown;
         try {
           body = await response.json();
-        } catch {
+        } catch (jsonError) {
+          if (timeoutController.signal.aborted) {
+            throw jsonError;
+          }
           body = undefined;
         }
 

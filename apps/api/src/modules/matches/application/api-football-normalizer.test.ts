@@ -179,4 +179,50 @@ describe('normalizeApiFootballFixturesPage', () => {
       skipped: [{ reason: 'unrepresentable-status' }],
     });
   });
+
+  it('un estado tipo "toString" se omite y nunca hereda del prototipo', () => {
+    const weirdStatusFixture = {
+      ...VALID_FIXTURE,
+      fixture: { ...VALID_FIXTURE.fixture, status: { short: 'toString' } },
+    };
+
+    const result = normalizeApiFootballFixturesPage(
+      successOutcome({
+        errors: [],
+        results: 1,
+        paging: { current: 1, total: 1 },
+        response: [weirdStatusFixture],
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: 'success',
+      paging: { current: 1, total: 1 },
+      fixtures: [],
+      skipped: [{ reason: 'unrepresentable-status' }],
+    });
+  });
+
+  it('una fecha con día fuera de rango del mes (2023-02-30) se omite, sin normalizarse a marzo', () => {
+    const overflowDateFixture = {
+      ...VALID_FIXTURE,
+      fixture: { ...VALID_FIXTURE.fixture, date: '2023-02-30T23:00:00+00:00' },
+    };
+
+    const result = normalizeApiFootballFixturesPage(
+      successOutcome({
+        errors: [],
+        results: 1,
+        paging: { current: 1, total: 1 },
+        response: [overflowDateFixture],
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: 'success',
+      paging: { current: 1, total: 1 },
+      fixtures: [],
+      skipped: [{ reason: 'invalid-kickoff-date' }],
+    });
+  });
 });

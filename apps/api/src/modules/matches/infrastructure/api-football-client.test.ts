@@ -124,4 +124,37 @@ describe('createApiFootballClient', () => {
 
     await expect(pending).resolves.toEqual({ kind: 'timeout' });
   });
+
+  it('un timeout mientras se lee el body se reporta como timeout, no como cuerpo inválido', async () => {
+    const fetchFn = vi.fn().mockImplementation((_url: string, init: RequestInit) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () =>
+              reject(new DOMException('Aborted', 'AbortError')),
+            );
+          }),
+      } as unknown as Response),
+    );
+    const client = createApiFootballClient({
+      fetchFn,
+      baseUrl: BASE_URL,
+      apiKey: API_KEY,
+      timeoutMs: 1000,
+    });
+
+    const pending = client.fetchFixturesPage({
+      league: 128,
+      season: 2023,
+      from: '2023-03-01',
+      to: '2023-03-14',
+      page: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(pending).resolves.toEqual({ kind: 'timeout' });
+  });
 });
