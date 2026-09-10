@@ -59,7 +59,23 @@ describe('ForgotPasswordPage', () => {
 
     await pedirEnlace(user);
 
-    expect(authMock.resetPasswordForEmail).toHaveBeenCalledWith('persona@watchparty.test');
+    expect(authMock.resetPasswordForEmail).toHaveBeenCalledWith(
+      'persona@watchparty.test',
+      expect.objectContaining({ redirectTo: expect.any(String) }),
+    );
+  });
+
+  it('pide que el enlace vuelva a /reset-password del origen en ejecución', async () => {
+    const { user } = renderPage();
+
+    await pedirEnlace(user);
+
+    // Se deriva del origen para que local, preview y producción funcionen con el
+    // mismo código: un dominio fijo acá rompería dos de los tres.
+    const [, options] = authMock.resetPasswordForEmail.mock.calls[0]!;
+
+    expect(options).toEqual({ redirectTo: `${window.location.origin}/reset-password` });
+    expect(options.redirectTo).not.toContain('watchparty.test');
   });
 
   it('confirma sin revelar si la cuenta existe', async () => {
