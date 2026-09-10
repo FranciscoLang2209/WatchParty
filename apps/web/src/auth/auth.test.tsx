@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
@@ -39,6 +40,20 @@ function renderApp() {
         </Routes>
       </MemoryRouter>
     </AuthProvider>,
+  );
+}
+
+/** Sonda del modo recuperación: lo que ve una pantalla a través del contexto. */
+function RecoveryProbe() {
+  const { isRecovering, endRecovery } = useAuth();
+
+  return (
+    <div>
+      <span data-testid="recovery">{isRecovering ? 'recuperación' : 'normal'}</span>
+      <button type="button" onClick={endRecovery}>
+        Terminar recuperación
+      </button>
+    </div>
   );
 }
 
@@ -108,6 +123,95 @@ describe('AuthProvider y RequireAuth', () => {
     });
 
     expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated:sin sesión');
+  });
+
+  it('no entra en modo recuperación con una sesión común', async () => {
+    authMock.getSession.mockResolvedValue({ data: { session }, error: null });
+
+    render(
+      <AuthProvider>
+        <RecoveryProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('recovery')).toHaveTextContent('normal'));
+
+    act(() => {
+      emitAuthChange('SIGNED_IN', session);
+    });
+
+    // Tener sesión no autoriza a cambiar la contraseña: hace falta la señal.
+    expect(screen.getByTestId('recovery')).toHaveTextContent('normal');
+  });
+
+  it('entra en modo recuperación sólo ante PASSWORD_RECOVERY', async () => {
+    render(
+      <AuthProvider>
+        <RecoveryProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('recovery')).toHaveTextContent('normal'));
+
+    act(() => {
+      emitAuthChange('PASSWORD_RECOVERY', session);
+    });
+
+    expect(screen.getByTestId('recovery')).toHaveTextContent('recuperación');
+  });
+
+  it('sostiene el modo recuperación mientras se renueva el token', async () => {
+    render(
+      <AuthProvider>
+        <RecoveryProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('recovery')).toHaveTextContent('normal'));
+
+    act(() => {
+      emitAuthChange('PASSWORD_RECOVERY', session);
+      // `autoRefreshToken` renueva solo: no puede expulsar a la persona del
+      // formulario que está completando.
+      emitAuthChange('TOKEN_REFRESHED', session);
+    });
+
+    expect(screen.getByTestId('recovery')).toHaveTextContent('recuperación');
+  });
+
+  it('apaga el modo recuperación cuando la sesión se termina', async () => {
+    render(
+      <AuthProvider>
+        <RecoveryProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('recovery')).toHaveTextContent('normal'));
+
+    act(() => {
+      emitAuthChange('PASSWORD_RECOVERY', session);
+      emitAuthChange('SIGNED_OUT', null);
+    });
+
+    expect(screen.getByTestId('recovery')).toHaveTextContent('normal');
+  });
+
+  it('permite apagar el modo recuperación de forma explícita', async () => {
+    render(
+      <AuthProvider>
+        <RecoveryProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('recovery')).toHaveTextContent('normal'));
+
+    act(() => {
+      emitAuthChange('PASSWORD_RECOVERY', session);
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Terminar recuperación' }));
+
+    expect(screen.getByTestId('recovery')).toHaveTextContent('normal');
   });
 
   it('cancela la suscripción de Supabase al desmontar', async () => {
