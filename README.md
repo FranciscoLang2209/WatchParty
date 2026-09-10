@@ -122,14 +122,12 @@ desarrollo predeterminadas (no son secretos reales; son las mismas para cualquie
 - No ejecutar `supabase link` ni commitear `project_ref`, claves ni credenciales de un proyecto remoto.
 - `supabase/.temp` y los datos generados localmente no se versionan (ver `.gitignore`).
 
-## Despliegue del frontend (Vercel)
+## Despliegue (Vercel)
 
-Sólo se despliega `apps/web`. `apps/api` no forma parte del proyecto Vercel: no tiene funciones,
-rutas, build commands ni Root Directory asociados.
+Dos proyectos Vercel independientes, ambos conectados al mismo repositorio de GitHub. No hay ningún
+`vercel.json` versionado — toda la configuración vive en los Project Settings de cada uno.
 
-### Configuración del proyecto
-
-La configuración vive en los Project Settings de Vercel; el repositorio no incluye `vercel.json`.
+### apps/web
 
 | Ajuste            | Valor            |
 | ----------------- | ---------------- |
@@ -140,22 +138,43 @@ La configuración vive en los Project Settings de Vercel; el repositorio no incl
 | Node.js Version   | `24.x`           |
 | Production Branch | `main`           |
 
-### Ciclo de despliegue
-
-El proyecto está conectado a GitHub y la rama de producción es `main`:
-
-- **Preview**: cada pull request y cada commit fuera de `main` genera un despliegue de vista previa
-  con su propia URL, para revisar los cambios antes de integrarlos.
-- **Production**: cada merge a `main` publica la versión definitiva.
-
 | Entorno    | URL                                     |
 | ---------- | --------------------------------------- |
 | Production | https://watch-party-web-cfeq.vercel.app |
 | Preview    | se genera una por cada pull request     |
 
+### apps/api
+
+| Ajuste            | Valor                                  |
+| ----------------- | -------------------------------------- |
+| Project Name      | `watchparty-api`                       |
+| Root Directory    | `apps/api`                             |
+| Framework Preset  | `Express` (detectado automáticamente)  |
+| Output Directory  | (sin configurar — no aplica a Express) |
+| Node.js Version   | `24.x`                                 |
+| Production Branch | `main`                                 |
+
+| Entorno    | URL                                   |
+| ---------- | ------------------------------------- |
+| Production | https://watchparty-api-ten.vercel.app |
+| Preview    | se genera una por cada pull request   |
+
+**Variables de entorno (Production y Preview)**: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `WEB_ORIGIN` — sin
+valores reales documentados acá (se configuran directo en Vercel). `SUPABASE_SERVICE_ROLE_KEY` todavía no
+está configurada; cuando se agregue (ticket de persistencia), va exclusivamente en este proyecto — nunca
+en `apps/web`, y nunca con el prefijo `VITE_`.
+
+### Ciclo de despliegue
+
+Ambos proyectos están conectados a GitHub, con `main` como rama de producción:
+
+- **Preview**: cada pull request y cada commit fuera de `main` genera un despliegue de vista previa
+  con su propia URL, para revisar los cambios antes de integrarlos.
+- **Production**: cada merge a `main` publica la versión definitiva.
+
 ### Validación manual con la CLI
 
-Opcional, para verificar el despliegue desde la máquina local. Ejecutar desde `apps/web`:
+Opcional, para verificar el despliegue del frontend desde la máquina local. Ejecutar desde `apps/web`:
 
 ```sh
 pnpm build
