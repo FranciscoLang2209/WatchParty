@@ -8,37 +8,60 @@ import { SupabasePersistenceError } from './supabase-persistence-error.js';
 // provider_sync_state.last_error.
 const MAX_SYNC_ERROR_LENGTH = 300;
 const FALLBACK_SYNC_ERROR_MESSAGE = 'Error desconocido durante la sincronización.';
+const REDACTED_PLACEHOLDER = '[redactado]';
+
+// Patrones de datos sensibles que nunca deben llegar a
+// provider_sync_state.last_error: URLs completas (pueden traer
+// credenciales o tokens en la query string) y tokens/API keys largos
+// (secuencias alfanuméricas de 20+ caracteres — el shape típico de un
+// bearer token o una key de servicio).
+const URL_PATTERN = /\bhttps?:\/\/\S+/gi;
+const LONG_TOKEN_PATTERN = /\b[A-Za-z0-9_-]{20,}\b/g;
+
+function redactSensitiveSubstrings(message: string): string {
+  return message
+    .replace(URL_PATTERN, REDACTED_PLACEHOLDER)
+    .replace(LONG_TOKEN_PATTERN, REDACTED_PLACEHOLDER);
+}
 
 /**
  * Convierte lo que llegue en `details.error` a un mensaje corto y seguro
- * antes de persistirlo en `provider_sync_state.last_error`. Misma lógica
- * que `SupabasePersistenceError`: nunca confiamos en que el error crudo
- * (stack trace, cuerpo de una respuesta, lo que sea) sea seguro de guardar
- * tal cual — acá puede terminar visible en Supabase Studio o en un futuro
- * dashboard, no solo en logs de servidor.
+ * antes de persistirlo en `provider_sync_state.last_error`.
+ *
+ * Nunca usamos `Error.message` ni `String(error)` de un objeto/Error: aunque
+ * no tengan stack trace, el mensaje en sí puede traer datos sensibles (una
+ * URL con credenciales, un token, una API key) que no controlamos porque no
+ * sabemos qué código lo generó. Para esos casos devolvemos siempre el
+ * mensaje genérico — no hay forma segura de "limpiar" texto arbitrario que
+ * no armamos nosotros.
+ *
+ * Un string ya armado por el caller (asumimos que decidió a propósito qué
+ * decir) sí se persiste, pero igual pasa por una redacción explícita de
+ * patrones típicos de datos sensibles como defensa en profundidad, más el
+ * límite de longitud y el colapso de saltos de línea.
  */
 function sanitizeSyncError(error: unknown): string | null {
   if (error === undefined || error === null) {
     return null;
   }
 
-  // Si es un Error, tomamos SOLO el .message — nunca .stack ni el objeto
-  // completo, que podría traer rutas de archivos internas o datos que no
-  // queremos persistir.
-  const rawMessage = error instanceof Error ? error.message : String(error);
+  if (typeof error !== 'string') {
+    // Error, objeto, lo que sea: nunca extraemos texto de algo que no
+    // controlamos.
+    return FALLBACK_SYNC_ERROR_MESSAGE;
+  }
 
-  // Colapsa saltos de línea/tabs a un solo espacio: un stack trace o un
-  // cuerpo de respuesta multilínea no debería poder "disfrazarse" de un
-  // mensaje corto y legible.
-  const singleLine = rawMessage.replace(/\s+/g, ' ').trim();
+  const singleLine = error.replace(/\s+/g, ' ').trim();
 
   if (singleLine.length === 0) {
     return FALLBACK_SYNC_ERROR_MESSAGE;
   }
 
-  return singleLine.length > MAX_SYNC_ERROR_LENGTH
-    ? `${singleLine.slice(0, MAX_SYNC_ERROR_LENGTH - 1)}…`
-    : singleLine;
+  const redacted = redactSensitiveSubstrings(singleLine);
+
+  return redacted.length > MAX_SYNC_ERROR_LENGTH
+    ? `${redacted.slice(0, MAX_SYNC_ERROR_LENGTH - 1)}…`
+    : redacted;
 }
 
 /**
