@@ -1,10 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Match, MatchStatus } from '../domain/match.js';
 import type { MatchStore, SyncLeaseScope, SyncResultDetails } from '../domain/match-store.js';
-import type {
-  NormalizedFixtureTeam,
-  NormalizedMatchFixture,
-} from '../domain/normalized-match-fixture.js';
+import type { NormalizedMatchFixture } from '../domain/normalized-match-fixture.js';
 import { SupabasePersistenceError } from './supabase-persistence-error.js';
 import { SupabaseSyncLeaseStore } from './supabase-sync-lease-store.js';
 
@@ -105,26 +102,24 @@ export class SupabaseMatchStore implements MatchStore {
   }
 
   async upsertFixture(fixture: NormalizedMatchFixture): Promise<string> {
-    const homeTeamId = await this.upsertTeam(fixture.provider, fixture.homeTeam);
-    const awayTeamId = await this.upsertTeam(fixture.provider, fixture.awayTeam);
-
-    const { data, error } = await this.client
-      .from('matches')
-      .upsert(
-        {
-          provider: fixture.provider,
-          external_id: fixture.externalId,
-          home_team_id: homeTeamId,
-          away_team_id: awayTeamId,
-          competition_external_id: fixture.competitionExternalId,
-          season: fixture.season,
-          kickoff_at: fixture.kickoffAt,
-          status: fixture.status,
-        },
-        { onConflict: 'provider,external_id' },
-      )
-      .select('id')
-      .single();
+    // Una sola llamada a upsert_match_fixture (fix de atomicidad, comentario
+    // del jefe en WAT-106): equipos y partido se guardan dentro de la misma
+    // transacción de Postgres. Si el partido es inválido (por ejemplo
+    // home == away), la función revierte también los upserts de equipos que
+    // haya hecho antes de fallar — ver la migración
+    // 20260910120000_upsert_match_fixture_function.sql.
+    const { data, error } = await this.client.rpc('upsert_match_fixture', {
+      p_provider: fixture.provider,
+      p_external_id: fixture.externalId,
+      p_home_team_external_id: fixture.homeTeam.externalId,
+      p_home_team_name: fixture.homeTeam.name,
+      p_away_team_external_id: fixture.awayTeam.externalId,
+      p_away_team_name: fixture.awayTeam.name,
+      p_competition_external_id: fixture.competitionExternalId,
+      p_season: fixture.season,
+      p_kickoff_at: fixture.kickoffAt,
+      p_status: fixture.status,
+    });
 
     if (error) {
       throw new SupabasePersistenceError(
@@ -133,27 +128,7 @@ export class SupabaseMatchStore implements MatchStore {
       );
     }
 
-    return (data as { id: string }).id;
-  }
-
-  private async upsertTeam(provider: string, team: NormalizedFixtureTeam): Promise<string> {
-    const { data, error } = await this.client
-      .from('teams')
-      .upsert(
-        { provider, external_id: team.externalId, name: team.name },
-        { onConflict: 'provider,external_id' },
-      )
-      .select('id')
-      .single();
-
-    if (error) {
-      throw new SupabasePersistenceError(
-        `No se pudo guardar el equipo ${provider}/${team.externalId}.`,
-        error,
-      );
-    }
-
-    return (data as { id: string }).id;
+    return data as string;
   }
 
   // Delegación pura: la lógica real vive en SupabaseSyncLeaseStore.

@@ -2,32 +2,22 @@ import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseMatchStore } from './supabase-match-store.js';
 import { SupabasePersistenceError } from './supabase-persistence-error.js';
-import { SupabaseSyncLeaseStore } from './supabase-sync-lease-store.js';
 import type { NormalizedMatchFixture } from '../domain/normalized-match-fixture.js';
-
-// Reemplazamos SupabaseSyncLeaseStore por un doble: la casuística real de
-// cada método de lease (parámetros del RPC, coerción a boolean, propagación
-// de errores) ya está probada en supabase-sync-lease-store.test.ts. Acá solo
-// nos importa una cosa distinta: que SupabaseMatchStore efectivamente le
-// delega el trabajo, sin repetir esos mismos casos dos veces.
-vi.mock('./supabase-sync-lease-store.js', () => ({
-  SupabaseSyncLeaseStore: vi.fn().mockImplementation(function () {
-    return {
-      acquireSyncLease: vi.fn(async () => 'delegated-token'),
-      reclaimExpiredSyncLease: vi.fn(async () => true),
-      releaseSyncLease: vi.fn(async () => true),
-      recordSyncResult: vi.fn(async () => true),
-    };
-  }),
-}));
 
 type FakeResult = { data: unknown; error: { message: string } | null };
 
+/**
+ * Doble mínimo de un PostgrestFilterBuilder: cada método de encadenado
+ * devuelve el mismo builder (registrando los args recibidos) y es
+ * "thenable" para soportar tanto `await client.from(...).select(...)`
+ * (sin terminal, como en list()) como el uso con `.single()`/`.maybeSingle()`.
+ * No hay tipos reales de PostgREST acá a propósito: es un doble de test, no
+ * un cliente real.
+ */
 function makeQueryBuilder(result: FakeResult) {
   const builder = {
     select: vi.fn(() => builder),
     eq: vi.fn(() => builder),
-    upsert: vi.fn(() => builder),
     maybeSingle: vi.fn(async () => result),
     single: vi.fn(async () => result),
     then: (resolve: (value: FakeResult) => unknown) => resolve(result),
@@ -36,29 +26,30 @@ function makeQueryBuilder(result: FakeResult) {
 }
 
 interface FakeClientHandlers {
-  teams?: (callNumber: number) => FakeResult;
   matches?: () => FakeResult;
+  rpc?: (fn: string, params: Record<string, unknown>) => FakeResult;
 }
 
 function makeFakeClient(handlers: FakeClientHandlers) {
-  let teamCallCount = 0;
   const fromCalls: string[] = [];
 
   const from = vi.fn((table: string) => {
     fromCalls.push(table);
-    if (table === 'teams') {
-      teamCallCount += 1;
-      return makeQueryBuilder(handlers.teams?.(teamCallCount) ?? { data: null, error: null });
-    }
     if (table === 'matches') {
       return makeQueryBuilder(handlers.matches?.() ?? { data: null, error: null });
     }
     throw new Error(`Tabla inesperada en el fake client: ${table}`);
   });
 
-  return { from, fromCalls };
+  const rpc = vi.fn(
+    async (fn: string, params: Record<string, unknown>) =>
+      handlers.rpc?.(fn, params) ?? { data: null, error: null },
+  );
+
+  return { from, rpc, fromCalls };
 }
 
+/** Vista del doble como SupabaseClient, solo para pasarlo al constructor del store. */
 function asSupabaseClient(fakeClient: ReturnType<typeof makeFakeClient>): SupabaseClient {
   return fakeClient as unknown as SupabaseClient;
 }
@@ -161,49 +152,37 @@ describe('SupabaseMatchStore', () => {
   });
 
   describe('upsertFixture()', () => {
-    it('upsertea ambos equipos antes que el partido, con onConflict (provider, external_id)', async () => {
+    it('delega en la función upsert_match_fixture con los datos planos del fixture', async () => {
       const client = makeFakeClient({
-        teams: (call) => ({
-          data: { id: call === 1 ? 'home-team-uuid' : 'away-team-uuid' },
-          error: null,
-        }),
-        matches: () => ({ data: { id: 'match-uuid' }, error: null }),
+        rpc: () => ({ data: 'match-uuid', error: null }),
       });
       const store = new SupabaseMatchStore(asSupabaseClient(client));
 
       const matchId = await store.upsertFixture(FIXTURE);
 
       expect(matchId).toBe('match-uuid');
-      expect(client.fromCalls).toEqual(['teams', 'teams', 'matches']);
-
-      const teamBuilder = client.from.mock.results[0]!.value as {
-        upsert: ReturnType<typeof vi.fn>;
-      };
-      expect(teamBuilder.upsert).toHaveBeenCalledWith(
-        { provider: 'local-fixtures', external_id: 'team-1', name: 'Club Atlético Norte' },
-        { onConflict: 'provider,external_id' },
-      );
-
-      const matchBuilder = client.from.mock.results[2]!.value as {
-        upsert: ReturnType<typeof vi.fn>;
-      };
-      expect(matchBuilder.upsert.mock.calls[0]![0]).not.toHaveProperty('id');
-    });
-
-    it('propaga el error si falla el upsert de un equipo, sin intentar el del partido', async () => {
-      const client = makeFakeClient({
-        teams: () => ({ data: null, error: { message: 'nombre de equipo vacío' } }),
+      // El adaptador ya no toca teams/matches directamente: la atomicidad de
+      // guardar equipos + partido vive en la función de Postgres (ver
+      // supabase/migrations/20260910120000_upsert_match_fixture_function.sql),
+      // no en el orden de llamadas HTTP desde acá.
+      expect(client.fromCalls).toEqual([]);
+      expect(client.rpc).toHaveBeenCalledWith('upsert_match_fixture', {
+        p_provider: 'local-fixtures',
+        p_external_id: 'match-1',
+        p_home_team_external_id: 'team-1',
+        p_home_team_name: 'Club Atlético Norte',
+        p_away_team_external_id: 'team-2',
+        p_away_team_name: 'Deportivo Sur',
+        p_competition_external_id: 'liga-local',
+        p_season: '2026',
+        p_kickoff_at: '2026-09-06T21:00:00Z',
+        p_status: 'scheduled',
       });
-      const store = new SupabaseMatchStore(asSupabaseClient(client));
-
-      await expect(store.upsertFixture(FIXTURE)).rejects.toThrow(SupabasePersistenceError);
-      expect(client.fromCalls).toEqual(['teams']);
     });
 
-    it('propaga el error si falla el upsert del partido', async () => {
+    it('propaga un error de Supabase como SupabasePersistenceError', async () => {
       const client = makeFakeClient({
-        teams: () => ({ data: { id: 'team-uuid' }, error: null }),
-        matches: () => ({ data: null, error: { message: 'home_team_id = away_team_id' } }),
+        rpc: () => ({ data: null, error: { message: 'home_team_id = away_team_id' } }),
       });
       const store = new SupabaseMatchStore(asSupabaseClient(client));
 
@@ -211,37 +190,63 @@ describe('SupabaseMatchStore', () => {
     });
   });
 
-  describe('lease de sincronización: delega en SupabaseSyncLeaseStore', () => {
-    it('construye el SupabaseSyncLeaseStore con el mismo client', () => {
-      const client = makeFakeClient({});
+  describe('lease de sincronización', () => {
+    it('acquireSyncLease llama al RPC con los parámetros del scope y devuelve el token', async () => {
+      const client = makeFakeClient({
+        rpc: () => ({ data: 'lease-token-abc', error: null }),
+      });
+      const store = new SupabaseMatchStore(asSupabaseClient(client));
 
-      new SupabaseMatchStore(asSupabaseClient(client));
+      const token = await store.acquireSyncLease(
+        { provider: 'api-football', competitionExternalId: 'liga-1', season: '2026' },
+        'sync-worker-1',
+      );
 
-      expect(SupabaseSyncLeaseStore).toHaveBeenCalledWith(asSupabaseClient(client));
+      expect(token).toBe('lease-token-abc');
+      expect(client.rpc).toHaveBeenCalledWith('acquire_provider_sync_lease', {
+        p_provider: 'api-football',
+        p_competition_external_id: 'liga-1',
+        p_season: '2026',
+        p_owner: 'sync-worker-1',
+      });
     });
 
-    it('delega cada uno de los 4 métodos, argumentos y resultado incluidos', async () => {
-      const client = makeFakeClient({});
+    it('acquireSyncLease devuelve null cuando el lease ya está tomado', async () => {
+      const client = makeFakeClient({ rpc: () => ({ data: null, error: null }) });
       const store = new SupabaseMatchStore(asSupabaseClient(client));
-      const leaseStoreInstance = vi.mocked(SupabaseSyncLeaseStore).mock.results.at(-1)!
-        .value as Record<string, ReturnType<typeof vi.fn>>;
+
+      const token = await store.acquireSyncLease(
+        { provider: 'api-football', competitionExternalId: 'liga-1', season: '2026' },
+        'sync-worker-2',
+      );
+
+      expect(token).toBeNull();
+    });
+
+    it('reclaimExpiredSyncLease, releaseSyncLease y recordSyncResult coercionan la respuesta a boolean', async () => {
+      const client = makeFakeClient({ rpc: () => ({ data: true, error: null }) });
+      const store = new SupabaseMatchStore(asSupabaseClient(client));
       const scope = { provider: 'api-football', competitionExternalId: 'liga-1', season: '2026' };
 
-      await expect(store.acquireSyncLease(scope, 'worker', 60)).resolves.toBe('delegated-token');
-      expect(leaseStoreInstance.acquireSyncLease).toHaveBeenCalledWith(scope, 'worker', 60);
-
       await expect(store.reclaimExpiredSyncLease(scope)).resolves.toBe(true);
-      expect(leaseStoreInstance.reclaimExpiredSyncLease).toHaveBeenCalledWith(scope);
-
       await expect(store.releaseSyncLease(scope, 'token-1')).resolves.toBe(true);
-      expect(leaseStoreInstance.releaseSyncLease).toHaveBeenCalledWith(scope, 'token-1');
-
       await expect(store.recordSyncResult(scope, 'token-1', true)).resolves.toBe(true);
-      expect(leaseStoreInstance.recordSyncResult).toHaveBeenCalledWith(
-        scope,
-        'token-1',
-        true,
-        undefined,
+    });
+
+    it('propaga un error de RPC en cualquier operación de lease', async () => {
+      const client = makeFakeClient({
+        rpc: () => ({ data: null, error: { message: 'rpc falló' } }),
+      });
+      const store = new SupabaseMatchStore(asSupabaseClient(client));
+      const scope = { provider: 'api-football', competitionExternalId: 'liga-1', season: '2026' };
+
+      await expect(store.acquireSyncLease(scope, 'w')).rejects.toThrow(SupabasePersistenceError);
+      await expect(store.releaseSyncLease(scope, 'token-1')).rejects.toThrow(
+        SupabasePersistenceError,
+      );
+      await expect(store.reclaimExpiredSyncLease(scope)).rejects.toThrow(SupabasePersistenceError);
+      await expect(store.recordSyncResult(scope, 'token-1', false)).rejects.toThrow(
+        SupabasePersistenceError,
       );
     });
   });

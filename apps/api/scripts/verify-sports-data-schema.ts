@@ -8,6 +8,7 @@ import { printResults } from './utils/db-checks.js';
 import { checkConstraints } from './checks/constraints-checks.js';
 import { checkRls } from './checks/rls-checks.js';
 import { checkLeaseLifecycle } from './checks/lease-checks.js';
+import { checkMatchStore } from './checks/match-store-checks.js';
 
 async function main(): Promise<void> {
   const adminClient = createServiceRoleClient();
@@ -19,6 +20,7 @@ async function main(): Promise<void> {
     ...(await checkConstraints(adminClient)),
     ...(await checkRls(anonClient, authenticatedClient, adminClient)),
     ...(await checkLeaseLifecycle(adminClient)),
+    ...(await checkMatchStore(adminClient)),
   ];
 
   const allPassed = printResults(results);
