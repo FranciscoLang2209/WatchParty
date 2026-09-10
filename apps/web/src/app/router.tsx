@@ -5,6 +5,7 @@ import { AuthPage } from '@/features/auth/AuthPage';
 import { ForgotPasswordPage } from '@/features/auth/ForgotPasswordPage';
 import { HomePage } from '@/features/home/HomePage';
 import { MatchDetailPage } from '@/features/matches/MatchDetailPage';
+import { ProfilePage } from '@/features/profiles/ProfilePage';
 
 export function AppRoutes() {
   return (
@@ -21,6 +22,7 @@ export function AppRoutes() {
       >
         <Route path="/" element={<HomePage />} />
         <Route path="/matches/:matchId" element={<MatchDetailPage />} />
+        <Route path="/profile" element={<ProfilePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

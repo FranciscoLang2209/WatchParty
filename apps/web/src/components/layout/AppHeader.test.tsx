@@ -74,10 +74,23 @@ describe('AppHeader — marca y navegación', () => {
     const nav = screen.getByRole('navigation', { name: 'Navegación principal' });
 
     expect(nav).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Inicio' })).toBeInTheDocument();
-    for (const label of ['Salas', 'Buscar', 'Perfil']) {
+    for (const label of ['Inicio', 'Perfil']) {
+      expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
+    }
+    for (const label of ['Salas', 'Buscar']) {
       expect(screen.getByRole('button', { name: `${label}, Próximamente` })).toBeInTheDocument();
     }
+  });
+
+  it('lleva a /profile y lo marca activo, igual que la barra inferior', () => {
+    renderHeader({ path: '/profile' });
+
+    const perfil = screen.getByRole('link', { name: 'Perfil' });
+
+    // Header y BottomNavigation comparten ruta y estado activo: los dos salen de
+    // la misma configuración, ninguno declara la suya.
+    expect(perfil).toHaveAttribute('href', '/profile');
+    expect(perfil).toHaveAttribute('aria-current', 'page');
   });
 
   it('marca Inicio como activo derivándolo de la URL', () => {
@@ -210,6 +223,8 @@ describe('AppHeader — cerrar sesión', () => {
   it('no duplica el acceso a Perfil dentro de las acciones globales', () => {
     renderHeader();
 
-    expect(screen.getAllByRole('button', { name: /Perfil/ })).toHaveLength(1);
+    // El único acceso es el de la navegación, ahora como enlace real.
+    expect(screen.getAllByRole('link', { name: /Perfil/ })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /Perfil/ })).not.toBeInTheDocument();
   });
 });
