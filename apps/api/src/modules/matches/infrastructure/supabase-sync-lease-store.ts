@@ -2,6 +2,45 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { SyncLeaseScope, SyncResultDetails } from '../domain/match-store.js';
 import { SupabasePersistenceError } from './supabase-persistence-error.js';
 
+// Límite conservador para no inflar la tabla ni arriesgarnos a que un
+// mensaje larguísimo (por ejemplo, el cuerpo completo de una respuesta
+// HTTP del proveedor externo) termine persistido en
+// provider_sync_state.last_error.
+const MAX_SYNC_ERROR_LENGTH = 300;
+const FALLBACK_SYNC_ERROR_MESSAGE = 'Error desconocido durante la sincronización.';
+
+/**
+ * Convierte lo que llegue en `details.error` a un mensaje corto y seguro
+ * antes de persistirlo en `provider_sync_state.last_error`. Misma lógica
+ * que `SupabasePersistenceError`: nunca confiamos en que el error crudo
+ * (stack trace, cuerpo de una respuesta, lo que sea) sea seguro de guardar
+ * tal cual — acá puede terminar visible en Supabase Studio o en un futuro
+ * dashboard, no solo en logs de servidor.
+ */
+function sanitizeSyncError(error: unknown): string | null {
+  if (error === undefined || error === null) {
+    return null;
+  }
+
+  // Si es un Error, tomamos SOLO el .message — nunca .stack ni el objeto
+  // completo, que podría traer rutas de archivos internas o datos que no
+  // queremos persistir.
+  const rawMessage = error instanceof Error ? error.message : String(error);
+
+  // Colapsa saltos de línea/tabs a un solo espacio: un stack trace o un
+  // cuerpo de respuesta multilínea no debería poder "disfrazarse" de un
+  // mensaje corto y legible.
+  const singleLine = rawMessage.replace(/\s+/g, ' ').trim();
+
+  if (singleLine.length === 0) {
+    return FALLBACK_SYNC_ERROR_MESSAGE;
+  }
+
+  return singleLine.length > MAX_SYNC_ERROR_LENGTH
+    ? `${singleLine.slice(0, MAX_SYNC_ERROR_LENGTH - 1)}…`
+    : singleLine;
+}
+
 /**
  * Coordinación del lease de sincronización (`provider_sync_state`, WAT-103).
  *
@@ -79,7 +118,7 @@ export class SupabaseSyncLeaseStore {
       p_season: scope.season,
       p_lease_token: leaseToken,
       p_success: success,
-      p_error: details?.error ?? null,
+      p_error: sanitizeSyncError(details?.error),
       p_observed_quota_remaining: details?.observedQuotaRemaining ?? null,
       p_observed_quota_window_reset_at: details?.observedQuotaWindowResetAt ?? null,
     });
