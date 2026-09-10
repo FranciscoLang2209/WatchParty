@@ -104,6 +104,7 @@ export function ResetPasswordPage() {
         <div className="flex w-full flex-col items-start gap-4">
           <p
             role="alert"
+            aria-live="assertive"
             className="w-full rounded-sm border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
           >
             {copy.invalidMessage}
