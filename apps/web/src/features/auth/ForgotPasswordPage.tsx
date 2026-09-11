@@ -27,7 +27,11 @@ export function ForgotPasswordPage() {
     setIsSubmitting(true);
     setErrorMessage(null);
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
+    // El origen se lee en ejecución: el mismo build sirve local, preview y
+    // producción. Autorizar esas URLs en Supabase es WAT-122.
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
 
     setIsSubmitting(false);
 
