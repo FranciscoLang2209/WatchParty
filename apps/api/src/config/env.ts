@@ -1,4 +1,9 @@
-const REQUIRED_ENV_VARS = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'WEB_ORIGIN'] as const;
+const REQUIRED_ENV_VARS = [
+  'SUPABASE_URL',
+  'SUPABASE_ANON_KEY',
+  'WEB_ORIGIN',
+  'SUPABASE_SERVICE_ROLE_KEY',
+] as const;
 
 type RequiredEnvVar = (typeof REQUIRED_ENV_VARS)[number];
 

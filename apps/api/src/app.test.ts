@@ -3,12 +3,20 @@ import request from 'supertest';
 import express from 'express';
 import { notFoundHandler, errorHandler } from './middleware/error-handler.js';
 import { UnauthorizedError } from './errors/http-error.js';
+import { LocalMatchCatalog } from './modules/matches/infrastructure/local-match-catalog.js';
 
 process.env.SUPABASE_URL = 'https://example.supabase.co';
 process.env.SUPABASE_ANON_KEY = 'test-anon-key';
+process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
 process.env.WEB_ORIGIN = 'http://localhost:5173';
 
-const { default: app } = await import('./app.js');
+const { createApp } = await import('./app.js');
+
+// Estos tests cubren health/CORS/contrato de errores: no ejercitan lógica
+// de partidos, así que cualquier MatchCatalog serviría. Usamos
+// LocalMatchCatalog como doble explícito (nunca como fallback automático:
+// createApp no lo elige por sí mismo, se lo inyectamos acá a propósito).
+const app = createApp(new LocalMatchCatalog());
 
 describe('GET /health', () => {
   //seria como la carpeta de los tests cases
