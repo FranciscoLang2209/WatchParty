@@ -280,6 +280,28 @@ describe('ResetPasswordPage con el enlace de recuperación', () => {
     expect(authMock.signOut).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.getByTestId('recovery')).toHaveTextContent('apagado'));
   });
+
+  it('no da el flujo por terminado si no se pudo cerrar la sesión de recuperación', async () => {
+    authMock.signOut.mockResolvedValue({
+      error: {
+        name: 'AuthRetryableFetchError',
+        message: 'Failed to fetch',
+        status: 0,
+      } as AuthError,
+    });
+
+    const { user } = renderPage();
+    await llegarDesdeElEnlace();
+
+    await completarFormulario(user, 'contraseña-nueva');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('No pudimos cerrar la sesión.');
+    // La sesión del enlace sigue en pie: darla por cerrada la dejaría reutilizable.
+    expect(screen.getByTestId('recovery')).toHaveTextContent('habilitado');
+    expect(screen.queryByRole('heading', { name: 'Entrá a la tribuna' })).not.toBeInTheDocument();
+    // Se puede reintentar el cierre sin volver a pedir un enlace.
+    expect(screen.getByRole('button', { name: 'Guardar contraseña' })).toBeEnabled();
+  });
 });
 
 describe('el flujo completo de recuperación', () => {

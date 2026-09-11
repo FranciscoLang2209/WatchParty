@@ -67,10 +67,18 @@ export function ResetPasswordPage() {
       return;
     }
 
-    // La sesión de recuperación muere con el cambio: se apaga el modo, se cierra
-    // la sesión y se vuelve a entrar con la contraseña nueva.
+    // La sesión de recuperación muere con el cambio. Si el cierre falla, esa
+    // sesión sigue viva y el enlace seguiría sirviendo para volver a entrar:
+    // recién con el cierre confirmado se apaga el modo y se vuelve al login.
+    const { error: signOutError } = await signOut();
+
+    if (signOutError) {
+      setIsSubmitting(false);
+      setErrorMessage(signOutError);
+      return;
+    }
+
     endRecovery();
-    await signOut();
 
     void navigate(copy.backTo, { replace: true });
   }
