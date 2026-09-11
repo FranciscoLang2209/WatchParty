@@ -21,6 +21,12 @@ const MATCH_STATUSES: readonly MatchStatus[] = [
   'cancelled',
 ];
 
+// Código de error de Postgres para "el valor no tiene la forma del tipo de
+// dato esperado" (invalid_text_representation) — es el que devuelve, por
+// ejemplo, cuando se compara una columna uuid contra un texto que no es un
+// UUID válido. Referencia: https://www.postgresql.org/docs/current/errcodes-appendix.html
+const POSTGRES_INVALID_TEXT_REPRESENTATION = '22P02';
+
 function isMatchStatus(value: string): value is MatchStatus {
   return (MATCH_STATUSES as readonly string[]).includes(value);
 }
@@ -93,6 +99,9 @@ export class SupabaseMatchStore implements MatchStore {
       .maybeSingle();
 
     if (error) {
+      if (error.code === POSTGRES_INVALID_TEXT_REPRESENTATION) {
+        return null;
+      }
       throw new SupabasePersistenceError(`No se pudo buscar el partido ${id}.`, error);
     }
 
