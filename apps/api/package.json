@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke:auth-matches": "tsx --env-file-if-exists=.env scripts/smoke-auth-matches.ts",
     "verify:sports-data": "tsx --env-file-if-exists=.env scripts/verify-sports-data-schema.ts",
+    "verify:profiles": "tsx --env-file-if-exists=.env scripts/verify-profiles-schema.ts",
     "test": "vitest run"
   },
   "dependencies": {
