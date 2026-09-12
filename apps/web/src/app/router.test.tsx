@@ -49,16 +49,24 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Las rutas privadas consultan la Node API: se responde desde el test para no
   // dejar peticiones reales sueltas.
-  fetchSpy = vi
-    .spyOn(globalThis, 'fetch')
-    .mockImplementation((url) =>
-      Promise.resolve(
-        new Response(
-          JSON.stringify(String(url).endsWith('/matches') ? { matches: [] } : { match: partido }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        ),
-      ),
+  fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((url) => {
+    const path = String(url);
+
+    const body = path.endsWith('/matches')
+      ? { matches: [] }
+      : path.endsWith('/me/profile')
+        ? { profile: null }
+        : path.endsWith('/teams')
+          ? { teams: [] }
+          : { match: partido };
+
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
     );
+  });
   authMock.getSession.mockResolvedValue({ data: { session: null }, error: null });
   authMock.onAuthStateChange.mockReturnValue({
     data: { subscription: { unsubscribe: vi.fn() } },
@@ -105,6 +113,13 @@ describe('AppRoutes', () => {
     expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
   });
 
+  it('redirige /profile a /login sin sesión', async () => {
+    renderAt('/profile');
+
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Tu perfil' })).not.toBeInTheDocument();
+  });
+
   it('redirige el detalle de partido a /login sin sesión', async () => {
     renderAt('/matches/match-001');
 
@@ -118,6 +133,17 @@ describe('AppRoutes', () => {
 
     expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
     expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
+  });
+
+  it('renderiza /profile dentro del layout privado con sesión', async () => {
+    authMock.getSession.mockResolvedValue({ data: { session }, error: null });
+
+    renderAt('/profile');
+
+    expect(await screen.findByRole('heading', { name: 'Tu perfil' })).toBeInTheDocument();
+    // Vive dentro del AppLayout existente: comparte header y navegación.
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
+    expect(screen.getByRole('navigation', { name: 'Navegación principal' })).toBeInTheDocument();
   });
 
   it('renderiza el detalle de partido con sesión', async () => {

@@ -25,12 +25,29 @@ describe('BottomNavigation', () => {
   it('renderiza los cuatro destinos', () => {
     const { nav } = renderNav();
 
-    expect(within(nav).getByRole('link', { name: 'Inicio' })).toBeInTheDocument();
-    for (const label of ['Salas', 'Buscar', 'Perfil']) {
+    for (const label of ['Inicio', 'Perfil']) {
+      expect(within(nav).getByRole('link', { name: label })).toBeInTheDocument();
+    }
+    for (const label of ['Salas', 'Buscar']) {
       expect(
         within(nav).getByRole('button', { name: `${label}, Próximamente` }),
       ).toBeInTheDocument();
     }
+  });
+
+  it('lleva a /profile, que ya está disponible', () => {
+    const { nav } = renderNav();
+
+    expect(within(nav).getByRole('link', { name: 'Perfil' })).toHaveAttribute('href', '/profile');
+  });
+
+  it('marca Perfil como activo con aria-current en /profile', () => {
+    const { nav } = renderNav('/profile');
+
+    expect(within(nav).getByRole('link', { name: 'Perfil' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
   });
 
   it('reutiliza la configuración compartida, sin declarar destinos propios', () => {
@@ -103,7 +120,7 @@ describe('BottomNavigation', () => {
   it('marca los destinos futuros como no disponibles', () => {
     const { nav } = renderNav();
 
-    for (const label of ['Salas', 'Buscar', 'Perfil']) {
+    for (const label of ['Salas', 'Buscar']) {
       expect(within(nav).getByRole('button', { name: `${label}, Próximamente` })).toHaveAttribute(
         'aria-disabled',
         'true',
