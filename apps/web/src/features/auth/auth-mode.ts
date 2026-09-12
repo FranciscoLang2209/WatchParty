@@ -67,6 +67,33 @@ export const LOGIN_EXTRAS = {
   forgotTo: '/forgot-password',
 } as const;
 
+export const RESET_PASSWORD_COPY = {
+  eyebrow: 'Último paso',
+  title: 'Creá una contraseña nueva',
+  description: 'Elegí la contraseña con la que vas a entrar de ahora en más.',
+  passwordLabel: 'Contraseña nueva',
+  passwordPlaceholder: 'Mínimo 8 caracteres',
+  confirmLabel: 'Confirmar contraseña nueva',
+  confirmPlaceholder: 'Repetí la contraseña nueva',
+  submitLabel: 'Guardar contraseña',
+  pendingLabel: 'Guardando…',
+  checkingMessage: 'Verificando el enlace…',
+  /**
+   * Un enlace vencido, ya usado o abierto de más no es un callejón sin salida:
+   * el mensaje no distingue entre esos casos y siempre ofrece pedir otro.
+   */
+  invalidMessage: 'El enlace no es válido o ya venció. Pedí uno nuevo para crear tu contraseña.',
+  requestLabel: 'Pedir un enlace nuevo',
+  requestTo: '/forgot-password',
+  /** El error real de Supabase no se muestra: podría filtrar estado interno. */
+  failureMessage: 'No pudimos guardar la contraseña. Pedí un enlace nuevo e intentá otra vez.',
+  backPrompt: '¿Ya la cambiaste?',
+  backLabel: 'Ingresar',
+  backTo: '/login',
+} as const;
+
+export const SHORT_PASSWORD_MESSAGE = `La contraseña debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres.`;
+
 export const FORGOT_PASSWORD_COPY = {
   eyebrow: 'Recuperá tu acceso',
   title: '¿Olvidaste tu contraseña?',
