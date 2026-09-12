@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthChangeEvent, AuthError, Session } from '@supabase/supabase-js';
 
 const { authMock } = vi.hoisted(() => ({
@@ -10,14 +10,23 @@ const { authMock } = vi.hoisted(() => ({
     onAuthStateChange: vi.fn(),
     signOut: vi.fn(),
     updateUser: vi.fn(),
+    signInWithPassword: vi.fn(),
   },
 }));
 
 vi.mock('../../lib/supabase', () => ({ supabase: { auth: authMock } }));
+vi.mock('../../lib/env', () => ({
+  readWebEnv: () => ({
+    supabaseUrl: 'https://supabase.test',
+    supabaseAnonKey: 'anon',
+    apiBaseUrl: 'https://api.watchparty.test',
+  }),
+}));
 
 const { AuthProvider } = await import('../../auth/AuthProvider');
 const { useAuth } = await import('../../auth/useAuth');
 const { ResetPasswordPage } = await import('./ResetPasswordPage');
+const { AppRoutes } = await import('../../app/router');
 
 const session = { access_token: 'token-123', user: { id: 'user-1', email: 'a@b.com' } } as Session;
 
@@ -73,6 +82,13 @@ beforeEach(() => {
   authMock.getSession.mockResolvedValue({ data: { session: null }, error: null });
   authMock.signOut.mockResolvedValue({ error: null });
   authMock.updateUser.mockResolvedValue({ data: { user: session.user }, error: null });
+  authMock.signInWithPassword.mockImplementation(() => {
+    // El cliente real anuncia la sesión nueva antes de resolver: sin eso, la
+    // ruta privada rebotaría al login.
+    emitAuthChange('SIGNED_IN', session);
+
+    return Promise.resolve({ data: { session, user: session.user }, error: null });
+  });
   authMock.onAuthStateChange.mockImplementation(
     (callback: (event: AuthChangeEvent, session: Session | null) => void) => {
       emitAuthChange = callback;
@@ -120,6 +136,35 @@ describe('ResetPasswordPage sin autorización de recuperación', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('Verificando el enlace…');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('ResetPasswordPage: los fallos son presentables', () => {
+  it('anuncia el enlace inválido en una región viva', async () => {
+    renderPage();
+
+    const alerta = await screen.findByRole('alert');
+
+    // Quien usa lector de pantalla se entera del fallo sin ir a buscarlo.
+    expect(alerta).toHaveAttribute('aria-live', 'assertive');
+  });
+
+  it('no revela el token de la sesión de recuperación', async () => {
+    authMock.getSession.mockResolvedValue({ data: { session }, error: null });
+
+    renderPage();
+    await screen.findByRole('alert');
+
+    expect(document.body.textContent).not.toContain(session.access_token);
+  });
+
+  it('no revela de quién es la cuenta del enlace', async () => {
+    authMock.getSession.mockResolvedValue({ data: { session }, error: null });
+
+    renderPage();
+    await screen.findByRole('alert');
+
+    expect(document.body.textContent).not.toContain('a@b.com');
   });
 });
 
@@ -207,6 +252,8 @@ describe('ResetPasswordPage con el enlace de recuperación', () => {
     expect(alerta).not.toHaveTextContent('/auth/v1/user');
     expect(alerta).not.toHaveTextContent('session_not_found');
     expect(alerta).not.toHaveTextContent('contraseña-nueva');
+    expect(alerta).toHaveAttribute('aria-live', 'assertive');
+    expect(document.body.textContent).not.toContain(session.access_token);
     // Se puede reintentar: el formulario sigue en pie.
     expect(screen.getByRole('button', { name: 'Guardar contraseña' })).toBeEnabled();
   });
@@ -254,5 +301,53 @@ describe('ResetPasswordPage con el enlace de recuperación', () => {
     expect(screen.queryByRole('heading', { name: 'Entrá a la tribuna' })).not.toBeInTheDocument();
     // Se puede reintentar el cierre sin volver a pedir un enlace.
     expect(screen.getByRole('button', { name: 'Guardar contraseña' })).toBeEnabled();
+  });
+});
+
+describe('el flujo completo de recuperación', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    // La Home privada consulta la Node API: se responde desde el test para no
+    // dejar peticiones reales sueltas.
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ matches: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    authMock.getSession.mockResolvedValue({ data: { session }, error: null });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it('deja iniciar sesión de nuevo con la contraseña recién creada', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <AuthProvider>
+        <MemoryRouter initialEntries={['/reset-password']}>
+          <AppRoutes />
+        </MemoryRouter>
+      </AuthProvider>,
+    );
+
+    await llegarDesdeElEnlace();
+    await completarFormulario(user, 'contraseña-nueva');
+
+    // El cambio termina en el login, sin sesión de recuperación viva.
+    await screen.findByRole('heading', { name: 'Entrá a la tribuna' });
+
+    await user.type(screen.getByLabelText('Correo electrónico'), 'persona@watchparty.test');
+    await user.type(screen.getByLabelText('Contraseña'), 'contraseña-nueva');
+    await user.click(screen.getByRole('button', { name: 'Ingresar' }));
+
+    expect(authMock.signInWithPassword).toHaveBeenCalledWith({
+      email: 'persona@watchparty.test',
+      password: 'contraseña-nueva',
+    });
+    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
   });
 });
