@@ -8,6 +8,29 @@ function requireEnv(name: string): string {
   return value;
 }
 
+const TEMP_USER_PASSWORD_ADMIN = 'Verify-Profiles-Pass-1!';
+
+/**
+ * Crea un usuario descartable con la Admin API (requiere service_role) y
+ * devuelve solo su id. A diferencia de getTempUserAccessToken, no arma una
+ * sesión: los checks de profiles solo necesitan un user_id válido para
+ * satisfacer la FK a auth.users, no un cliente autenticado.
+ */
+export async function createTempUserId(adminClient: SupabaseClient): Promise<string> {
+  const email = createTempEmail();
+  const { data, error } = await adminClient.auth.admin.createUser({
+    email,
+    password: TEMP_USER_PASSWORD_ADMIN,
+    email_confirm: true,
+  });
+
+  if (error || !data.user) {
+    throw new Error(`No se pudo crear un usuario temporal: ${error?.message ?? 'sin usuario'}`);
+  }
+
+  return data.user.id;
+}
+
 /**
  * Cliente con privilegios de administrador: salta RLS por completo.
  * Es el único que debería usarse para probar constraints y funciones de lease,
