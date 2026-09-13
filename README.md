@@ -91,6 +91,13 @@ Monorepo gestionado con pnpm workspaces (`apps/*`).
 - `apps/api`: backend (Node + Express + TypeScript). Ver [`apps/api/README.md`](./apps/api/README.md).
 - `apps/web`: frontend (por agregar en un ticket posterior).
 
+## Runbooks
+
+Procedimientos de validación y configuración, en [`docs/runbooks`](./docs/runbooks):
+
+- [Validación del recorrido de partidos](./docs/runbooks/match-frontend-validation.md)
+- [Redirect URLs de la recuperación de contraseña](./docs/runbooks/password-recovery-redirects.md)
+
 ## Supabase (desarrollo local)
 
 El proyecto usa la [Supabase CLI](https://supabase.com/docs/guides/local-development) para levantar un stack
