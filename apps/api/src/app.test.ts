@@ -99,3 +99,30 @@ describe('Contrato de errores', () => {
     expect(response.text).not.toMatch(/at .*:\d+:\d+/);
   });
 });
+
+/**
+ * Contrato de despliegue (WAT-138): el preset Express de Vercel carga
+ * `apps/api/src/app.js` como función serverless y exige que su `default
+ * export` sea la aplicación Express ya compuesta. `server.ts` nunca se
+ * ejecuta en Vercel, así que la composición de producción no puede vivir
+ * solo ahí: si falta el default export, el runtime aborta con
+ * "Invalid export found in module" y todas las rutas devuelven
+ * 500 FUNCTION_INVOCATION_FAILED.
+ */
+describe('Contrato del default export para Vercel', () => {
+  it('app.ts exporta por defecto una app Express invocable como handler', async () => {
+    const appModule = await import('./app.js');
+
+    expect(appModule.default).toBeTypeOf('function');
+    expect(appModule.default).toHaveProperty('listen');
+  });
+
+  it('la app exportada por defecto sirve GET /health con 200', async () => {
+    const { default: deployedApp } = await import('./app.js');
+
+    const response = await request(deployedApp).get('/health');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ status: 'ok' });
+  });
+});

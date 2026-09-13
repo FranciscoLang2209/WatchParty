@@ -1,19 +1,9 @@
-import { createApp } from './app.js';
-import { createSupabaseSportsDataClient } from './modules/matches/infrastructure/supabase-sports-data-client.js';
-import { SupabaseMatchStore } from './modules/matches/infrastructure/supabase-match-store.js';
-import { SupabaseMatchCatalog } from './modules/matches/infrastructure/supabase-match-catalog.js';
+import app from './app.js';
 
-// Composición real del proceso: acá, y solo acá, se decide que el catálogo
-// de partidos es el respaldado por Supabase. Si falta configuración
-// requerida (por ejemplo SUPABASE_SERVICE_ROLE_KEY), la importación de
-// `env.ts` ya falló con un error explícito antes de llegar acá — no hay
-// fallback a LocalMatchCatalog ni a un catálogo vacío.
-
-const sportsDataClient = createSupabaseSportsDataClient();
-const matchStore = new SupabaseMatchStore(sportsDataClient);
-const matchCatalog = new SupabaseMatchCatalog(matchStore);
-
-const app = createApp(matchCatalog);
+// Punto de entrada local: la app ya viene compuesta desde `app.ts` (ver
+// WAT-138), así que acá sólo se le agrega el `listen`. En Vercel este
+// archivo no se ejecuta: el runtime invoca directamente el default export
+// de `app.ts` como función serverless.
 
 const PORT = Number(process.env.PORT ?? 3000); //lo que hace esto es decir -> si hay un puerto elegido dentro de las variables de entorno, elegilo. Sino, usa el 3000.
 
