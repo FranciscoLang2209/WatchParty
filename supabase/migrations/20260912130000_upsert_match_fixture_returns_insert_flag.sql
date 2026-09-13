@@ -2,6 +2,10 @@
 -- partido fue creado o actualizado. Necesario para que el comando de
 -- sincronización (WAT-107) pueda contar "importados" vs "actualizados"
 -- por separado en su resumen — el `uuid` solo no alcanza para eso.
+drop function if exists upsert_match_fixture(
+    text, text, text, text, text, text, text, text, timestamptz, text
+    );
+
 create or replace function upsert_match_fixture(
   p_provider text,
   p_external_id text,
