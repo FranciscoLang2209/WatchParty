@@ -9,6 +9,7 @@ function successOutcome(body: unknown): ApiFootballFetchOutcome {
     ok: true,
     body,
     paging: (body as { paging?: unknown })?.paging,
+    headers: {},
   };
 }
 
@@ -98,6 +99,7 @@ describe('normalizeApiFootballFixturesPage', () => {
       ok: false,
       body: undefined,
       paging: undefined,
+      headers: {},
     });
 
     expect(result).toEqual({ kind: 'error', reason: 'http-error' });
@@ -116,6 +118,7 @@ describe('normalizeApiFootballFixturesPage', () => {
       ok: true,
       body: undefined,
       paging: undefined,
+      headers: {},
     });
 
     expect(result).toEqual({ kind: 'error', reason: 'invalid-json' });
