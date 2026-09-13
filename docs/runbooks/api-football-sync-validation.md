@@ -2,9 +2,9 @@
 
 ## Propósito y alcance
 
-Este runbook valida, con **una única importación real y mínima**, que la cadena completa `matches:sync` → API-Football real → Supabase funciona de punta a punta: adquisición de lease, reserva de cuota persistente, normalización, y persistencia idempotente de equipos y partidos.
+Este runbook valida, con el mínimo de llamadas reales posible, que la cadena completa `matches:sync` → API-Football real → Supabase funciona de punta a punta: adquisición de lease, reserva de cuota persistente, normalización, y persistencia idempotente de equipos y partidos.
 
-No agrega infraestructura nueva (sin cron, sin polling, sin worker, sin cola, sin endpoint) y no cambia de proveedor ni de plan. No repite la importación más de una vez para juntar evidencia — una sola corrida real alcanza. La importación de planteles y estadísticas queda fuera de este runbook.
+El objetivo es una única importación real que persista datos exitosamente — nunca repetir importaciones solo para juntar evidencia adicional. En la corrida documentada acá (ver "Evidencia de la ejecución real") hicieron falta más llamadas reales de las previstas porque esta validación encontró y corrigió tres bugs bloqueantes (ver "Hallazgos y fixes"): en total se hicieron **4 llamadas reales al proveedor**, de las cuales **1 sola resultó en una importación persistida exitosamente** — un intento falló por un bug sin persistir nada, y dos fueron consultas de diagnóstico fuera de `matches:sync`. No agrega infraestructura nueva (sin cron, sin polling, sin worker, sin cola, sin endpoint) y no cambia de proveedor ni de plan. La importación de planteles y estadísticas queda fuera de este runbook.
 
 ## Variables requeridas (sin valores)
 
@@ -105,7 +105,7 @@ No hace falta interpretar código: son consultas de lectura directas sobre las t
 Esta validación junta tres tipos de evidencia distintos; la sección "Evidencia de la ejecución real" de más abajo los separa explícitamente:
 
 1. **Pruebas con mocks/dobles falsos** — ya cubiertas por las suites de WAT-105/WAT-106/WAT-107 (`pnpm --filter @watchparty/api test`), nunca hacen una llamada de red real ni tocan Supabase real.
-2. **Respuesta real de API-Football** — la única llamada real de este runbook, ejecutada una sola vez en la sección siguiente.
+2. **Respuesta real de API-Football** — en esta validación hicieron falta 4 llamadas reales al proveedor (detalladas en "Evidencia de la ejecución real"), no 1; solo la última resultó en una importación persistida.
 3. **Verificación de datos persistidos** — lectura directa en el Supabase **local** después de la corrida real, con las consultas de la sección anterior.
 
 ## Cómo repetir la validación respetando la cuota
@@ -153,5 +153,16 @@ Esta corrida real encontró tres bugs reales, ninguno detectable con los tests u
   }
   ```
   Código de salida: `0`.
-- **Cuota/límites observados**: `provider_quota_ledger` quedó en `reserved_count = 3` para `2026-09-13` (1 reserva de una prueba SQL directa sobre la función, más las 2 reservas de las dos ejecuciones reales de `matches:sync` — la fallida por el bug de `page` y la exitosa). Además de esas 2 ejecuciones del comando, se hicieron 2 llamadas reales adicionales por fuera de `matches:sync` (`curl` directo) para diagnosticar el bug del parámetro `page` — ninguna de las dos persistió datos ni pasó por el ledger, porque no pasaron por el código del comando.
+- **Llamadas reales al proveedor vs. ledger interno** — el ledger (`provider_quota_ledger`) solo cuenta las reservas hechas por `matches:sync`; los `curl` de diagnóstico consumieron cuota real del proveedor sin pasar por él:
+
+  | Acción                                                                       | ¿Llamó al proveedor real? | ¿Pasó por el ledger interno? |
+  | ---------------------------------------------------------------------------- | ------------------------- | ---------------------------- |
+  | Prueba SQL directa de `reserve_provider_quota_unit` (para depurar el bug #2) | No                        | Sí (+1 → total 1)            |
+  | 1er `matches:sync` (bug de `page`, falló, 0 persistido)                      | Sí                        | Sí (+1 → total 2)            |
+  | `curl` con `page=1` (diagnóstico del bug #3)                                 | Sí                        | No                           |
+  | `curl` sin `page` (diagnóstico del bug #3)                                   | Sí                        | No                           |
+  | 2do `matches:sync` (exitoso, 28 persistidos)                                 | Sí                        | Sí (+1 → total 3)            |
+
+  **Total de llamadas reales al proveedor: 4** (filas 2, 3, 4 y 5). **Ledger interno final: `reserved_count = 3`** para `2026-09-13` — no refleja las 2 llamadas por `curl`, porque el ledger solo se actualiza desde el código de `matches:sync`. La cuota real consumida en la cuenta de API-Football ese día fue de al menos 4 unidades, no 3.
+
 - **Verificación en Supabase local**: `matches` y `teams` con filas `provider = 'api-football'` (28 partidos, equipos con nombres reales como "Boca Juniors", "River Plate", etc.), `provider_sync_state` con el lease liberado (`lease_owner`/`lease_token` en `NULL`) y `last_success_at` seteado.
