@@ -45,8 +45,29 @@ describe('createApiFootballClient', () => {
     expect(requestUrl.searchParams.get('season')).toBe('2023');
     expect(requestUrl.searchParams.get('from')).toBe('2023-03-01');
     expect(requestUrl.searchParams.get('to')).toBe('2023-03-14');
-    expect(requestUrl.searchParams.get('page')).toBe('1');
+    expect(requestUrl.searchParams.has('page')).toBe(false);
     expect((init as RequestInit).headers).toMatchObject({ 'x-apisports-key': API_KEY });
+  });
+
+  it('sí incluye el parámetro page cuando es mayor a 1', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ errors: [], results: 0, paging: { current: 2, total: 2 }, response: [] }),
+      );
+    const client = createApiFootballClient({ fetchFn, baseUrl: BASE_URL, apiKey: API_KEY });
+
+    await client.fetchFixturesPage({
+      league: 128,
+      season: 2023,
+      from: '2023-03-01',
+      to: '2023-03-14',
+      page: 2,
+    });
+
+    const [url] = fetchFn.mock.calls[0]!;
+    const requestUrl = new URL(url as string | URL);
+    expect(requestUrl.searchParams.get('page')).toBe('2');
   });
 
   it('devuelve el status y el body en una respuesta exitosa', async () => {
