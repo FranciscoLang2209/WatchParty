@@ -13,10 +13,26 @@
  * servidor (`console.error` en el error handler). Nunca contiene la
  * service_role key ni ningún otro secreto: los errores de Supabase/Postgres
  * no incluyen credenciales, solo detalles de la operación fallida.
+ *
+ * `cause` se define a mano en vez de usar `super(message, { cause })`
+ * (ticket WAT-138): ese overload de dos argumentos de `Error` existe recién
+ * desde ES2022, y el build de Vercel lo rechazaba con
+ * `TS2554: Expected 0-1 arguments, but got 2`. El descriptor replica el del
+ * `cause` nativo — no enumerable, pero escribible y configurable — para que
+ * la clase se siga comportando como un `Error` común.
  */
 export class SupabasePersistenceError extends Error {
   constructor(message: string, cause?: unknown) {
-    super(message, { cause });
+    super(message);
     this.name = 'SupabasePersistenceError';
+
+    if (cause !== undefined) {
+      Object.defineProperty(this, 'cause', {
+        value: cause,
+        writable: true,
+        enumerable: false,
+        configurable: true,
+      });
+    }
   }
 }
