@@ -43,7 +43,7 @@ export async function checkMatchStore(adminClient: SupabaseClient): Promise<Chec
   const results: CheckResult[] = [];
   const store = new SupabaseMatchStore(adminClient);
 
-  const firstId = await store.upsertFixture(buildFixture());
+  const { id: firstId } = await store.upsertFixture(buildFixture());
   const firstMatch = await store.findById(firstId);
 
   results.push({
@@ -65,7 +65,7 @@ export async function checkMatchStore(adminClient: SupabaseClient): Promise<Chec
     detail: firstMatch ? `Campos: ${Object.keys(firstMatch).join(', ')}` : undefined,
   });
 
-  const secondId = await store.upsertFixture(
+  const { id: secondId } = await store.upsertFixture(
     buildFixture({
       homeTeam: { externalId: HOME_TEAM_EXTERNAL_ID, name: 'Equipo Verificación A (actualizado)' },
       status: 'live',

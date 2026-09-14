@@ -43,7 +43,7 @@ export interface MatchStore {
    * UUID interno del partido si ya existía uno con el mismo
    * `(provider, externalId)`. Devuelve el UUID interno del partido.
    */
-  upsertFixture(fixture: NormalizedMatchFixture): Promise<string>;
+  upsertFixture(fixture: NormalizedMatchFixture): Promise<UpsertFixtureResult>;
 
   /** Adquiere el lease si está libre. Devuelve el token, o `null` si ya estaba tomado. */
   acquireSyncLease(
@@ -65,4 +65,25 @@ export interface MatchStore {
     success: boolean,
     details?: SyncResultDetails,
   ): Promise<boolean>;
+
+  /**
+   * Reserva una unidad de cuota diaria (UTC) para el proveedor, si no se
+   * superó `dailyLimit`. Persistente y compartida entre ejecuciones del
+   * comando de sincronización en el mismo día.
+   */
+  reserveProviderQuotaUnit(
+    provider: string,
+    quotaDateUtc: string,
+    dailyLimit: number,
+  ): Promise<QuotaReservationResult>;
+}
+
+export interface QuotaReservationResult {
+  reserved: boolean;
+  reservedCount: number;
+}
+
+export interface UpsertFixtureResult {
+  id: string;
+  wasInserted: boolean;
 }

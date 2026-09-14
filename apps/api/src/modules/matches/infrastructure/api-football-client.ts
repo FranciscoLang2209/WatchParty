@@ -7,7 +7,14 @@ export interface FetchFixturesPageParams {
 }
 
 export type ApiFootballFetchOutcome =
-  | { kind: 'response'; status: number; ok: boolean; body: unknown; paging: unknown }
+  | {
+      kind: 'response';
+      status: number;
+      ok: boolean;
+      body: unknown;
+      paging: unknown;
+      headers: Record<string, string>;
+    }
   | { kind: 'timeout' }
   | { kind: 'network-error'; message: string };
 
@@ -42,8 +49,9 @@ export function createApiFootballClient({
       url.searchParams.set('season', String(params.season));
       url.searchParams.set('from', params.from);
       url.searchParams.set('to', params.to);
-      url.searchParams.set('page', String(params.page));
-
+      if (params.page > 1) {
+        url.searchParams.set('page', String(params.page));
+      }
       try {
         const response = await fetchFn(url, {
           headers: { 'x-apisports-key': apiKey },
@@ -71,6 +79,7 @@ export function createApiFootballClient({
           ok: response.ok,
           body,
           paging: rawPaging,
+          headers: Object.fromEntries(response.headers.entries()),
         };
       } catch (error) {
         if (timeoutController.signal.aborted) {

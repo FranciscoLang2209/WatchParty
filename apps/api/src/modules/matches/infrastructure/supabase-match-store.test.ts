@@ -154,17 +154,13 @@ describe('SupabaseMatchStore', () => {
   describe('upsertFixture()', () => {
     it('delega en la función upsert_match_fixture con los datos planos del fixture', async () => {
       const client = makeFakeClient({
-        rpc: () => ({ data: 'match-uuid', error: null }),
+        rpc: () => ({ data: [{ match_id: 'match-uuid', was_inserted: true }], error: null }),
       });
       const store = new SupabaseMatchStore(asSupabaseClient(client));
 
-      const matchId = await store.upsertFixture(FIXTURE);
+      const result = await store.upsertFixture(FIXTURE);
 
-      expect(matchId).toBe('match-uuid');
-      // El adaptador ya no toca teams/matches directamente: la atomicidad de
-      // guardar equipos + partido vive en la función de Postgres (ver
-      // supabase/migrations/20260910120000_upsert_match_fixture_function.sql),
-      // no en el orden de llamadas HTTP desde acá.
+      expect(result).toEqual({ id: 'match-uuid', wasInserted: true });
       expect(client.fromCalls).toEqual([]);
       expect(client.rpc).toHaveBeenCalledWith('upsert_match_fixture', {
         p_provider: 'local-fixtures',

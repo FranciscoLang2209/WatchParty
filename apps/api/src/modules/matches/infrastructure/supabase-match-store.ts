@@ -1,9 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Match, MatchStatus } from '../domain/match.js';
-import type { MatchStore, SyncLeaseScope, SyncResultDetails } from '../domain/match-store.js';
+import type {
+  MatchStore,
+  SyncLeaseScope,
+  SyncResultDetails,
+  UpsertFixtureResult,
+} from '../domain/match-store.js';
 import type { NormalizedMatchFixture } from '../domain/normalized-match-fixture.js';
 import { SupabasePersistenceError } from './supabase-persistence-error.js';
 import { SupabaseSyncLeaseStore } from './supabase-sync-lease-store.js';
+import { SupabaseProviderQuotaStore } from './supabase-provider-quota-store.js';
 
 // Postgres nombra así, por convención, la FK inline sin nombre explícito
 // (`<tabla>_<columna>_fkey`) que definió la migración de WAT-103
@@ -76,9 +82,11 @@ function toMatch(row: MatchRowWithTeams): Match {
  */
 export class SupabaseMatchStore implements MatchStore {
   private readonly syncLeaseStore: SupabaseSyncLeaseStore;
+  private readonly providerQuotaStore: SupabaseProviderQuotaStore;
 
   constructor(private readonly client: SupabaseClient) {
     this.syncLeaseStore = new SupabaseSyncLeaseStore(client);
+    this.providerQuotaStore = new SupabaseProviderQuotaStore(client);
   }
 
   async list(): Promise<readonly Match[]> {
@@ -110,13 +118,7 @@ export class SupabaseMatchStore implements MatchStore {
     return toMatch(data as unknown as MatchRowWithTeams);
   }
 
-  async upsertFixture(fixture: NormalizedMatchFixture): Promise<string> {
-    // Una sola llamada a upsert_match_fixture (fix de atomicidad, comentario
-    // del jefe en WAT-106): equipos y partido se guardan dentro de la misma
-    // transacción de Postgres. Si el partido es inválido (por ejemplo
-    // home == away), la función revierte también los upserts de equipos que
-    // haya hecho antes de fallar — ver la migración
-    // 20260910120000_upsert_match_fixture_function.sql.
+  async upsertFixture(fixture: NormalizedMatchFixture): Promise<UpsertFixtureResult> {
     const { data, error } = await this.client.rpc('upsert_match_fixture', {
       p_provider: fixture.provider,
       p_external_id: fixture.externalId,
@@ -137,7 +139,12 @@ export class SupabaseMatchStore implements MatchStore {
       );
     }
 
-    return data as string;
+    const row = (Array.isArray(data) ? data[0] : data) as {
+      match_id: string;
+      was_inserted: boolean;
+    };
+
+    return { id: row.match_id, wasInserted: row.was_inserted };
   }
 
   // Delegación pura: la lógica real vive en SupabaseSyncLeaseStore.
@@ -164,5 +171,9 @@ export class SupabaseMatchStore implements MatchStore {
     details?: SyncResultDetails,
   ): Promise<boolean> {
     return this.syncLeaseStore.recordSyncResult(scope, leaseToken, success, details);
+  }
+
+  async reserveProviderQuotaUnit(provider: string, quotaDateUtc: string, dailyLimit: number) {
+    return this.providerQuotaStore.reserveProviderQuotaUnit(provider, quotaDateUtc, dailyLimit);
   }
 }

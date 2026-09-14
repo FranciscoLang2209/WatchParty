@@ -15,6 +15,7 @@
     "smoke:auth-matches": "tsx --env-file-if-exists=.env scripts/smoke-auth-matches.ts",
     "verify:sports-data": "tsx --env-file-if-exists=.env scripts/verify-sports-data-schema.ts",
     "verify:profiles": "tsx --env-file-if-exists=.env scripts/verify-profiles-schema.ts",
+    "matches:sync": "tsx --env-file-if-exists=.env src/scripts/sync-matches.ts",
     "test": "vitest run"
   },
   "dependencies": {

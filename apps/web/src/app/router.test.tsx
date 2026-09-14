@@ -84,6 +84,15 @@ describe('AppRoutes', () => {
     ).toBeInTheDocument();
   });
 
+  it('expone /reset-password como ruta pública', async () => {
+    renderAt('/reset-password');
+
+    // Sin la señal de recuperación la pantalla no ofrece el formulario, pero la
+    // ruta existe y no redirige al login.
+    expect(await screen.findByRole('link', { name: 'Pedir un enlace nuevo' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Entrá a la tribuna' })).not.toBeInTheDocument();
+  });
+
   it('expone /register como ruta pública', async () => {
     renderAt('/register');
 
