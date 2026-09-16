@@ -11,12 +11,12 @@ import {
 import { ProfileValidationError } from '../domain/profile-validation-error.js';
 import { ProfilePersistenceError } from './profile-persistence-error.js';
 
-// Código de error de Postgres para "el valor no tiene la forma del tipo de
-// dato esperado" (invalid_text_representation) — mismo criterio que
-// SupabaseMatchStore (WAT-106): un favoriteTeamId que ni siquiera es un
-// UUID válido se trata como "no existe", no como fallo de persistencia.
-// https://www.postgresql.org/docs/current/errcodes-appendix.html
-const POSTGRES_INVALID_TEXT_REPRESENTATION = '22P02';
+// Formato canónico de UUID (el mismo que genera gen_random_uuid() en
+// Postgres). Se valida en código, antes de consultar Supabase, para que un
+// favoriteTeamId con formato inválido rechace sin tocar la base — WAT-128
+// pide justamente esto en vez de depender únicamente del código de error
+// 22P02 que devolvería Postgres.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface ProfileRow {
   display_name: string;
@@ -33,21 +33,25 @@ function toProfile(row: ProfileRow): Profile {
 }
 
 /**
- * Implementación de `OwnProfileStore` respaldada por Supabase.
+ * Implementación de `OwnProfileStore` respaldada por Supabase (WAT-127
+ * lecturas, WAT-128 escritura), sobre las tablas `profiles` y `teams` —
+ * ambas ya migradas y con RLS/privilegios exclusivos de `service_role`
+ * (WAT-123/124/125).
  *
- * WAT-127 implementa las lecturas (`getOwnProfile`, `listTeams`) sobre
- * `profiles`/`teams` — ambas ya migradas y con RLS/privilegios exclusivos
- * de `service_role` (WAT-123/124/125). `saveOwnProfile` es WAT-128: acá
- * queda como stub para que la clase cumpla `OwnProfileStore` completo.
+ * No instancia su propio cliente Supabase: recibe el `SupabaseClient` por
+ * constructor (inyección de dependencias). Quien componga este store debe
+ * reutilizar `createSupabaseSportsDataClient` (WAT-106,
+ * `modules/matches/infrastructure/supabase-sports-data-client.ts`) — el
+ * mismo cliente servidor, sin duplicar el factory.
  */
 export class SupabaseOwnProfileStore implements OwnProfileStore {
   constructor(private readonly client: SupabaseClient) {}
 
   /**
-   * `userId` viene siempre del usuario autenticado, así que la ausencia de
-   * fila es el único caso "vacío": devuelve `null`, no lanza. Solo
-   * selecciona las tres columnas públicas de `Profile` — nunca `user_id`,
-   * timestamps ni `*`.
+   * `userId` viene siempre del usuario autenticado (nunca de un input de
+   * otra persona), así que la ausencia de fila es el único caso "vacío":
+   * devuelve `null`, no lanza. Solo selecciona las tres columnas públicas
+   * de `Profile` — nunca `user_id`, timestamps ni `*`.
    */
   async getOwnProfile(userId: string): Promise<Profile | null> {
     const { data, error } = await this.client
@@ -89,8 +93,9 @@ export class SupabaseOwnProfileStore implements OwnProfileStore {
    * Upsert por `user_id` (PK de `profiles`): una fila por usuario, alta o
    * edición según exista o no. Valida en código antes de tocar la base
    * (`ProfileValidationError`, para que un handler HTTP futuro devuelva
-   * 400) y deja las constraints de `20260912160809_profiles_constraints.sql`
-   * como defensa final, no como única defensa.
+   * 400) y deja las constraints de
+   * `20260912160809_profiles_constraints.sql` como defensa final, no como
+   * única defensa.
    */
   async saveOwnProfile(userId: string, input: SaveOwnProfileInput): Promise<Profile> {
     const displayName = input.displayName.trim();
@@ -112,11 +117,20 @@ export class SupabaseOwnProfileStore implements OwnProfileStore {
       );
     }
 
-    if (input.favoriteTeamId !== null && !(await this.teamExists(input.favoriteTeamId))) {
-      throw new ProfileValidationError(
-        'favorite_team_not_found',
-        `El equipo ${input.favoriteTeamId} no existe.`,
-      );
+    if (input.favoriteTeamId !== null) {
+      if (!UUID_PATTERN.test(input.favoriteTeamId)) {
+        throw new ProfileValidationError(
+          'favorite_team_not_found',
+          `El equipo ${input.favoriteTeamId} no existe.`,
+        );
+      }
+
+      if (!(await this.teamExists(input.favoriteTeamId))) {
+        throw new ProfileValidationError(
+          'favorite_team_not_found',
+          `El equipo ${input.favoriteTeamId} no existe.`,
+        );
+      }
     }
 
     const { data, error } = await this.client
@@ -140,6 +154,11 @@ export class SupabaseOwnProfileStore implements OwnProfileStore {
     return toProfile(data as ProfileRow);
   }
 
+  /**
+   * Solo se llama con un string que ya pasó `UUID_PATTERN`, así que acá no
+   * hace falta interpretar códigos de error de formato inválido — un error
+   * de Supabase en este punto es un fallo real de persistencia.
+   */
   private async teamExists(teamId: string): Promise<boolean> {
     const { data, error } = await this.client
       .from('teams')
@@ -148,7 +167,6 @@ export class SupabaseOwnProfileStore implements OwnProfileStore {
       .maybeSingle();
 
     if (error) {
-      if (error.code === POSTGRES_INVALID_TEXT_REPRESENTATION) return false;
       throw new ProfilePersistenceError(`No se pudo verificar el equipo ${teamId}.`, error);
     }
 
