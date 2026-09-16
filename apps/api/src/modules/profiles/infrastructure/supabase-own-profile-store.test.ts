@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseOwnProfileStore } from './supabase-own-profile-store.js';
 import { ProfilePersistenceError } from './profile-persistence-error.js';
+import { ProfileValidationError } from '../domain/profile-validation-error.js';
 
 type FakeResult = { data: unknown; error: { message: string } | null };
 
@@ -12,12 +13,20 @@ type FakeResult = { data: unknown; error: { message: string } | null };
  * argumentos) y es "thenable" para `await client.from(...).select(...)`
  * sin terminal (como en `listTeams`).
  */
+
+interface FakeClientHandlers {
+  profiles?: () => FakeResult;
+  teams?: () => FakeResult;
+}
+
 function makeQueryBuilder(result: FakeResult) {
   const builder = {
     select: vi.fn(() => builder),
     eq: vi.fn(() => builder),
     order: vi.fn(() => builder),
+    upsert: vi.fn(() => builder),
     maybeSingle: vi.fn(async () => result),
+    single: vi.fn(async () => result),
     then: (resolve: (value: FakeResult) => unknown) => resolve(result),
   };
   return builder;
@@ -29,9 +38,11 @@ interface FakeClientHandlers {
 }
 
 function makeFakeClient(handlers: FakeClientHandlers) {
+  const fromCalls: string[] = [];
   const builders: Record<string, ReturnType<typeof makeQueryBuilder>> = {};
 
   const from = vi.fn((table: string) => {
+    fromCalls.push(table);
     if (table === 'profiles') {
       builders.profiles = makeQueryBuilder(handlers.profiles?.() ?? { data: null, error: null });
       return builders.profiles;
@@ -43,7 +54,7 @@ function makeFakeClient(handlers: FakeClientHandlers) {
     throw new Error(`Tabla inesperada en el fake client: ${table}`);
   });
 
-  return { from, builders };
+  return { from, fromCalls, builders };
 }
 
 function asSupabaseClient(fakeClient: ReturnType<typeof makeFakeClient>): SupabaseClient {
@@ -52,6 +63,147 @@ function asSupabaseClient(fakeClient: ReturnType<typeof makeFakeClient>): Supaba
 
 const USER_ID = 'a1111111-1111-1111-1111-111111111111';
 const TEAM_ID = 'b2222222-2222-2222-2222-222222222222';
+
+describe('saveOwnProfile()', () => {
+  const VALID_INPUT = {
+    displayName: '  Ignacio  ',
+    bio: 'Hincha de River',
+    favoriteTeamId: TEAM_ID,
+  };
+
+  it('alta: upsertea por user_id con el nombre recortado y devuelve el Profile persistido', async () => {
+    const client = makeFakeClient({
+      teams: () => ({ data: { id: TEAM_ID }, error: null }),
+      profiles: () => ({
+        data: { display_name: 'Ignacio', bio: 'Hincha de River', favorite_team_id: TEAM_ID },
+        error: null,
+      }),
+    });
+    const store = new SupabaseOwnProfileStore(asSupabaseClient(client));
+
+    const profile = await store.saveOwnProfile(USER_ID, VALID_INPUT);
+
+    expect(profile).toEqual({
+      displayName: 'Ignacio',
+      bio: 'Hincha de River',
+      favoriteTeamId: TEAM_ID,
+    });
+    expect(client.builders.profiles?.upsert).toHaveBeenCalledWith(
+      {
+        user_id: USER_ID,
+        display_name: 'Ignacio',
+        bio: 'Hincha de River',
+        favorite_team_id: TEAM_ID,
+      },
+      { onConflict: 'user_id' },
+    );
+  });
+
+  it('edición: mismo camino de upsert cuando ya existía un perfil', async () => {
+    const client = makeFakeClient({
+      teams: () => ({ data: { id: TEAM_ID }, error: null }),
+      profiles: () => ({
+        data: { display_name: 'Nacho', bio: 'Actualizado', favorite_team_id: TEAM_ID },
+        error: null,
+      }),
+    });
+    const store = new SupabaseOwnProfileStore(asSupabaseClient(client));
+
+    const profile = await store.saveOwnProfile(USER_ID, {
+      displayName: 'Nacho',
+      bio: 'Actualizado',
+      favoriteTeamId: TEAM_ID,
+    });
+
+    expect(profile.displayName).toBe('Nacho');
+    expect(client.builders.profiles?.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: USER_ID, display_name: 'Nacho' }),
+      { onConflict: 'user_id' },
+    );
+  });
+
+  it('quitar favorito: favoriteTeamId null se guarda sin consultar teams', async () => {
+    const client = makeFakeClient({
+      profiles: () => ({
+        data: { display_name: 'Ignacio', bio: '', favorite_team_id: null },
+        error: null,
+      }),
+    });
+    const store = new SupabaseOwnProfileStore(asSupabaseClient(client));
+
+    const profile = await store.saveOwnProfile(USER_ID, {
+      displayName: 'Ignacio',
+      bio: '',
+      favoriteTeamId: null,
+    });
+
+    expect(profile.favoriteTeamId).toBeNull();
+    expect(client.fromCalls).not.toContain('teams');
+    expect(client.builders.profiles?.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ favorite_team_id: null }),
+      { onConflict: 'user_id' },
+    );
+  });
+
+  it('equipo inexistente: rechaza con ProfileValidationError y nunca llega a escribir profiles', async () => {
+    const client = makeFakeClient({ teams: () => ({ data: null, error: null }) });
+    const store = new SupabaseOwnProfileStore(asSupabaseClient(client));
+
+    await expect(store.saveOwnProfile(USER_ID, VALID_INPUT)).rejects.toThrow(
+      ProfileValidationError,
+    );
+    expect(client.fromCalls).not.toContain('profiles');
+  });
+
+  it('rechaza displayName vacío tras trim sin consultar la base', async () => {
+    const client = makeFakeClient({});
+    const store = new SupabaseOwnProfileStore(asSupabaseClient(client));
+
+    await expect(
+      store.saveOwnProfile(USER_ID, { displayName: '   ', bio: '', favoriteTeamId: null }),
+    ).rejects.toThrow(ProfileValidationError);
+    expect(client.fromCalls).toEqual([]);
+  });
+
+  it('rechaza displayName de más de 50 caracteres', async () => {
+    const client = makeFakeClient({});
+    const store = new SupabaseOwnProfileStore(asSupabaseClient(client));
+
+    await expect(
+      store.saveOwnProfile(USER_ID, {
+        displayName: 'x'.repeat(51),
+        bio: '',
+        favoriteTeamId: null,
+      }),
+    ).rejects.toThrow(ProfileValidationError);
+  });
+
+  it('rechaza bio de más de 280 caracteres sin consultar la base', async () => {
+    const client = makeFakeClient({});
+    const store = new SupabaseOwnProfileStore(asSupabaseClient(client));
+
+    await expect(
+      store.saveOwnProfile(USER_ID, {
+        displayName: 'Ignacio',
+        bio: 'x'.repeat(281),
+        favoriteTeamId: null,
+      }),
+    ).rejects.toThrow(ProfileValidationError);
+    expect(client.fromCalls).toEqual([]);
+  });
+
+  it('propaga un error de Supabase al upsertear como ProfilePersistenceError', async () => {
+    const client = makeFakeClient({
+      teams: () => ({ data: { id: TEAM_ID }, error: null }),
+      profiles: () => ({ data: null, error: { message: 'constraint violada' } }),
+    });
+    const store = new SupabaseOwnProfileStore(asSupabaseClient(client));
+
+    await expect(store.saveOwnProfile(USER_ID, VALID_INPUT)).rejects.toThrow(
+      ProfilePersistenceError,
+    );
+  });
+});
 
 describe('SupabaseOwnProfileStore', () => {
   describe('getOwnProfile()', () => {
