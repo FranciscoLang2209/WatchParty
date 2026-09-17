@@ -20,7 +20,7 @@ export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
   { id: 'home', label: 'Inicio', to: '/', icon: Home, available: true },
   { id: 'rooms', label: 'Salas', to: '/rooms', icon: Users, available: false },
   { id: 'search', label: 'Buscar', to: '/search', icon: Search, available: false },
-  { id: 'profile', label: 'Perfil', to: '/profile', icon: User, available: false },
+  { id: 'profile', label: 'Perfil', to: '/profile', icon: User, available: true },
 ];
 
 export const COMING_SOON_LABEL = 'Próximamente';
