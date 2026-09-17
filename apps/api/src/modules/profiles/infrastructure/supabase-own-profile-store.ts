@@ -5,18 +5,12 @@ import {
   BIO_MAX_LENGTH,
   DISPLAY_NAME_MAX_LENGTH,
   DISPLAY_NAME_MIN_LENGTH,
+  UUID_PATTERN,
   type OwnProfileStore,
   type SaveOwnProfileInput,
 } from '../domain/own-profile-store.js';
 import { ProfileValidationError } from '../domain/profile-validation-error.js';
 import { ProfilePersistenceError } from './profile-persistence-error.js';
-
-// Formato canónico de UUID (el mismo que genera gen_random_uuid() en
-// Postgres). Se valida en código, antes de consultar Supabase, para que un
-// favoriteTeamId con formato inválido rechace sin tocar la base — WAT-128
-// pide justamente esto en vez de depender únicamente del código de error
-// 22P02 que devolvería Postgres.
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface ProfileRow {
   display_name: string;

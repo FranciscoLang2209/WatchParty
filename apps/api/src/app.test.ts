@@ -4,6 +4,7 @@ import express from 'express';
 import { notFoundHandler, errorHandler } from './middleware/error-handler.js';
 import { UnauthorizedError } from './errors/http-error.js';
 import { LocalMatchCatalog } from './modules/matches/infrastructure/local-match-catalog.js';
+import type { OwnProfileStore } from './modules/profiles/domain/own-profile-store.js';
 
 process.env.SUPABASE_URL = 'https://example.supabase.co';
 process.env.SUPABASE_ANON_KEY = 'test-anon-key';
@@ -13,10 +14,16 @@ process.env.WEB_ORIGIN = 'http://localhost:5173';
 const { createApp } = await import('./app.js');
 
 // Estos tests cubren health/CORS/contrato de errores: no ejercitan lógica
-// de partidos, así que cualquier MatchCatalog serviría. Usamos
-// LocalMatchCatalog como doble explícito (nunca como fallback automático:
-// createApp no lo elige por sí mismo, se lo inyectamos acá a propósito).
-const app = createApp(new LocalMatchCatalog());
+// de partidos ni de perfil, así que cualquier doble alcanza. Igual que
+// LocalMatchCatalog, nunca es un fallback automático: createApp no lo elige
+// por sí mismo, se lo inyectamos acá a propósito.
+const noopProfileStore: OwnProfileStore = {
+  getOwnProfile: async () => null,
+  saveOwnProfile: async (_userId, input) => ({ ...input }),
+  listTeams: async () => [],
+};
+
+const app = createApp(new LocalMatchCatalog(), noopProfileStore);
 
 describe('GET /health', () => {
   //seria como la carpeta de los tests cases
@@ -51,6 +58,27 @@ describe('CORS', () => {
 
     expect(response.headers['access-control-allow-methods']).toContain('GET');
     expect(response.headers['access-control-allow-headers']).toContain('Authorization');
+  });
+
+  it('el preflight autoriza método PUT y header Content-Type', async () => {
+    const response = await request(app)
+      .options('/health')
+      .set('Origin', process.env.WEB_ORIGIN!)
+      .set('Access-Control-Request-Method', 'PUT')
+      .set('Access-Control-Request-Headers', 'Authorization,Content-Type');
+
+    expect(response.headers['access-control-allow-methods']).toContain('PUT');
+    expect(response.headers['access-control-allow-headers']).toContain('Content-Type');
+  });
+
+  it('el preflight de PUT no autoriza un origen distinto', async () => {
+    const response = await request(app)
+      .options('/me/profile')
+      .set('Origin', 'http://evil.example.com')
+      .set('Access-Control-Request-Method', 'PUT')
+      .set('Access-Control-Request-Headers', 'Authorization,Content-Type');
+
+    expect(response.headers['access-control-allow-origin']).toBeUndefined();
   });
 });
 
