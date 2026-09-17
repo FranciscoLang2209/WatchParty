@@ -7,14 +7,18 @@ import type { MatchCatalog } from './modules/matches/domain/match-catalog.js';
 import { createSupabaseSportsDataClient } from './modules/matches/infrastructure/supabase-sports-data-client.js';
 import { SupabaseMatchStore } from './modules/matches/infrastructure/supabase-match-store.js';
 import { SupabaseMatchCatalog } from './modules/matches/infrastructure/supabase-match-catalog.js';
+import { createProfilesRouter } from './modules/profiles/http/profiles-router.js';
+import type { OwnProfileStore } from './modules/profiles/domain/own-profile-store.js';
+import { SupabaseOwnProfileStore } from './modules/profiles/infrastructure/supabase-own-profile-store.js';
 
 /**
  * Cambio del ticket WAT-106: la app ya no crea su propio MatchCatalog de
  * manera hardcodeada — ahora lo recibe por parámetro (inyección de
  * dependencias). Quien decide cuál usar (Supabase real, o un doble en
  * tests) es responsabilidad de quien llama a createApp, no de este archivo.
+ * WAT-129 agrega el mismo criterio para OwnProfileStore.
  */
-export function createApp(matchCatalog: MatchCatalog): Express {
+export function createApp(matchCatalog: MatchCatalog, profileStore: OwnProfileStore): Express {
   const app = express();
 
   app.use(
@@ -35,6 +39,7 @@ export function createApp(matchCatalog: MatchCatalog): Express {
   });
 
   app.use('/matches', createMatchesRouter(matchCatalog));
+  app.use(createProfilesRouter(profileStore));
 
   app.use(notFoundHandler);
   app.use(errorHandler);
@@ -57,5 +62,6 @@ export function createApp(matchCatalog: MatchCatalog): Express {
 const sportsDataClient = createSupabaseSportsDataClient();
 const matchStore = new SupabaseMatchStore(sportsDataClient);
 const matchCatalog = new SupabaseMatchCatalog(matchStore);
+const profileStore = new SupabaseOwnProfileStore(sportsDataClient);
 
-export default createApp(matchCatalog);
+export default createApp(matchCatalog, profileStore);
