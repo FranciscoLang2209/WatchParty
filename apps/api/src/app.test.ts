@@ -59,6 +59,17 @@ describe('CORS', () => {
     expect(response.headers['access-control-allow-methods']).toContain('GET');
     expect(response.headers['access-control-allow-headers']).toContain('Authorization');
   });
+
+  it('el preflight autoriza método PUT y header Content-Type', async () => {
+    const response = await request(app)
+      .options('/health')
+      .set('Origin', process.env.WEB_ORIGIN!)
+      .set('Access-Control-Request-Method', 'PUT')
+      .set('Access-Control-Request-Headers', 'Authorization,Content-Type');
+
+    expect(response.headers['access-control-allow-methods']).toContain('PUT');
+    expect(response.headers['access-control-allow-headers']).toContain('Content-Type');
+  });
 });
 
 describe('Contrato de errores', () => {

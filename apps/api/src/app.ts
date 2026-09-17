@@ -26,8 +26,8 @@ export function createApp(matchCatalog: MatchCatalog, profileStore: OwnProfileSt
       origin: (origin, callback) => {
         callback(null, origin === env.WEB_ORIGIN);
       },
-      methods: ['GET'],
-      allowedHeaders: ['Authorization'],
+      methods: ['GET', 'PUT'],
+      allowedHeaders: ['Authorization', 'Content-Type'],
     }),
   );
 

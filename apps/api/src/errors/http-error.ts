@@ -1,4 +1,4 @@
-export type HttpErrorCode = 'UNAUTHORIZED' | 'NOT_FOUND' | 'INTERNAL_ERROR';
+export type HttpErrorCode = 'UNAUTHORIZED' | 'NOT_FOUND' | 'VALIDATION_ERROR' | 'INTERNAL_ERROR';
 
 export class HttpError extends Error {
   readonly code: HttpErrorCode;
@@ -23,5 +23,12 @@ export class NotFoundError extends HttpError {
   constructor(message = 'Recurso no encontrado.') {
     super('NOT_FOUND', 404, message);
     this.name = 'NotFoundError';
+  }
+}
+
+export class ValidationError extends HttpError {
+  constructor(message = 'Datos inválidos.') {
+    super('VALIDATION_ERROR', 400, message);
+    this.name = 'ValidationError';
   }
 }

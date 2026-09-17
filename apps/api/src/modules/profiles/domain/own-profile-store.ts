@@ -17,6 +17,12 @@ export const DISPLAY_NAME_MIN_LENGTH = 1;
 export const DISPLAY_NAME_MAX_LENGTH = 50;
 export const BIO_MAX_LENGTH = 280;
 
+// Formato canónico de UUID (el mismo que genera gen_random_uuid() en
+// Postgres). Compartido entre la validación de formato en el handler HTTP
+// (WAT-130, antes de tocar el store) y la implementación real del store
+// (WAT-128, que además confirma existencia contra la base).
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Lo que acepta `saveOwnProfile`. Misma forma que `Profile`, distinto propósito. */
 export interface SaveOwnProfileInput {
   displayName: string;
