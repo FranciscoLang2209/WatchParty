@@ -168,4 +168,22 @@ describe('PUT /me/profile', () => {
     });
     expect(JSON.stringify(response.body)).not.toContain('detalle interno');
   });
+
+  it('un JSON malformado responde 400 VALIDATION_ERROR, no 500', async () => {
+    mockAuthenticated();
+    const saveOwnProfile = vi.fn();
+    const app = buildTestApp(buildStore({ saveOwnProfile }));
+
+    const response = await request(app)
+      .put('/me/profile')
+      .set('Authorization', 'Bearer good-token')
+      .set('Content-Type', 'application/json')
+      .send('{ esto no es JSON válido');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: { code: 'VALIDATION_ERROR', message: expect.any(String) },
+    });
+    expect(saveOwnProfile).not.toHaveBeenCalled();
+  });
 });
