@@ -70,6 +70,16 @@ describe('CORS', () => {
     expect(response.headers['access-control-allow-methods']).toContain('PUT');
     expect(response.headers['access-control-allow-headers']).toContain('Content-Type');
   });
+
+  it('el preflight de PUT no autoriza un origen distinto', async () => {
+    const response = await request(app)
+      .options('/me/profile')
+      .set('Origin', 'http://evil.example.com')
+      .set('Access-Control-Request-Method', 'PUT')
+      .set('Access-Control-Request-Headers', 'Authorization,Content-Type');
+
+    expect(response.headers['access-control-allow-origin']).toBeUndefined();
+  });
 });
 
 describe('Contrato de errores', () => {
