@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@supabase/supabase-js';
 
@@ -22,6 +22,7 @@ vi.mock('@/lib/env', () => ({
 
 const { AuthProvider } = await import('@/auth/AuthProvider');
 const { AppRoutes } = await import('@/app/router');
+const { MatchDetailPage } = await import('./MatchDetailPage');
 
 const session = { access_token: 'token-123', user: { id: 'user-1', email: 'a@b.com' } } as Session;
 
@@ -131,15 +132,15 @@ describe('Detalle del partido: éxito', () => {
     expect(await (await detalle()).findByRole('status')).toHaveTextContent('Cargando el partido…');
   });
 
-  it('no incluye sala, chat, marcador ni estadísticas', async () => {
+  it('no incluye chat, marcador ni estadísticas; la sala es un único acceso', async () => {
     renderAt('/matches/match-001');
 
     const m = await detalle();
     await m.findByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' });
 
-    expect(
-      m.queryByText(/sala|chat|comentar|calificar|estadística|minuto/i),
-    ).not.toBeInTheDocument();
+    expect(m.queryByText(/chat|comentar|calificar|estadística|minuto/i)).not.toBeInTheDocument();
+    expect(m.getAllByText(/sala/i)).toHaveLength(1);
+    expect(m.getByRole('button', { name: 'Entrar a la sala' })).toBeInTheDocument();
     expect(m.queryByText(/\d+\s*-\s*\d+/)).not.toBeInTheDocument();
     expect(screen.getByRole('main').querySelectorAll('img')).toHaveLength(0);
   });
@@ -223,6 +224,106 @@ describe('Detalle del partido: estados alternativos', () => {
     await user.click(m.getByRole('button', { name: 'Iniciar sesión nuevamente' }));
 
     expect(authMock.signOut).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Entrar a la sala', () => {
+  const sala = { id: 'room-123', matchId: 'match-001', createdAt: '2026-09-18T21:00:00.000Z' };
+  const URL_SALA = `${API_BASE}/matches/match-001/room`;
+
+  /** El detalle se carga siempre bien; la respuesta de la sala la decide cada prueba. */
+  function responderSala(respuesta: () => Promise<Response>) {
+    fetchSpy.mockImplementation((url: RequestInfo | URL) =>
+      String(url) === URL_SALA ? respuesta() : Promise.resolve(jsonResponse({ match: partido })),
+    );
+  }
+
+  /**
+   * `/rooms/:roomId` la registra WAT-154: acá una ruta sonda muestra a dónde
+   * navegó el detalle, sin depender de esa pantalla.
+   */
+  function SondaSala() {
+    const { roomId } = useParams<{ roomId: string }>();
+    return <h1>Sala {roomId}</h1>;
+  }
+
+  function renderDetalle() {
+    return render(
+      <AuthProvider>
+        <MemoryRouter initialEntries={['/matches/match-001']}>
+          <Routes>
+            <Route path="/matches/:matchId" element={<MatchDetailPage />} />
+            <Route path="/rooms/:roomId" element={<SondaSala />} />
+          </Routes>
+        </MemoryRouter>
+      </AuthProvider>,
+    );
+  }
+
+  async function botonSala() {
+    return screen.findByRole('button', { name: 'Entrar a la sala' });
+  }
+
+  it('entra con bearer y navega a la sala usando el roomId devuelto', async () => {
+    const user = userEvent.setup();
+    responderSala(() => Promise.resolve(jsonResponse({ room: sala })));
+
+    renderDetalle();
+    await user.click(await botonSala());
+
+    expect(await screen.findByRole('heading', { name: 'Sala room-123' })).toBeInTheDocument();
+    expect(ultimaUrl()).toBe(URL_SALA);
+    expect(ultimoInit().method).toBe('POST');
+    expect(new Headers(ultimoInit().headers).get('Authorization')).toBe(
+      `Bearer ${session.access_token}`,
+    );
+  });
+
+  it('deshabilita el botón mientras espera la respuesta', async () => {
+    const user = userEvent.setup();
+    responderSala(() => new Promise(() => {}));
+
+    renderDetalle();
+    const boton = await botonSala();
+    await user.click(boton);
+
+    expect(boton).toBeDisabled();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [404, 'NOT_FOUND', 'No encontramos esa sala.'],
+    [500, 'INTERNAL_ERROR', 'No pudimos abrir la sala. Intentá de nuevo.'],
+  ])('un %i no navega, avisa el error y deja el botón usable', async (status, code, mensaje) => {
+    const user = userEvent.setup();
+    responderSala(() => Promise.resolve(jsonResponse({ error: { code, message: 'x' } }, status)));
+
+    renderDetalle();
+    const boton = await botonSala();
+    await user.click(boton);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(mensaje);
+    expect(boton).toBeEnabled();
+    expect(screen.queryByRole('heading', { name: /^Sala / })).not.toBeInTheDocument();
+  });
+
+  it('ante un 401 ofrece reingresar con el flujo de Auth existente', async () => {
+    const user = userEvent.setup();
+    responderSala(() =>
+      Promise.resolve(jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401)),
+    );
+
+    renderDetalle();
+    await user.click(await botonSala());
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'La sesión venció. Iniciá sesión nuevamente.',
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Iniciar sesión nuevamente' }));
+
+    expect(authMock.signOut).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('heading', { name: /^Sala / })).not.toBeInTheDocument();
   });
 });
 
