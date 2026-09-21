@@ -71,6 +71,22 @@ export class SupabasePublicRoomStore implements PublicRoomStore {
     return toPublicRoom(data as RoomRow);
   }
 
+  async findPublicRoomById(roomId: string): Promise<PublicRoom | null> {
+    const { data, error } = await this.client
+      .from('rooms')
+      .select(ROOM_SELECT)
+      .eq('id', roomId)
+      .maybeSingle();
+
+    if (error) {
+      throw new RoomPersistenceError(`No se pudo obtener la sala ${roomId}.`, error);
+    }
+
+    if (!data) return null;
+
+    return toPublicRoom(data as RoomRow);
+  }
+
   private async findByMatchId(matchId: string): Promise<PublicRoom | null> {
     const { data, error } = await this.client
       .from('rooms')

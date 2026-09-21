@@ -5,6 +5,7 @@ import { notFoundHandler, errorHandler } from './middleware/error-handler.js';
 import { UnauthorizedError } from './errors/http-error.js';
 import { LocalMatchCatalog } from './modules/matches/infrastructure/local-match-catalog.js';
 import type { OwnProfileStore } from './modules/profiles/domain/own-profile-store.js';
+import type { PublicRoomStore } from './modules/rooms/domain/public-room-store.js';
 
 process.env.SUPABASE_URL = 'https://example.supabase.co';
 process.env.SUPABASE_ANON_KEY = 'test-anon-key';
@@ -23,7 +24,12 @@ const noopProfileStore: OwnProfileStore = {
   listTeams: async () => [],
 };
 
-const app = createApp(new LocalMatchCatalog(), noopProfileStore);
+const noopRoomStore: PublicRoomStore = {
+  getOrCreatePublicRoom: async () => null,
+  findPublicRoomById: async () => null,
+};
+
+const app = createApp(new LocalMatchCatalog(), noopProfileStore, noopRoomStore);
 
 describe('GET /health', () => {
   //seria como la carpeta de los tests cases
@@ -69,6 +75,17 @@ describe('CORS', () => {
 
     expect(response.headers['access-control-allow-methods']).toContain('PUT');
     expect(response.headers['access-control-allow-headers']).toContain('Content-Type');
+  });
+
+  it('el preflight autoriza método POST para entrar a una sala', async () => {
+    const response = await request(app)
+      .options('/matches/aaa/room')
+      .set('Origin', process.env.WEB_ORIGIN!)
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'Authorization');
+
+    expect(response.headers['access-control-allow-methods']).toContain('POST');
+    expect(response.headers['access-control-allow-headers']).toContain('Authorization');
   });
 
   it('el preflight de PUT no autoriza un origen distinto', async () => {

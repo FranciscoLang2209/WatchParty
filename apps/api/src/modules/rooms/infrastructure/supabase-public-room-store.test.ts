@@ -209,3 +209,35 @@ describe('SupabasePublicRoomStore.getOrCreatePublicRoom()', () => {
     await rejection.not.toThrow('violates foreign key');
   });
 });
+
+describe('SupabasePublicRoomStore.findPublicRoomById()', () => {
+  it('devuelve la sala con ese id', async () => {
+    const client = makeFakeClient({ rows: [EXISTING_ROW] });
+    const store = new SupabasePublicRoomStore(asSupabaseClient(client), makeCatalog());
+
+    await expect(store.findPublicRoomById(EXISTING_ROW.id)).resolves.toEqual({
+      id: EXISTING_ROW.id,
+      matchId: MATCH_ID,
+      createdAt: '2026-09-17T12:00:00.000Z',
+    });
+  });
+
+  it('devuelve null para una sala inexistente sin crear ninguna', async () => {
+    const client = makeFakeClient();
+    const store = new SupabasePublicRoomStore(asSupabaseClient(client), makeCatalog());
+
+    await expect(store.findPublicRoomById(EXISTING_ROW.id)).resolves.toBeNull();
+    expect(client.rows).toHaveLength(0);
+  });
+
+  it('propaga un error de lectura como RoomPersistenceError sanitizado', async () => {
+    const client = makeFakeClient({
+      selectError: { message: 'conexión perdida a public.rooms' },
+    });
+    const store = new SupabasePublicRoomStore(asSupabaseClient(client), makeCatalog());
+
+    const rejection = expect(store.findPublicRoomById(EXISTING_ROW.id)).rejects;
+    await rejection.toThrow(RoomPersistenceError);
+    await rejection.not.toThrow('conexión perdida a public.rooms');
+  });
+});
