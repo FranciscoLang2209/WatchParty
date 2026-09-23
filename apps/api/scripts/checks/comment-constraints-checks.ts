@@ -91,6 +91,35 @@ export async function checkCommentConstraints(adminClient: SupabaseClient): Prom
       : 'La inserción no fue rechazada (no debería haber tenido éxito).',
   });
 
+  // CHECK room_comments_body_length: vacío tras trim se rechaza. Este check
+  // es lo que cierra el hueco señalado en la revisión de WAT-150: sin él,
+  // un insert directo con service_role (un script de mantenimiento, por
+  // ejemplo) podía saltarse el límite que hoy solo hace cumplir la API.
+  const blankBodyResult = await adminClient
+    .from('room_comments')
+    .insert(validCommentPayload(roomId, authorId, { body: '   ' }));
+
+  results.push({
+    label: 'CHECK room_comments_body_length rechaza body vacío tras trim',
+    passed: blankBodyResult.error?.code === '23514',
+    detail: blankBodyResult.error
+      ? `Postgres devolvió: ${blankBodyResult.error.message}`
+      : 'La inserción no fue rechazada (no debería haber tenido éxito).',
+  });
+
+  // CHECK room_comments_body_length: más de 180 caracteres se rechaza.
+  const longBodyResult = await adminClient
+    .from('room_comments')
+    .insert(validCommentPayload(roomId, authorId, { body: 'a'.repeat(181) }));
+
+  results.push({
+    label: 'CHECK room_comments_body_length rechaza body de más de 180 caracteres',
+    passed: longBodyResult.error?.code === '23514',
+    detail: longBodyResult.error
+      ? `Postgres devolvió: ${longBodyResult.error.message}`
+      : 'La inserción no fue rechazada (no debería haber tenido éxito).',
+  });
+
   // UNIQUE room_comments_author_client_request_id_key: mismo autor + mismo
   // client_request_id no puede insertarse dos veces (idempotencia real,
   // no simulada por un doble de Supabase como en el test de vitest).
