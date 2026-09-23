@@ -13,6 +13,7 @@ const COMMENT_SELECT = 'id, room_id, body, created_at';
 // devolvía 500 en vez de 404 — acá lo tratamos como "sala no encontrada"
 // desde el vamos.
 // Referencia: https://www.postgresql.org/docs/current/errcodes-appendix.html
+
 const POSTGRES_UNIQUE_VIOLATION = '23505';
 const POSTGRES_INVALID_TEXT_REPRESENTATION = '22P02';
 
