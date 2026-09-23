@@ -21,6 +21,13 @@ export interface CreateRoomCommentInput {
 export const BODY_MIN_LENGTH = 1;
 export const BODY_MAX_LENGTH = 180;
 
+// Formato canónico de UUID (el mismo que genera gen_random_uuid() en
+// Postgres). Compartido entre la validación de formato en el handler HTTP
+// (WAT-150, antes de tocar el store) y client_request_id como clave real
+// de idempotencia (WAT-147/151) — mismo criterio que UUID_PATTERN en
+// modules/profiles/domain/own-profile-store.ts.
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Puerto mínimo de comentarios de sala (WAT-151). No es un repositorio
  * genérico: solo expone lo que este módulo necesita.

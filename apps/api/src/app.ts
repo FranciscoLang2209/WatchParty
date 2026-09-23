@@ -10,15 +10,23 @@ import { SupabaseMatchCatalog } from './modules/matches/infrastructure/supabase-
 import { createProfilesRouter } from './modules/profiles/http/profiles-router.js';
 import type { OwnProfileStore } from './modules/profiles/domain/own-profile-store.js';
 import { SupabaseOwnProfileStore } from './modules/profiles/infrastructure/supabase-own-profile-store.js';
+import { createCommentsRouter } from './modules/comments/http/comments-router.js';
+import type { RoomCommentStore } from './modules/comments/domain/room-comment-store.js';
+import { SupabaseRoomCommentStore } from './modules/comments/infrastructure/supabase-room-comment-store.js';
 
 /**
  * Cambio del ticket WAT-106: la app ya no crea su propio MatchCatalog de
  * manera hardcodeada — ahora lo recibe por parámetro (inyección de
  * dependencias). Quien decide cuál usar (Supabase real, o un doble en
  * tests) es responsabilidad de quien llama a createApp, no de este archivo.
- * WAT-129 agrega el mismo criterio para OwnProfileStore.
+ * WAT-129 agrega el mismo criterio para OwnProfileStore, y WAT-150 para
+ * RoomCommentStore.
  */
-export function createApp(matchCatalog: MatchCatalog, profileStore: OwnProfileStore): Express {
+export function createApp(
+  matchCatalog: MatchCatalog,
+  profileStore: OwnProfileStore,
+  commentStore: RoomCommentStore,
+): Express {
   const app = express();
 
   app.use(
@@ -26,7 +34,7 @@ export function createApp(matchCatalog: MatchCatalog, profileStore: OwnProfileSt
       origin: (origin, callback) => {
         callback(null, origin === env.WEB_ORIGIN);
       },
-      methods: ['GET', 'PUT'],
+      methods: ['GET', 'PUT', 'POST'],
       allowedHeaders: ['Authorization', 'Content-Type'],
     }),
   );
@@ -40,6 +48,7 @@ export function createApp(matchCatalog: MatchCatalog, profileStore: OwnProfileSt
 
   app.use('/matches', createMatchesRouter(matchCatalog));
   app.use(createProfilesRouter(profileStore));
+  app.use('/rooms', createCommentsRouter(commentStore));
 
   app.use(notFoundHandler);
   app.use(errorHandler);
@@ -63,5 +72,6 @@ const sportsDataClient = createSupabaseSportsDataClient();
 const matchStore = new SupabaseMatchStore(sportsDataClient);
 const matchCatalog = new SupabaseMatchCatalog(matchStore);
 const profileStore = new SupabaseOwnProfileStore(sportsDataClient);
+const commentStore = new SupabaseRoomCommentStore(sportsDataClient);
 
-export default createApp(matchCatalog, profileStore);
+export default createApp(matchCatalog, profileStore, commentStore);

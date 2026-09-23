@@ -5,6 +5,7 @@ import { notFoundHandler, errorHandler } from './middleware/error-handler.js';
 import { UnauthorizedError } from './errors/http-error.js';
 import { LocalMatchCatalog } from './modules/matches/infrastructure/local-match-catalog.js';
 import type { OwnProfileStore } from './modules/profiles/domain/own-profile-store.js';
+import type { RoomCommentStore } from './modules/comments/domain/room-comment-store.js';
 
 process.env.SUPABASE_URL = 'https://example.supabase.co';
 process.env.SUPABASE_ANON_KEY = 'test-anon-key';
@@ -14,16 +15,26 @@ process.env.WEB_ORIGIN = 'http://localhost:5173';
 const { createApp } = await import('./app.js');
 
 // Estos tests cubren health/CORS/contrato de errores: no ejercitan lógica
-// de partidos ni de perfil, así que cualquier doble alcanza. Igual que
-// LocalMatchCatalog, nunca es un fallback automático: createApp no lo elige
-// por sí mismo, se lo inyectamos acá a propósito.
+// de partidos, perfil ni comentarios, así que cualquier doble alcanza.
+// Igual que LocalMatchCatalog, nunca es un fallback automático: createApp
+// no lo elige por sí mismo, se lo inyectamos acá a propósito.
 const noopProfileStore: OwnProfileStore = {
   getOwnProfile: async () => null,
   saveOwnProfile: async (_userId, input) => ({ ...input }),
   listTeams: async () => [],
 };
 
-const app = createApp(new LocalMatchCatalog(), noopProfileStore);
+const noopCommentStore: RoomCommentStore = {
+  listByRoom: async () => [],
+  create: async (input) => ({
+    id: 'noop-comment-id',
+    roomId: input.roomId,
+    body: input.body,
+    createdAt: new Date(0).toISOString(),
+  }),
+};
+
+const app = createApp(new LocalMatchCatalog(), noopProfileStore, noopCommentStore);
 
 describe('GET /health', () => {
   //seria como la carpeta de los tests cases
@@ -68,6 +79,17 @@ describe('CORS', () => {
       .set('Access-Control-Request-Headers', 'Authorization,Content-Type');
 
     expect(response.headers['access-control-allow-methods']).toContain('PUT');
+    expect(response.headers['access-control-allow-headers']).toContain('Content-Type');
+  });
+
+  it('el preflight autoriza método POST y header Content-Type (WAT-150)', async () => {
+    const response = await request(app)
+      .options('/health')
+      .set('Origin', process.env.WEB_ORIGIN!)
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'Authorization,Content-Type');
+
+    expect(response.headers['access-control-allow-methods']).toContain('POST');
     expect(response.headers['access-control-allow-headers']).toContain('Content-Type');
   });
 
