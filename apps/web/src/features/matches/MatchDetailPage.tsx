@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { enterRoom } from '@/features/rooms/api';
+import { RoomsApiError, isCancelled as isRoomCancelled } from '@/features/rooms/types';
 import { formatKickoff, matchStatusLabel } from './format';
 import { getMatch } from './api';
 import { MatchesApiError, isCancelled, type Match } from './types';
@@ -13,8 +15,11 @@ type Estado =
   | { status: 'not-found' }
   | { status: 'error'; message: string; expired: boolean };
 
+type ErrorSala = { message: string; expired: boolean };
+
 const TITULO_NEUTRO = 'Detalle del partido';
 const MENSAJE_INESPERADO = 'No pudimos cargar el partido. Intentá de nuevo.';
+const MENSAJE_INESPERADO_SALA = 'No pudimos abrir la sala. Intentá de nuevo.';
 
 function toEstadoError(error: unknown): Estado {
   if (error instanceof MatchesApiError) {
@@ -26,6 +31,14 @@ function toEstadoError(error: unknown): Estado {
   }
 
   return { status: 'error', message: MENSAJE_INESPERADO, expired: false };
+}
+
+function toErrorSala(error: unknown): ErrorSala {
+  if (error instanceof RoomsApiError) {
+    return { message: error.message, expired: error.kind === 'unauthorized' };
+  }
+
+  return { message: MENSAJE_INESPERADO_SALA, expired: false };
 }
 
 function VolverAHome() {
@@ -50,8 +63,16 @@ export function MatchDetailPage() {
   const { session, signOut } = useAuth();
   const accessToken = session?.access_token ?? null;
 
+  const navigate = useNavigate();
+
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
+  const [entrando, setEntrando] = useState(false);
+  const [errorSala, setErrorSala] = useState<ErrorSala | null>(null);
+  const salaController = useRef<AbortController | null>(null);
+
+  // Si la pantalla se desmonta mientras espera la sala, la respuesta se descarta.
+  useEffect(() => () => salaController.current?.abort(), []);
 
   useEffect(() => {
     // Sin token no hay nada que pedir: el guard de rutas privadas se encarga.
@@ -82,6 +103,29 @@ export function MatchDetailPage() {
     setIntento((valor) => valor + 1);
   }, []);
 
+  const entrarALaSala = useCallback(
+    (partidoId: string) => {
+      if (accessToken === null) return;
+
+      const controller = new AbortController();
+      salaController.current = controller;
+      setEntrando(true);
+      setErrorSala(null);
+
+      enterRoom(partidoId, accessToken, controller.signal)
+        .then((sala) => {
+          navigate(`/rooms/${encodeURIComponent(sala.id)}`);
+        })
+        .catch((error: unknown) => {
+          if (isRoomCancelled(error)) return;
+
+          setErrorSala(toErrorSala(error));
+          setEntrando(false);
+        });
+    },
+    [accessToken, navigate],
+  );
+
   const titulo =
     estado.status === 'ready'
       ? `${estado.match.homeTeam} vs. ${estado.match.awayTeam}`
@@ -101,10 +145,36 @@ export function MatchDetailPage() {
         ) : null}
 
         {estado.status === 'ready' ? (
-          <Card className="gap-2 p-4">
-            <p className="text-sm text-muted-foreground">{formatKickoff(estado.match.kickoffAt)}</p>
-            <p className="text-base font-semibold">{matchStatusLabel(estado.match.status)}</p>
-          </Card>
+          <>
+            <Card className="gap-2 p-4">
+              <p className="text-sm text-muted-foreground">
+                {formatKickoff(estado.match.kickoffAt)}
+              </p>
+              <p className="text-base font-semibold">{matchStatusLabel(estado.match.status)}</p>
+            </Card>
+
+            <Button
+              type="button"
+              className="self-start"
+              disabled={entrando}
+              aria-busy={entrando}
+              onClick={() => entrarALaSala(estado.match.id)}
+            >
+              Entrar a la sala
+            </Button>
+
+            {errorSala ? (
+              <div role="alert" className="flex flex-col items-start gap-3">
+                <p className="text-sm text-destructive">{errorSala.message}</p>
+
+                {errorSala.expired ? (
+                  <Button type="button" onClick={() => void signOut()}>
+                    Iniciar sesión nuevamente
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </>
         ) : null}
 
         {estado.status === 'not-found' ? (
