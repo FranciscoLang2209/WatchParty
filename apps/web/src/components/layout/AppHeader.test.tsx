@@ -74,12 +74,10 @@ describe('AppHeader — marca y navegación', () => {
     const nav = screen.getByRole('navigation', { name: 'Navegación principal' });
 
     expect(nav).toBeInTheDocument();
-    for (const label of ['Inicio', 'Perfil']) {
+    for (const label of ['Inicio', 'Salas', 'Perfil']) {
       expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
     }
-    for (const label of ['Salas', 'Buscar']) {
-      expect(screen.getByRole('button', { name: `${label}, Próximamente` })).toBeInTheDocument();
-    }
+    expect(screen.getByRole('button', { name: 'Buscar, Próximamente' })).toBeInTheDocument();
   });
 
   it('lleva a /profile y lo marca activo, igual que la barra inferior', () => {
@@ -91,6 +89,15 @@ describe('AppHeader — marca y navegación', () => {
     // la misma configuración, ninguno declara la suya.
     expect(perfil).toHaveAttribute('href', '/profile');
     expect(perfil).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('lleva a /rooms y lo marca activo, igual que la barra inferior', () => {
+    renderHeader({ path: '/rooms' });
+
+    const salas = screen.getByRole('link', { name: 'Salas' });
+
+    expect(salas).toHaveAttribute('href', '/rooms');
+    expect(salas).toHaveAttribute('aria-current', 'page');
   });
 
   it('marca Inicio como activo derivándolo de la URL', () => {
@@ -108,12 +115,12 @@ describe('AppHeader — marca y navegación', () => {
   it('los destinos futuros están deshabilitados y no cambian la URL', async () => {
     const { user } = renderHeader({ path: '/' });
 
-    const salas = screen.getByRole('button', { name: 'Salas, Próximamente' });
+    const buscar = screen.getByRole('button', { name: 'Buscar, Próximamente' });
 
-    expect(salas).toHaveAttribute('aria-disabled', 'true');
-    expect(salas.tagName).toBe('BUTTON');
+    expect(buscar).toHaveAttribute('aria-disabled', 'true');
+    expect(buscar.tagName).toBe('BUTTON');
 
-    await user.click(salas);
+    await user.click(buscar);
 
     expect(screen.getByText('ruta: /')).toBeInTheDocument();
     expect(screen.queryByText('ruta: /rooms')).not.toBeInTheDocument();

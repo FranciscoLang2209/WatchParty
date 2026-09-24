@@ -8,6 +8,7 @@ import { HomePage } from '@/features/home/HomePage';
 import { MatchDetailPage } from '@/features/matches/MatchDetailPage';
 import { ProfilePage } from '@/features/profiles/ProfilePage';
 import { RoomPage } from '@/features/rooms/RoomPage';
+import { RoomsDirectoryPage } from '@/features/rooms/RoomsDirectoryPage';
 
 export function AppRoutes() {
   return (
@@ -26,6 +27,7 @@ export function AppRoutes() {
         <Route path="/" element={<HomePage />} />
         <Route path="/matches/:matchId" element={<MatchDetailPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/rooms" element={<RoomsDirectoryPage />} />
         <Route path="/rooms/:roomId" element={<RoomPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
