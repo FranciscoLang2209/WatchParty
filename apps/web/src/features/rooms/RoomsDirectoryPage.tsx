@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
+import { MatchCard } from '@/features/matches/MatchCard';
 import { listMatches } from '@/features/matches/api';
 import { MatchesApiError, isCancelled, type Match } from '@/features/matches/types';
 
@@ -88,10 +89,10 @@ export function RoomsDirectoryPage() {
         ) : null}
 
         {estado.status === 'ready' ? (
-          <ul className="flex w-full list-none flex-col gap-3">
+          <ul className="grid w-full list-none grid-cols-1 gap-4 sm:grid-cols-2">
             {estado.matches.map((match) => (
               <li key={match.id} className="w-full min-w-0">
-                {match.homeTeam} vs. {match.awayTeam}
+                <MatchCard match={match} />
               </li>
             ))}
           </ul>

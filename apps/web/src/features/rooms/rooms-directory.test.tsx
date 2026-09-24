@@ -33,6 +33,14 @@ const river = {
   status: 'scheduled',
 };
 
+const racing = {
+  id: 'match-racing-inde',
+  homeTeam: 'Racing Club',
+  awayTeam: 'Independiente',
+  kickoffAt: '2026-09-07T23:30:00Z',
+  status: 'live',
+};
+
 let fetchSpy: ReturnType<typeof vi.spyOn>;
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -208,5 +216,44 @@ describe('Directorio de salas — cancelación', () => {
     await waitFor(() => {
       expect(init.signal?.aborted).toBe(true);
     });
+  });
+});
+
+describe('Directorio de salas — tarjetas', () => {
+  it('muestra una tarjeta por partido, en una cuadrícula semántica', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
+
+    renderAt('/rooms');
+
+    const lista = await screen.findByRole('list');
+    const items = within(lista).getAllByRole('listitem');
+
+    expect(items).toHaveLength(2);
+    expect(within(lista).getByText(/River Plate/)).toBeInTheDocument();
+    expect(within(lista).getByText(/Racing Club/)).toBeInTheDocument();
+    expect(within(lista).getByText('En vivo')).toBeInTheDocument();
+  });
+
+  it('el enlace de cada tarjeta preserva el id opaco', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river] }));
+
+    renderAt('/rooms');
+
+    expect(
+      await screen.findByRole('link', { name: 'Ver partido: River Plate vs. Boca Juniors' }),
+    ).toHaveAttribute('href', '/matches/match-river-boca');
+  });
+
+  it('una lista vacía no muestra tarjetas fantasma', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [] }));
+
+    renderAt('/rooms');
+
+    await screen.findByRole('heading', { name: 'Salas' });
+    expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Ver partido/ })).not.toBeInTheDocument();
   });
 });
