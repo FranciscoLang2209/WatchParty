@@ -129,14 +129,16 @@ describe('Directorio de salas — carga', () => {
     expect(fromMock).not.toHaveBeenCalled();
   });
 
-  it('una respuesta vacía no rompe el layout', async () => {
+  it('explica la lista vacía en vez de dejar la pantalla en blanco', async () => {
     conSesion();
     fetchSpy.mockResolvedValue(jsonResponse({ matches: [] }));
 
     renderAt('/rooms');
 
-    expect(await screen.findByRole('heading', { name: 'Salas' })).toBeInTheDocument();
-    expect((await directorio()).queryByRole('alert')).not.toBeInTheDocument();
+    const m = await directorio();
+    expect(await m.findByText(/Todavía no hay partidos ni salas disponibles/)).toBeInTheDocument();
+    expect(m.queryByRole('list')).not.toBeInTheDocument();
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
 
@@ -255,5 +257,26 @@ describe('Directorio de salas — tarjetas', () => {
     await screen.findByRole('heading', { name: 'Salas' });
     expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Ver partido/ })).not.toBeInTheDocument();
+  });
+
+  it('el foco recorre las tarjetas en orden, sin perderse en la cuadrícula', async () => {
+    const user = userEvent.setup();
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
+
+    renderAt('/rooms');
+
+    const primerEnlace = await screen.findByRole('link', {
+      name: 'Ver partido: River Plate vs. Boca Juniors',
+    });
+    const segundoEnlace = screen.getByRole('link', {
+      name: 'Ver partido: Racing Club vs. Independiente',
+    });
+
+    primerEnlace.focus();
+    expect(primerEnlace).toHaveFocus();
+
+    await user.tab();
+    expect(segundoEnlace).toHaveFocus();
   });
 });

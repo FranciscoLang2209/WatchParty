@@ -88,7 +88,13 @@ export function RoomsDirectoryPage() {
           </div>
         ) : null}
 
-        {estado.status === 'ready' ? (
+        {estado.status === 'ready' && estado.matches.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Todavía no hay partidos ni salas disponibles. Volvé más tarde.
+          </p>
+        ) : null}
+
+        {estado.status === 'ready' && estado.matches.length > 0 ? (
           <ul className="grid w-full list-none grid-cols-1 gap-4 sm:grid-cols-2">
             {estado.matches.map((match) => (
               <li key={match.id} className="w-full min-w-0">
