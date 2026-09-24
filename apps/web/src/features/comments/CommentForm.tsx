@@ -45,6 +45,7 @@ export function CommentForm({ roomId, accessToken, onCommentCreated }: CommentFo
   // respuesta se perdió por la red, no el pedido), el reintento no crea un
   // comentario duplicado. Editar el texto lo descarta: a partir de ahí ya
   // es un comentario distinto.
+
   const clientRequestIdRef = useRef<string | null>(null);
 
   function handleBodyChange(value: string) {

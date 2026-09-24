@@ -10,6 +10,9 @@ import { SupabaseMatchCatalog } from './modules/matches/infrastructure/supabase-
 import { createProfilesRouter } from './modules/profiles/http/profiles-router.js';
 import type { OwnProfileStore } from './modules/profiles/domain/own-profile-store.js';
 import { SupabaseOwnProfileStore } from './modules/profiles/infrastructure/supabase-own-profile-store.js';
+import { createRoomsRouter } from './modules/rooms/http/rooms-router.js';
+import type { PublicRoomStore } from './modules/rooms/domain/public-room-store.js';
+import { SupabasePublicRoomStore } from './modules/rooms/infrastructure/supabase-public-room-store.js';
 import { createCommentsRouter } from './modules/comments/http/comments-router.js';
 import type { RoomCommentStore } from './modules/comments/domain/room-comment-store.js';
 import { SupabaseRoomCommentStore } from './modules/comments/infrastructure/supabase-room-comment-store.js';
@@ -19,13 +22,17 @@ import { SupabaseRoomCommentStore } from './modules/comments/infrastructure/supa
  * manera hardcodeada — ahora lo recibe por parámetro (inyección de
  * dependencias). Quien decide cuál usar (Supabase real, o un doble en
  * tests) es responsabilidad de quien llama a createApp, no de este archivo.
+ * WAT-129 agrega el mismo criterio para OwnProfileStore, y WAT-148 para
+ * PublicRoomStore.
  * WAT-129 agrega el mismo criterio para OwnProfileStore, y WAT-150 para
  * RoomCommentStore.
  */
+
 export function createApp(
   matchCatalog: MatchCatalog,
   profileStore: OwnProfileStore,
   commentStore: RoomCommentStore,
+  roomStore: PublicRoomStore,
 ): Express {
   const app = express();
 
@@ -34,7 +41,7 @@ export function createApp(
       origin: (origin, callback) => {
         callback(null, origin === env.WEB_ORIGIN);
       },
-      methods: ['GET', 'PUT', 'POST'],
+      methods: ['GET', 'POST', 'PUT'],
       allowedHeaders: ['Authorization', 'Content-Type'],
     }),
   );
@@ -48,6 +55,7 @@ export function createApp(
 
   app.use('/matches', createMatchesRouter(matchCatalog));
   app.use(createProfilesRouter(profileStore));
+  app.use(createRoomsRouter(roomStore));
   app.use('/rooms', createCommentsRouter(commentStore));
 
   app.use(notFoundHandler);
@@ -73,5 +81,6 @@ const matchStore = new SupabaseMatchStore(sportsDataClient);
 const matchCatalog = new SupabaseMatchCatalog(matchStore);
 const profileStore = new SupabaseOwnProfileStore(sportsDataClient);
 const commentStore = new SupabaseRoomCommentStore(sportsDataClient);
+const roomStore = new SupabasePublicRoomStore(sportsDataClient, matchCatalog);
 
-export default createApp(matchCatalog, profileStore, commentStore);
+export default createApp(matchCatalog, profileStore, commentStore, roomStore);
