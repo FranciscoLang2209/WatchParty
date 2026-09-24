@@ -7,3 +7,4 @@ coverage
 **/.vercel
 supabase/.temp
 .idea
+.DS_Store
