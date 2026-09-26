@@ -126,6 +126,13 @@ describe('AppRoutes', () => {
     expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
   });
 
+  it('redirige /rooms a /login sin sesión', async () => {
+    renderAt('/rooms');
+
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Salas' })).not.toBeInTheDocument();
+  });
+
   it('renderiza Home dentro del layout privado con sesión', async () => {
     authMock.getSession.mockResolvedValue({ data: { session }, error: null });
 
@@ -142,6 +149,16 @@ describe('AppRoutes', () => {
 
     expect(await screen.findByRole('heading', { name: 'Tu perfil' })).toBeInTheDocument();
     // Vive dentro del AppLayout existente: comparte header y navegación.
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
+    expect(screen.getByRole('navigation', { name: 'Navegación principal' })).toBeInTheDocument();
+  });
+
+  it('renderiza /rooms dentro del layout privado con sesión', async () => {
+    authMock.getSession.mockResolvedValue({ data: { session }, error: null });
+
+    renderAt('/rooms');
+
+    expect(await screen.findByRole('heading', { name: 'Salas' })).toBeInTheDocument();
     expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
     expect(screen.getByRole('navigation', { name: 'Navegación principal' })).toBeInTheDocument();
   });
