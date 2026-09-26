@@ -5,6 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { getRoom } from './api';
 import { RoomsApiError, isCancelled, type PublicRoom } from './types';
+import { CommentForm } from '@/features/comments/CommentForm';
+import { CommentList } from '@/features/comments/CommentList';
+import type { RoomComment } from '@/features/comments/types';
 
 type Estado =
   | { status: 'loading' }
@@ -45,6 +48,7 @@ function Sala({ roomId }: { roomId: string }) {
 
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
+  const [nuevoComentario, setNuevoComentario] = useState<RoomComment | null>(null);
 
   useEffect(() => {
     // Sin token no hay nada que pedir: el guard de rutas privadas se encarga.
@@ -93,6 +97,25 @@ function Sala({ roomId }: { roomId: string }) {
             <p className="text-sm text-muted-foreground">Identificador de sala</p>
             <p className="min-w-0 font-mono text-sm break-all">{estado.room.id}</p>
           </Card>
+        ) : null}
+
+        {estado.status === 'ready' && accessToken !== null ? (
+          <div className="flex flex-col gap-4">
+            <h2 className="text-lg font-semibold">Comentarios</h2>
+
+            <CommentForm
+              roomId={roomId}
+              accessToken={accessToken}
+              onCommentCreated={setNuevoComentario}
+            />
+
+            <CommentList
+              roomId={roomId}
+              accessToken={accessToken}
+              newComment={nuevoComentario}
+              onSessionExpired={() => void signOut()}
+            />
+          </div>
         ) : null}
 
         {estado.status === 'not-found' ? (
