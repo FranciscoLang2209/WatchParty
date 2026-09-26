@@ -183,7 +183,7 @@ describe('CommentList: comentario nuevo desde el form', () => {
     const { rerender } = renderList();
     await screen.findByText(COMMENT_1.body);
 
-    rerender(<CommentList roomId={ROOM_ID} accessToken={TOKEN} newComment={COMMENT_2} />);
+    rerender(<CommentList roomId={ROOM_ID} accessToken={TOKEN} newComments={[COMMENT_2]} />);
 
     const lista = await screen.findByRole('list');
     const items = within(lista).getAllByRole('listitem');
@@ -198,10 +198,31 @@ describe('CommentList: comentario nuevo desde el form', () => {
     const { rerender } = renderList();
     await screen.findByText(COMMENT_2.body);
 
-    rerender(<CommentList roomId={ROOM_ID} accessToken={TOKEN} newComment={COMMENT_2} />);
+    rerender(<CommentList roomId={ROOM_ID} accessToken={TOKEN} newComments={[COMMENT_2]} />);
 
     const lista = await screen.findByRole('list');
     expect(within(lista).getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  it('conserva los comentarios nuevos anteriores cuando llegan más', async () => {
+    const COMMENT_3 = { ...COMMENT_2, id: 'comment-3', body: 'Tercer comentario' };
+
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1] }));
+
+    const { rerender } = renderList();
+    await screen.findByText(COMMENT_1.body);
+
+    rerender(<CommentList roomId={ROOM_ID} accessToken={TOKEN} newComments={[COMMENT_2]} />);
+    rerender(
+      <CommentList roomId={ROOM_ID} accessToken={TOKEN} newComments={[COMMENT_2, COMMENT_3]} />,
+    );
+
+    const items = within(await screen.findByRole('list')).getAllByRole('listitem');
+
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveTextContent(COMMENT_1.body);
+    expect(items[1]).toHaveTextContent(COMMENT_2.body);
+    expect(items[2]).toHaveTextContent(COMMENT_3.body);
   });
 });
 

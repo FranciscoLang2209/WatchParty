@@ -8,6 +8,7 @@ import { RoomsApiError, isCancelled, type PublicRoom } from './types';
 import { CommentForm } from '@/features/comments/CommentForm';
 import { CommentList } from '@/features/comments/CommentList';
 import type { RoomComment } from '@/features/comments/types';
+import { subscribeToRoomComments } from '@/features/comments/realtime';
 
 type Estado =
   | { status: 'loading' }
@@ -48,7 +49,16 @@ function Sala({ roomId }: { roomId: string }) {
 
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
-  const [nuevoComentario, setNuevoComentario] = useState<RoomComment | null>(null);
+  const [nuevosComentarios, setNuevosComentarios] = useState<RoomComment[]>([]);
+
+  // Un mismo comentario puede llegar dos veces (el form y el canal en vivo):
+  // se acumula por `id` con una actualización funcional, así varios eventos
+  // seguidos no se pisan entre sí.
+  const agregarComentario = useCallback((comentario: RoomComment) => {
+    setNuevosComentarios((actuales) =>
+      actuales.some((actual) => actual.id === comentario.id) ? actuales : [...actuales, comentario],
+    );
+  }, []);
 
   useEffect(() => {
     // Sin token no hay nada que pedir: el guard de rutas privadas se encarga.
@@ -73,6 +83,14 @@ function Sala({ roomId }: { roomId: string }) {
       controller.abort();
     };
   }, [roomId, accessToken, intento]);
+
+  // La escucha en vivo sólo existe con la sala lista y se cancela al salir o
+  // al pasar a otra sala (Realtime, docs/decisions/realtime-comments.md).
+  useEffect(() => {
+    if (estado.status !== 'ready') return;
+
+    return subscribeToRoomComments(roomId, agregarComentario);
+  }, [roomId, estado.status, agregarComentario]);
 
   const reintentar = useCallback(() => {
     setEstado({ status: 'loading' });
@@ -106,13 +124,13 @@ function Sala({ roomId }: { roomId: string }) {
             <CommentForm
               roomId={roomId}
               accessToken={accessToken}
-              onCommentCreated={setNuevoComentario}
+              onCommentCreated={agregarComentario}
             />
 
             <CommentList
               roomId={roomId}
               accessToken={accessToken}
-              newComment={nuevoComentario}
+              newComments={nuevosComentarios}
               onSessionExpired={() => void signOut()}
             />
           </div>
