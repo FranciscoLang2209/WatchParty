@@ -7,12 +7,12 @@ export interface CommentListProps {
   roomId: string;
   accessToken: string;
   /**
-   * El comentario recién creado por `CommentForm`, si lo hay. Cuando cambia
-   * (por `id`), se suma a la lista local sin volver a pedirle nada al
-   * servidor. Quien conecta ambos componentes es la futura pantalla de sala
-   * (WAT-146) — acá sólo se deja el contrato listo.
+   * Comentarios nuevos, de a uno o varios: los que crea `CommentForm` y los
+   * que llegan por Realtime. Se suman al final de la lista local sin volver a
+   * pedirle nada al servidor, y sólo los que su `id` todavía no está en ella.
+   * Quien los acumula y conecta es la pantalla de sala.
    */
-  newComment?: RoomComment | null;
+  newComments?: RoomComment[];
   /**
    * Se dispara si un pedido falla por sesión vencida. `CommentList` no sabe
    * nada del flujo de Auth: quien lo monta decide qué hacer (típicamente,
@@ -53,14 +53,15 @@ function formatFecha(iso: string): string {
  *
  * Consulta `listComments` al montarse (y de nuevo si cambia `roomId` o
  * `accessToken`) y respeta el orden que ya viene del servidor — no
- * reordena. `newComment` es la puerta de entrada para el comentario que crea
- * `CommentForm`: se agrega al final sólo si su `id` todavía no está en la
- * lista, así un mismo valor recibido dos veces no duplica nada.
+ * reordena. `newComments` es la puerta de entrada para lo que crea
+ * `CommentForm` y lo que llega por Realtime: se agregan al final sólo si su
+ * id` todavía no está en la lista, así un mismo valor recibido dos veces no
+ * duplica nada.
  */
 export function CommentList({
   roomId,
   accessToken,
-  newComment = null,
+  newComments = [],
   onSessionExpired,
 }: CommentListProps) {
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
@@ -120,12 +121,12 @@ export function CommentList({
     );
   }
 
-  // Acá estado.status === 'ready'. `newComment` se superpone sin duplicar:
-  // no se guarda, se calcula qué mostrar en cada render.
-  const comentarios =
-    newComment !== null && !estado.comments.some((comment) => comment.id === newComment.id)
-      ? [...estado.comments, newComment]
-      : estado.comments;
+  // Acá estado.status === 'ready'. Los nuevos se superponen sin duplicar:
+  // no se guardan, se calcula qué mostrar en cada render.
+  const nuevos = newComments.filter(
+    (nuevo) => !estado.comments.some((comment) => comment.id === nuevo.id),
+  );
+  const comentarios = nuevos.length > 0 ? [...estado.comments, ...nuevos] : estado.comments;
 
   if (comentarios.length === 0) {
     return <p className="text-sm text-muted-foreground">{MENSAJE_VACIO}</p>;
