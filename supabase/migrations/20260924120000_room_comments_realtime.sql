@@ -1,4 +1,4 @@
--- Realtime de comentarios de sala (WAT-145 / decisión en docs/decisions/realtime-comments.md).
+-- Realtime de comentarios de sala (WAT-145 / decisiÃ³n en docs/decisions/realtime-comments.md).
 -- La web se suscribe a los INSERT de room_comments; la escritura sigue siendo solo del backend.
 
 grant select on table public.room_comments to authenticated;
