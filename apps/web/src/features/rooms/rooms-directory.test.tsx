@@ -279,4 +279,37 @@ describe('Directorio de salas — tarjetas', () => {
     await user.tab();
     expect(segundoEnlace).toHaveFocus();
   });
+
+  it('no muestra partidos finalizados, pospuestos ni cancelados', async () => {
+    conSesion();
+    const finished = { ...river, id: 'match-finished', status: 'finished' as const };
+    const postponed = { ...river, id: 'match-postponed', status: 'postponed' as const };
+    const cancelled = { ...river, id: 'match-cancelled', status: 'cancelled' as const };
+
+    fetchSpy.mockResolvedValue(
+      jsonResponse({ matches: [river, racing, finished, postponed, cancelled] }),
+    );
+
+    renderAt('/rooms');
+
+    const lista = await screen.findByRole('list');
+    const items = within(lista).getAllByRole('listitem');
+
+    expect(items).toHaveLength(2);
+    expect(within(lista).getByText(/River Plate/)).toBeInTheDocument();
+    expect(within(lista).getByText(/Racing Club/)).toBeInTheDocument();
+  });
+
+  it('si sólo hay partidos fuera de vista, explica la lista vacía en vez de una grilla vacía', async () => {
+    conSesion();
+    const finished = { ...river, id: 'match-finished', status: 'finished' as const };
+
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [finished] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    expect(await m.findByText(/Todavía no hay partidos ni salas disponibles/)).toBeInTheDocument();
+    expect(m.queryByRole('list')).not.toBeInTheDocument();
+  });
 });

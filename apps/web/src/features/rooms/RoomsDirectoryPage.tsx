@@ -12,6 +12,13 @@ type Estado =
 
 const MENSAJE_INESPERADO = 'No pudimos cargar el directorio. Intentá de nuevo.';
 
+/** /rooms sólo muestra partidos que todavía pueden tener sala activa. */
+const ESTADOS_VISIBLES: ReadonlySet<Match['status']> = new Set(['live', 'scheduled']);
+
+function partidosVisibles(matches: Match[]): Match[] {
+  return matches.filter((match) => ESTADOS_VISIBLES.has(match.status));
+}
+
 function toEstadoError(error: unknown): Estado {
   if (error instanceof MatchesApiError) {
     return { status: 'error', message: error.message, expired: error.kind === 'unauthorized' };
@@ -61,6 +68,8 @@ export function RoomsDirectoryPage() {
     setIntento((valor) => valor + 1);
   }, []);
 
+  const visibles = estado.status === 'ready' ? partidosVisibles(estado.matches) : [];
+
   return (
     <section className="flex w-full flex-1 flex-col overflow-x-hidden">
       <div className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-6 px-4 py-6 sm:px-6">
@@ -88,15 +97,15 @@ export function RoomsDirectoryPage() {
           </div>
         ) : null}
 
-        {estado.status === 'ready' && estado.matches.length === 0 ? (
+        {estado.status === 'ready' && visibles.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             Todavía no hay partidos ni salas disponibles. Volvé más tarde.
           </p>
         ) : null}
 
-        {estado.status === 'ready' && estado.matches.length > 0 ? (
+        {estado.status === 'ready' && visibles.length > 0 ? (
           <ul className="grid w-full list-none grid-cols-1 gap-4 sm:grid-cols-2">
-            {estado.matches.map((match) => (
+            {visibles.map((match) => (
               <li key={match.id} className="w-full min-w-0">
                 <MatchCard match={match} />
               </li>
