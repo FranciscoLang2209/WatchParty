@@ -29,6 +29,40 @@ export const BODY_MAX_LENGTH = 180;
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Posición de un comentario en el orden `(created_at, id)` de una sala
+ * (WAT-168). Es el punto desde el cual continuar: la página siguiente
+ * devuelve solo comentarios estrictamente posteriores a esta posición.
+ *
+ * `createdAt` NO es `RoomComment.createdAt`: es el `created_at` crudo de la
+ * base, con precisión de microsegundos (p. ej.
+ * "2026-09-19T12:00:00.123456+00:00"). `RoomComment.createdAt` se trunca a
+ * milisegundos para la API pública; usarlo como cursor haría que la última
+ * fila de una página reaparezca en la siguiente (su `created_at` real es
+ * mayor que el valor truncado). Quien reciba un cursor del cliente debe
+ * tratarlo como opaco y no construirlo a mano.
+ */
+export interface RoomCommentCursor {
+  createdAt: string;
+  id: string;
+}
+
+/** Opciones de `listPageByRoom`. `limit` debe ser un entero >= 1. */
+export interface ListRoomCommentsPageOptions {
+  limit: number;
+  /** Si se omite, la página empieza en el primer comentario de la sala. */
+  after?: RoomCommentCursor;
+}
+
+/**
+ * Una página de comentarios en orden cronológico. `nextCursor` es `null`
+ * cuando no quedan más comentarios después de `items`.
+ */
+export interface RoomCommentPage {
+  items: RoomComment[];
+  nextCursor: RoomCommentCursor | null;
+}
+
+/**
  * Puerto mínimo de comentarios de sala (WAT-151). No es un repositorio
  * genérico: solo expone lo que este módulo necesita.
  */
@@ -39,6 +73,20 @@ export interface RoomCommentStore {
    * distinto de `[]`, que es una sala real todavía sin comentarios.
    */
   listByRoom(roomId: string): Promise<RoomComment[] | null>;
+
+  /**
+   * Página de comentarios de `roomId` en el mismo orden que `listByRoom`
+   * (`created_at, id`), paginada por cursor en vez de offset: llegar
+   * comentarios nuevos no desplaza las páginas ya leídas, y un empate de
+   * `created_at` se desempata por `id`, así que cada comentario aparece
+   * exactamente una vez. `null` significa que la sala no existe (igual que
+   * en `listByRoom`). Lanza `RangeError` si `limit` o el cursor son
+   * inválidos.
+   */
+  listPageByRoom(
+    roomId: string,
+    options: ListRoomCommentsPageOptions,
+  ): Promise<RoomCommentPage | null>;
 
   /**
    * Crea (o recupera, si `clientRequestId` ya se usó para este autor) un

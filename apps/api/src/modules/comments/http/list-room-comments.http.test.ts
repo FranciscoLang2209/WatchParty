@@ -27,6 +27,7 @@ function mockAuthenticated(): void {
 function buildStore(overrides: Partial<RoomCommentStore> = {}): RoomCommentStore {
   return {
     listByRoom: async () => [],
+    listPageByRoom: async () => ({ items: [], nextCursor: null }),
     create: async (input) => ({
       id: 'comment-1',
       roomId: input.roomId,
