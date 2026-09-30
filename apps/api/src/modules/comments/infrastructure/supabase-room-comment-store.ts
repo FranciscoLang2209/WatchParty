@@ -1,6 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { RoomComment } from '../domain/room-comment.js';
-import type { CreateRoomCommentInput, RoomCommentStore } from '../domain/room-comment-store.js';
+import {
+  UUID_PATTERN,
+  type CreateRoomCommentInput,
+  type ListRoomCommentsPageOptions,
+  type RoomCommentCursor,
+  type RoomCommentPage,
+  type RoomCommentStore,
+} from '../domain/room-comment-store.js';
 import { RoomCommentPersistenceError } from './room-comment-persistence-error.js';
 
 const COMMENT_SELECT = 'id, room_id, body, created_at';
@@ -17,6 +24,14 @@ const COMMENT_SELECT = 'id, room_id, body, created_at';
 const POSTGRES_UNIQUE_VIOLATION = '23505';
 const POSTGRES_INVALID_TEXT_REPRESENTATION = '22P02';
 
+// Timestamp tal como lo devuelve Postgres/PostgREST para timestamptz, con
+// hasta 6 decimales (microsegundos) y zona horaria. Se valida antes de
+// interpolarlo en el filtro `.or(...)` de PostgREST: ese filtro es un string
+// con `,` y `()` como sintaxis, así que un cursor sin validar podría alterar
+// la consulta, no solo fallar.
+const CURSOR_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+
 interface RoomCommentRow {
   id: string;
   room_id: string;
@@ -31,6 +46,12 @@ function toRoomComment(row: RoomCommentRow): RoomComment {
     body: row.body,
     createdAt: new Date(row.created_at).toISOString(),
   };
+}
+
+function assertValidCursor(cursor: RoomCommentCursor): void {
+  if (!CURSOR_TIMESTAMP_PATTERN.test(cursor.createdAt) || !UUID_PATTERN.test(cursor.id)) {
+    throw new RangeError('El cursor de comentarios es inválido.');
+  }
 }
 
 /**
@@ -63,6 +84,57 @@ export class SupabaseRoomCommentStore implements RoomCommentStore {
     }
 
     return ((data ?? []) as RoomCommentRow[]).map(toRoomComment);
+  }
+
+  /**
+   * Página por cursor sobre `(created_at, id)` (WAT-168). Pide `limit + 1`
+   * filas: si llega la fila extra hay otra página, y se descarta antes de
+   * devolver, así que `items` nunca supera `limit`. La comparación con el
+   * cursor es estricta (`>`), por lo que el último comentario de la página
+   * anterior no se repite.
+   */
+  async listPageByRoom(
+    roomId: string,
+    { limit, after }: ListRoomCommentsPageOptions,
+  ): Promise<RoomCommentPage | null> {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new RangeError('El límite de la página debe ser un entero mayor o igual a 1.');
+    }
+    if (after) assertValidCursor(after);
+
+    if (!(await this.roomExists(roomId))) return null;
+
+    let query = this.client.from('room_comments').select(COMMENT_SELECT).eq('room_id', roomId);
+
+    if (after) {
+      // (created_at, id) > (after.createdAt, after.id), expresado en el
+      // filtro `or` de PostgREST: posterior en fecha, o misma fecha y id mayor.
+      query = query.or(
+        `created_at.gt.${after.createdAt},and(created_at.eq.${after.createdAt},id.gt.${after.id})`,
+      );
+    }
+
+    const { data, error } = await query
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(limit + 1);
+
+    if (error) {
+      throw new RoomCommentPersistenceError(
+        `No se pudo listar la página de comentarios de la sala ${roomId}.`,
+        error,
+      );
+    }
+
+    const rows = (data ?? []) as RoomCommentRow[];
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const lastRow = pageRows[pageRows.length - 1];
+
+    return {
+      items: pageRows.map(toRoomComment),
+      nextCursor: hasMore && lastRow ? { createdAt: lastRow.created_at, id: lastRow.id } : null,
+    };
   }
 
   /**
