@@ -98,6 +98,22 @@ describe('findFavoriteMatch', () => {
     ).toBeNull();
   });
 
+  it('limitación conocida: un equipo homónimo del favorito se toma como propio', () => {
+    // El contrato de Match sólo trae nombres. Cuando exponga ids, este caso
+    // debe devolver null.
+    const teams: TeamOption[] = [...TEAMS, { id: 'team-river-homonimo', name: 'River Plate' }];
+    const homonymMatch = match({ id: 'm1', awayTeam: 'Racing Club', status: 'live' });
+
+    const result = findFavoriteMatch({
+      favoriteTeamId: 'team-river-homonimo',
+      teams,
+      matches: [homonymMatch],
+      now: NOW,
+    });
+
+    expect(result).toBe(homonymMatch);
+  });
+
   it('es determinista y no modifica sus argumentos', () => {
     const matches = [
       match({ id: 'm1', kickoffAt: '2026-09-26T20:00:00Z' }),

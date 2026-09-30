@@ -29,6 +29,10 @@ function earliest(matches: Match[]): Match | null {
  * El contrato de partidos trae nombres de equipo, no ids: el favorito se
  * relaciona por el nombre que le asigna el directorio de equipos. Es pura: sin
  * I/O y sin modificar sus argumentos.
+ *
+ * Limitación conocida: `teams.name` no es único, así que un equipo homónimo del
+ * favorito se toma como propio y puede devolverse un partido ajeno. Se resuelve
+ * comparando por id cuando `Match` exponga `homeTeamId` y `awayTeamId`.
  */
 export function findFavoriteMatch({
   favoriteTeamId,
