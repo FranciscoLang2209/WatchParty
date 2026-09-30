@@ -46,7 +46,16 @@ export function subscribeToRoomComments(
     .channel(`room-comments:${roomId}`)
     .on(
       'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'room_comments', filter: `room_id=eq.${roomId}` },
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'room_comments',
+        filter: `room_id=eq.${roomId}`,
+        // Sólo estas columnas son legibles por `authenticated` (GRANT en la
+        // migración de Realtime): el payload nunca trae author_id ni
+        // client_request_id.
+        select: ['id', 'room_id', 'body', 'created_at'],
+      },
       (payload) => {
         if (!activa) return;
 

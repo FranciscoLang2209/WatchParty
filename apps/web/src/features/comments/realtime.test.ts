@@ -46,7 +46,13 @@ describe('subscribeToRoomComments', () => {
     expect(mocks.channel).toHaveBeenCalledWith('room-comments:room-1');
     expect(channel.on).toHaveBeenCalledWith(
       'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'room_comments', filter: 'room_id=eq.room-1' },
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'room_comments',
+        filter: 'room_id=eq.room-1',
+        select: ['id', 'room_id', 'body', 'created_at'],
+      },
       expect.any(Function),
     );
     expect(channel.subscribe).toHaveBeenCalledTimes(1);
