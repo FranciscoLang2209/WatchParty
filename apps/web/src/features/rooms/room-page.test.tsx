@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,9 +6,10 @@ import type { Session } from '@supabase/supabase-js';
 
 const API_BASE = 'https://api.watchparty.test';
 
-const { authMock, fromMock } = vi.hoisted(() => ({
+const { authMock, fromMock, subscribeMock } = vi.hoisted(() => ({
   authMock: { getSession: vi.fn(), onAuthStateChange: vi.fn(), signOut: vi.fn() },
   fromMock: vi.fn(),
+  subscribeMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase', () => ({ supabase: { auth: authMock, from: fromMock } }));
@@ -19,6 +20,7 @@ vi.mock('@/lib/env', () => ({
     apiBaseUrl: API_BASE,
   }),
 }));
+vi.mock('@/features/comments/realtime', () => ({ subscribeToRoomComments: subscribeMock }));
 
 const { AuthProvider } = await import('@/auth/AuthProvider');
 const { AppRoutes } = await import('@/app/router');
@@ -100,6 +102,7 @@ beforeEach(() => {
   authMock.onAuthStateChange.mockReturnValue({
     data: { subscription: { unsubscribe: vi.fn() } },
   });
+  subscribeMock.mockReturnValue(vi.fn());
 });
 
 afterEach(() => {
@@ -180,6 +183,53 @@ describe('Sala: éxito', () => {
     await user.click(p.getByRole('button', { name: 'Comentar' }));
 
     expect(await p.findByText(creado.body)).toBeInTheDocument();
+  });
+
+  it('escucha los comentarios en vivo de la sala y cancela al salir', async () => {
+    const cancelar = vi.fn();
+    subscribeMock.mockReturnValue(cancelar);
+
+    const { unmount } = renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    await p.findByText('room-123');
+
+    await waitFor(() =>
+      expect(subscribeMock).toHaveBeenCalledWith('room-123', expect.any(Function)),
+    );
+    expect(cancelar).not.toHaveBeenCalled();
+
+    unmount();
+
+    expect(cancelar).toHaveBeenCalledTimes(1);
+  });
+
+  it('los comentarios que llegan en vivo aparecen todos, sin duplicarse', async () => {
+    const primero = {
+      id: 'comentario-1',
+      roomId: 'room-123',
+      body: '¡Qué golazo!',
+      createdAt: '2026-09-24T21:00:00.000Z',
+    };
+    const segundo = { ...primero, id: 'comentario-2', body: 'Increíble jugada' };
+
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    await p.findByText('Todavía no hay comentarios. Sé el primero en comentar la jugada.');
+    await waitFor(() => expect(subscribeMock).toHaveBeenCalled());
+
+    const [, recibir] = subscribeMock.mock.calls[0] as [string, (comentario: unknown) => void];
+
+    act(() => {
+      recibir(primero);
+      recibir(segundo);
+      recibir(primero);
+    });
+
+    expect(await p.findByText(primero.body)).toBeInTheDocument();
+    expect(p.getByText(segundo.body)).toBeInTheDocument();
+    expect(p.getAllByRole('listitem')).toHaveLength(2);
   });
 
   it('si la lista responde 401 ofrece reingresar con el flujo de Auth', async () => {
@@ -311,5 +361,6 @@ describe('Sala: estados alternativos', () => {
 
     expect(p.queryByRole('textbox')).not.toBeInTheDocument();
     expect(llamadasA(`${API_BASE}/rooms/desconocida/comments`)).toHaveLength(0);
+    expect(subscribeMock).not.toHaveBeenCalled();
   });
 });
