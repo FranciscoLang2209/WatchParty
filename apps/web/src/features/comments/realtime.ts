@@ -5,6 +5,22 @@ import type { RoomComment } from './types';
 type ChannelClient = Pick<typeof supabase, 'channel' | 'removeChannel'>;
 
 /**
+ * Si la escucha en vivo está operativa. Arranca en `disconnected`: sólo pasa a
+ * `connected` cuando el canal confirma la suscripción.
+ */
+export type RoomCommentsStatus = 'connected' | 'disconnected';
+
+export interface SubscribeToRoomCommentsOptions {
+  /**
+   * Avisa la primera respuesta del canal (aunque sea una caída) y después cada
+   * cambio de estado. Mientras no avisa nada, la suscripción sigue sin
+   * confirmar.
+   */
+  onStatusChange?: (status: RoomCommentsStatus) => void;
+  client?: ChannelClient;
+}
+
+/**
  * Convierte la fila cruda de `room_comments` al contrato público. Descarta lo
  * que no tiene la forma esperada o no es de la sala pedida, y no expone
  * `author_id` ni `client_request_id`.
@@ -32,15 +48,25 @@ function toRoomComment(row: unknown, roomId: string): RoomComment | null {
  *
  * Entrega cada comentario una sola vez (deduplica por `id`: quien comenta
  * recibe también su propio evento). Devuelve la función que cancela la
- * suscripción.
+ * suscripción, que además deja el estado en `disconnected`.
  */
 export function subscribeToRoomComments(
   roomId: string,
   onComment: (comment: RoomComment) => void,
-  client: ChannelClient = supabase,
+  { onStatusChange, client = supabase }: SubscribeToRoomCommentsOptions = {},
 ): () => void {
   const vistos = new Set<string>();
   let activa = true;
+  // `null` hasta la primera respuesta del canal: así una caída inicial también
+  // se avisa, y quien escucha puede distinguirla de «todavía conectando».
+  let estado: RoomCommentsStatus | null = null;
+
+  const cambiarEstado = (nuevo: RoomCommentsStatus) => {
+    if (nuevo === estado) return;
+
+    estado = nuevo;
+    onStatusChange?.(nuevo);
+  };
 
   const channel = client
     .channel(`room-comments:${roomId}`)
@@ -66,9 +92,16 @@ export function subscribeToRoomComments(
         onComment(comment);
       },
     )
-    .subscribe();
+    // Cualquier aviso que no sea `SUBSCRIBED` (error, timeout o cierre) es una
+    // caída: el canal no está entregando comentarios.
+    .subscribe((estadoDelCanal) => {
+      if (!activa) return;
+
+      cambiarEstado(estadoDelCanal === 'SUBSCRIBED' ? 'connected' : 'disconnected');
+    });
 
   return () => {
+    cambiarEstado('disconnected');
     activa = false;
     void client.removeChannel(channel);
   };
