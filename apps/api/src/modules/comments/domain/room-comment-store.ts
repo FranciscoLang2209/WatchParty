@@ -21,6 +21,18 @@ export interface CreateRoomCommentInput {
 export const BODY_MIN_LENGTH = 1;
 export const BODY_MAX_LENGTH = 180;
 
+// Timestamp tal como lo devuelve Postgres/PostgREST para timestamptz, con
+// hasta 6 decimales (microsegundos) y zona horaria. Compartido entre el
+// handler HTTP (WAT-174, valida el cursor antes de tocar el store) y el store
+// (que lo interpola en un filtro `.or(...)` de PostgREST: un cursor sin
+// validar podría alterar la consulta, no solo fallar).
+export const CURSOR_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+
+/** Límites de `limit` en `GET /rooms/:roomId/comments` (WAT-174). */
+export const COMMENTS_PAGE_MIN_LIMIT = 1;
+export const COMMENTS_PAGE_MAX_LIMIT = 100;
+
 // Formato canónico de UUID (el mismo que genera gen_random_uuid() en
 // Postgres). Compartido entre la validación de formato en el handler HTTP
 // (WAT-150, antes de tocar el store) y client_request_id como clave real
