@@ -17,6 +17,15 @@ export interface SyncResultDetails {
   error?: string;
   observedQuotaRemaining?: number;
   observedQuotaWindowResetAt?: string;
+  summary?: SyncAttemptSummary;
+}
+
+export interface SyncAttemptSummary {
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: number;
+  queries: number;
 }
 
 /**

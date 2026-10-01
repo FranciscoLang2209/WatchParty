@@ -149,5 +149,30 @@ export async function checkRls(
     });
   }
 
+  // WAT-184: record_provider_sync_result (ahora con las cantidades del
+  // resumen) sigue siendo de uso exclusivo del backend: anon/authenticated
+  // no pueden ejecutarla. Se rechaza por EXECUTE (42501) antes de tocar datos.
+  for (const role of roles) {
+    const rpc = await role.client.rpc('record_provider_sync_result', {
+      p_provider: SEED_SYNC_STATE.provider,
+      p_competition_external_id: SEED_SYNC_STATE.competition_external_id,
+      p_season: SEED_SYNC_STATE.season,
+      p_lease_token: '00000000-0000-0000-0000-000000000000',
+      p_success: true,
+      p_imported_count: 1,
+      p_updated_count: 1,
+      p_skipped_count: 1,
+      p_error_count: 1,
+      p_queries_count: 1,
+    });
+    results.push({
+      label: `RLS: ${role.label} no puede ejecutar record_provider_sync_result`,
+      passed: rpc.error?.code === PERMISSION_DENIED,
+      detail: rpc.error
+        ? `Postgres devolvió: ${rpc.error.message} (code=${rpc.error.code})`
+        : 'La RPC no fue rechazada (no debería haber tenido éxito).',
+    });
+  }
+
   return results;
 }
