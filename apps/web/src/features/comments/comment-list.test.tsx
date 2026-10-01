@@ -192,6 +192,29 @@ describe('CommentList: comentario nuevo desde el form', () => {
     expect(items[1]).toHaveTextContent(COMMENT_2.body);
   });
 
+  it('ubica en su lugar cronológico un newComment anterior a uno ya visible', async () => {
+    const COMMENT_3: RoomComment = {
+      id: 'c3333333-3333-4333-8333-333333333333',
+      roomId: ROOM_ID,
+      body: 'Tercer comentario',
+      createdAt: '2026-09-19T12:10:00.000Z',
+    };
+
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1, COMMENT_3] }));
+
+    const { rerender } = renderList();
+    await screen.findByText(COMMENT_3.body);
+
+    rerender(<CommentList roomId={ROOM_ID} accessToken={TOKEN} newComments={[COMMENT_2]} />);
+
+    const items = within(await screen.findByRole('list')).getAllByRole('listitem');
+
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveTextContent(COMMENT_1.body);
+    expect(items[1]).toHaveTextContent(COMMENT_2.body);
+    expect(items[2]).toHaveTextContent(COMMENT_3.body);
+  });
+
   it('no duplica si newComment ya está en la lista', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1, COMMENT_2] }));
 
@@ -239,5 +262,105 @@ describe('CommentList: cancelación', () => {
     unmount();
 
     expect(init.signal?.aborted).toBe(true);
+  });
+});
+
+describe('CommentList: recarga por reconexión', () => {
+  const ROOM_2 = 'b3333333-3333-4333-8333-333333333333';
+  const COMMENT_3: RoomComment = {
+    id: 'c3333333-3333-4333-8333-333333333333',
+    roomId: ROOM_ID,
+    body: 'Tercer comentario',
+    createdAt: '2026-09-19T12:10:00.000Z',
+  };
+
+  function lista(props: Partial<CommentListProps> = {}) {
+    return <CommentList roomId={ROOM_ID} accessToken={TOKEN} {...props} />;
+  }
+
+  function textos(): (string | null)[] {
+    return within(screen.getByRole('list'))
+      .getAllByRole('listitem')
+      .map((item) => item.querySelector('p')?.textContent ?? null);
+  }
+
+  it('al cambiar reloadSignal vuelve a pedir la lista sin anunciar carga', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1] }));
+    const { rerender } = renderList();
+    await screen.findByText(COMMENT_1.body);
+
+    fetchMock.mockReturnValue(new Promise(() => {}));
+    rerender(lista({ reloadSignal: 1 }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(COMMENT_1.body)).toBeInTheDocument();
+    expect(screen.queryByText('Cargando comentarios…')).not.toBeInTheDocument();
+  });
+
+  it('fusiona la respuesta con lo visible: sin duplicar y sumando el que faltaba', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1] }));
+    const { rerender } = renderList();
+    await screen.findByText(COMMENT_1.body);
+
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1, COMMENT_2] }));
+    rerender(lista({ reloadSignal: 1 }));
+
+    await screen.findByText(COMMENT_2.body);
+    expect(textos()).toEqual([COMMENT_1.body, COMMENT_2.body]);
+  });
+
+  it('el que faltaba queda en su lugar cronológico, antes de uno nuevo que ya estaba visible', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1] }));
+    const { rerender } = renderList();
+    await screen.findByText(COMMENT_1.body);
+    rerender(lista({ newComments: [COMMENT_3] }));
+
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1, COMMENT_2, COMMENT_3] }));
+    rerender(lista({ newComments: [COMMENT_3], reloadSignal: 1 }));
+
+    await screen.findByText(COMMENT_2.body);
+    expect(textos()).toEqual([COMMENT_1.body, COMMENT_2.body, COMMENT_3.body]);
+  });
+
+  it('si la recarga falla conserva la lista visible en vez de reemplazarla por un error', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1] }));
+    const { rerender } = renderList();
+    await screen.findByText(COMMENT_1.body);
+
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    rerender(lista({ reloadSignal: 1 }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(screen.getByText(COMMENT_1.body)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('si la recarga responde 401 ofrece reingresar', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1] }));
+    const { rerender } = renderList();
+    await screen.findByText(COMMENT_1.body);
+
+    fetchMock.mockResolvedValue(
+      jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401),
+    );
+    rerender(lista({ reloadSignal: 1, onSessionExpired: vi.fn() }));
+
+    expect(
+      await screen.findByRole('button', { name: 'Iniciar sesión nuevamente' }),
+    ).toBeInTheDocument();
+  });
+
+  it('al cambiar de sala no mezcla los comentarios de la anterior', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1] }));
+    const { rerender } = renderList();
+    await screen.findByText(COMMENT_1.body);
+
+    const deOtraSala = { ...COMMENT_2, roomId: ROOM_2 };
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [deOtraSala] }));
+    rerender(lista({ roomId: ROOM_2 }));
+
+    await screen.findByText(deOtraSala.body);
+    expect(textos()).toEqual([deOtraSala.body]);
   });
 });

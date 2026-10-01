@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '../../components/ui/button';
 import { listComments } from './api';
+import { mergeComments } from './merge';
 import { CommentsApiError, isCancelled, type RoomComment } from './types';
 
 export interface CommentListProps {
@@ -8,11 +9,17 @@ export interface CommentListProps {
   accessToken: string;
   /**
    * Comentarios nuevos, de a uno o varios: los que crea `CommentForm` y los
-   * que llegan por Realtime. Se suman al final de la lista local sin volver a
-   * pedirle nada al servidor, y sólo los que su `id` todavía no está en ella.
+   * que llegan por Realtime. Se fusionan por `id` con la lista local sin
+   * volver a pedirle nada al servidor, cada uno en su lugar cronológico.
    * Quien los acumula y conecta es la pantalla de sala.
    */
   newComments?: RoomComment[];
+  /**
+   * Cada vez que cambia, la lista se vuelve a pedir y se fusiona por `id` con
+   * lo que ya está visible, sin anunciar carga. La pantalla de sala lo cambia
+   * al recuperar la escucha en vivo, para traer lo que se perdió en la caída.
+   */
+  reloadSignal?: number;
   /**
    * Se dispara si un pedido falla por sesión vencida. `CommentList` no sabe
    * nada del flujo de Auth: quien lo monta decide qué hacer (típicamente,
@@ -25,7 +32,7 @@ export interface CommentListProps {
 
 type Estado =
   | { status: 'loading' }
-  | { status: 'ready'; comments: RoomComment[] }
+  | { status: 'ready'; roomId: string; comments: RoomComment[] }
   | { status: 'error'; message: string; expired: boolean };
 
 const MENSAJE_INESPERADO = 'No pudimos cargar los comentarios. Intentá de nuevo.';
@@ -37,6 +44,10 @@ function toEstadoError(error: unknown): Estado {
   }
 
   return { status: 'error', message: MENSAJE_INESPERADO, expired: false };
+}
+
+function esSesionVencida(estado: Estado): boolean {
+  return estado.status === 'error' && estado.expired;
 }
 
 function formatFecha(iso: string): string {
@@ -53,15 +64,18 @@ function formatFecha(iso: string): string {
  *
  * Consulta `listComments` al montarse (y de nuevo si cambia `roomId` o
  * `accessToken`) y respeta el orden que ya viene del servidor — no
- * reordena. `newComments` es la puerta de entrada para lo que crea
- * `CommentForm` y lo que llega por Realtime: se agregan al final sólo si su
- * id` todavía no está en la lista, así un mismo valor recibido dos veces no
- * duplica nada.
+ * reordena. Si vuelve a pedirla con la lista de esa misma sala ya visible
+ * (por `reloadSignal`), fusiona la respuesta con ella en vez de reemplazarla,
+ * y un fallo de esa recarga no tapa lo que ya se ve. `newComments` es la puerta de entrada para lo que crea
+ * `CommentForm` y lo que llega por Realtime: se fusionan por `id` con la
+ * lista, así un mismo valor recibido dos veces no duplica nada y uno que
+ * llega fuera de orden queda en su lugar cronológico.
  */
 export function CommentList({
   roomId,
   accessToken,
   newComments = [],
+  reloadSignal = 0,
   onSessionExpired,
 }: CommentListProps) {
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
@@ -73,20 +87,37 @@ export function CommentList({
 
     listComments(roomId, accessToken, controller.signal)
       .then((comments) => {
-        if (vigente) setEstado({ status: 'ready', comments });
+        if (!vigente) return;
+
+        setEstado((previo) => ({
+          status: 'ready',
+          roomId,
+          comments:
+            previo.status === 'ready' && previo.roomId === roomId
+              ? mergeComments(previo.comments, comments)
+              : comments,
+        }));
       })
       .catch((error: unknown) => {
         // Una respuesta descartada por desmontaje o cambio de sala no se anuncia.
         if (!vigente || isCancelled(error)) return;
 
-        setEstado(toEstadoError(error));
+        const fallo = toEstadoError(error);
+
+        // Una recarga fallida no tapa la lista ya visible, salvo que la sesión
+        // haya vencido: ahí hace falta ofrecer el reingreso.
+        setEstado((previo) =>
+          previo.status === 'ready' && previo.roomId === roomId && !esSesionVencida(fallo)
+            ? previo
+            : fallo,
+        );
       });
 
     return () => {
       vigente = false;
       controller.abort();
     };
-  }, [roomId, accessToken, intento]);
+  }, [roomId, accessToken, intento, reloadSignal]);
 
   const reintentar = useCallback(() => {
     setIntento((valor) => valor + 1);
@@ -121,12 +152,10 @@ export function CommentList({
     );
   }
 
-  // Acá estado.status === 'ready'. Los nuevos se superponen sin duplicar:
-  // no se guardan, se calcula qué mostrar en cada render.
-  const nuevos = newComments.filter(
-    (nuevo) => !estado.comments.some((comment) => comment.id === nuevo.id),
-  );
-  const comentarios = nuevos.length > 0 ? [...estado.comments, ...nuevos] : estado.comments;
+  // Acá estado.status === 'ready'. Los nuevos se fusionan sin duplicar y en
+  // orden cronológico: no se guardan, se calcula qué mostrar en cada render.
+  const comentarios =
+    newComments.length > 0 ? mergeComments(estado.comments, newComments) : estado.comments;
 
   if (comentarios.length === 0) {
     return <p className="text-sm text-muted-foreground">{MENSAJE_VACIO}</p>;
