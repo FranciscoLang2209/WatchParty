@@ -7,11 +7,6 @@ import { LocalMatchCatalog } from './modules/matches/infrastructure/local-match-
 import type { OwnProfileStore } from './modules/profiles/domain/own-profile-store.js';
 import type { PublicRoomStore } from './modules/rooms/domain/public-room-store.js';
 import type { RoomCommentStore } from './modules/comments/domain/room-comment-store.js';
-import type { RoomCommentReactionStore } from './modules/comments/domain/room-comment-reaction-store.js';
-
-const noopReactionStore: RoomCommentReactionStore = {
-  setReaction: async () => null,
-};
 
 process.env.SUPABASE_URL = 'https://example.supabase.co';
 process.env.SUPABASE_ANON_KEY = 'test-anon-key';
@@ -45,13 +40,7 @@ const noopCommentStore: RoomCommentStore = {
   }),
 };
 
-const app = createApp(
-  new LocalMatchCatalog(),
-  noopProfileStore,
-  noopCommentStore,
-  noopRoomStore,
-  noopReactionStore,
-);
+const app = createApp(new LocalMatchCatalog(), noopProfileStore, noopCommentStore, noopRoomStore);
 
 describe('GET /health', () => {
   //seria como la carpeta de los tests cases
@@ -65,17 +54,6 @@ describe('GET /health', () => {
 });
 
 describe('CORS', () => {
-  it('el preflight autoriza método DELETE para quitar una reacción (WAT-176)', async () => {
-    const response = await request(app)
-      .options('/rooms/aaa/comments/bbb/reaction')
-      .set('Origin', process.env.WEB_ORIGIN!)
-      .set('Access-Control-Request-Method', 'DELETE')
-      .set('Access-Control-Request-Headers', 'Authorization');
-
-    expect(response.headers['access-control-allow-methods']).toContain('DELETE');
-    expect(response.headers['access-control-allow-headers']).toContain('Authorization');
-  });
-
   it('permite el origen configurado en WEB_ORIGIN', async () => {
     const response = await request(app).get('/health').set('Origin', process.env.WEB_ORIGIN!);
 

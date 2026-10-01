@@ -41,7 +41,7 @@ function buildStore(overrides: Partial<RoomCommentStore> = {}): RoomCommentStore
 function buildTestApp(store: RoomCommentStore) {
   const app = express();
 
-  app.use('/rooms', createCommentsRouter(store, { setReaction: async () => null }));
+  app.use('/rooms', createCommentsRouter(store));
   app.use(notFoundHandler);
   app.use(errorHandler);
 
