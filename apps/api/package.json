@@ -17,6 +17,7 @@
     "verify:profiles": "tsx --env-file-if-exists=.env scripts/verify-profiles-schema.ts",
     "verify:comments": "tsx --env-file-if-exists=.env scripts/verify-comments-schema.ts",
     "verify:match-search": "tsx --env-file-if-exists=.env scripts/verify-match-search.ts",
+    "verify:watched-matches": "tsx --env-file-if-exists=.env scripts/verify-watched-matches-schema.ts",
     "matches:sync": "tsx --env-file-if-exists=.env src/scripts/sync-matches.ts",
     "test": "vitest run"
   },

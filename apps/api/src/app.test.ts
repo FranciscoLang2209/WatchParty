@@ -31,6 +31,7 @@ const noopRoomStore: PublicRoomStore = {
 };
 const noopCommentStore: RoomCommentStore = {
   listByRoom: async () => [],
+  listPageByRoom: async () => ({ items: [], nextCursor: null }),
   create: async (input) => ({
     id: 'noop-comment-id',
     roomId: input.roomId,
