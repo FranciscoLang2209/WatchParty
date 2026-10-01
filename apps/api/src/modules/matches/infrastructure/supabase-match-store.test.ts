@@ -18,6 +18,9 @@ function makeQueryBuilder(result: FakeResult) {
   const builder = {
     select: vi.fn(() => builder),
     eq: vi.fn(() => builder),
+    gte: vi.fn(() => builder),
+    lt: vi.fn(() => builder),
+    order: vi.fn(() => builder),
     maybeSingle: vi.fn(async () => result),
     single: vi.fn(async () => result),
     then: (resolve: (value: FakeResult) => unknown) => resolve(result),
@@ -33,10 +36,14 @@ interface FakeClientHandlers {
 function makeFakeClient(handlers: FakeClientHandlers) {
   const fromCalls: string[] = [];
 
+  const builders: ReturnType<typeof makeQueryBuilder>[] = [];
+
   const from = vi.fn((table: string) => {
     fromCalls.push(table);
     if (table === 'matches') {
-      return makeQueryBuilder(handlers.matches?.() ?? { data: null, error: null });
+      const builder = makeQueryBuilder(handlers.matches?.() ?? { data: null, error: null });
+      builders.push(builder);
+      return builder;
     }
     throw new Error(`Tabla inesperada en el fake client: ${table}`);
   });
@@ -46,13 +53,15 @@ function makeFakeClient(handlers: FakeClientHandlers) {
       handlers.rpc?.(fn, params) ?? { data: null, error: null },
   );
 
-  return { from, rpc, fromCalls };
+  return { from, rpc, fromCalls, builders };
 }
 
 /** Vista del doble como SupabaseClient, solo para pasarlo al constructor del store. */
 function asSupabaseClient(fakeClient: ReturnType<typeof makeFakeClient>): SupabaseClient {
   return fakeClient as unknown as SupabaseClient;
 }
+
+const WINDOW = { from: '2026-09-05T00:00:00.000Z', to: '2026-09-14T00:00:00.000Z' };
 
 const FIXTURE: NormalizedMatchFixture = {
   provider: 'local-fixtures',
@@ -84,7 +93,7 @@ describe('SupabaseMatchStore', () => {
       });
       const store = new SupabaseMatchStore(asSupabaseClient(client));
 
-      const matches = await store.list();
+      const matches = await store.list(WINDOW);
 
       expect(matches).toEqual([
         {
@@ -105,7 +114,61 @@ describe('SupabaseMatchStore', () => {
       });
       const store = new SupabaseMatchStore(asSupabaseClient(client));
 
-      await expect(store.list()).rejects.toThrow(SupabasePersistenceError);
+      await expect(store.list(WINDOW)).rejects.toThrow(SupabasePersistenceError);
+    });
+  });
+
+  describe('list(): ventana y orden', () => {
+    it('filtra en Supabase por kickoff_at, con inicio inclusivo y fin exclusivo', async () => {
+      const client = makeFakeClient({ matches: () => ({ data: [], error: null }) });
+      const store = new SupabaseMatchStore(asSupabaseClient(client));
+
+      await store.list(WINDOW);
+
+      const [builder] = client.builders;
+      expect(builder?.gte).toHaveBeenCalledWith('kickoff_at', WINDOW.from);
+      expect(builder?.lt).toHaveBeenCalledWith('kickoff_at', WINDOW.to);
+    });
+
+    it('ordena en Supabase por kickoff_at y, ante empate, por id', async () => {
+      const client = makeFakeClient({ matches: () => ({ data: [], error: null }) });
+      const store = new SupabaseMatchStore(asSupabaseClient(client));
+
+      await store.list(WINDOW);
+
+      expect(client.builders[0]?.order.mock.calls).toEqual([
+        ['kickoff_at', { ascending: true }],
+        ['id', { ascending: true }],
+      ]);
+    });
+
+    it('una ventana sin partidos devuelve una lista vacía, sin error', async () => {
+      const client = makeFakeClient({ matches: () => ({ data: [], error: null }) });
+      const store = new SupabaseMatchStore(asSupabaseClient(client));
+
+      await expect(store.list(WINDOW)).resolves.toEqual([]);
+    });
+
+    it('findById no aplica la ventana: un partido histórico se sigue encontrando por id', async () => {
+      const client = makeFakeClient({
+        matches: () => ({
+          data: {
+            id: 'a1111111-1111-1111-1111-111111111111',
+            kickoff_at: '2020-01-01T21:00:00+00:00',
+            status: 'finished',
+            home_team: { id: 'team-norte', name: 'Club Atlético Norte' },
+            away_team: { id: 'team-deportivo-sur', name: 'Deportivo Sur' },
+          },
+          error: null,
+        }),
+      });
+      const store = new SupabaseMatchStore(asSupabaseClient(client));
+
+      const match = await store.findById('a1111111-1111-1111-1111-111111111111');
+
+      expect(match?.kickoffAt).toBe('2020-01-01T21:00:00.000Z');
+      expect(client.builders[0]?.gte).not.toHaveBeenCalled();
+      expect(client.builders[0]?.lt).not.toHaveBeenCalled();
     });
   });
 

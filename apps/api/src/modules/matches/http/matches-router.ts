@@ -4,10 +4,10 @@ import { requireAuthenticatedUser } from '../../../middleware/require-authentica
 import { createListMatchesHandler } from './list-matches-handler.js';
 import { createMatchHandler } from './get-match-handler.js';
 
-export function createMatchesRouter(catalog: MatchCatalog): Router {
+export function createMatchesRouter(catalog: MatchCatalog, now?: () => Date): Router {
   const router = Router();
 
-  router.get('/', requireAuthenticatedUser, createListMatchesHandler(catalog));
+  router.get('/', requireAuthenticatedUser, createListMatchesHandler(catalog, now));
   router.get('/:matchId', requireAuthenticatedUser, createMatchHandler(catalog));
 
   return router;

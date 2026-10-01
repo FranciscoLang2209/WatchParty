@@ -1,5 +1,6 @@
 import type { Match } from '../domain/match.js';
 import type { MatchCatalog } from '../domain/match-catalog.js';
+import type { MatchWindow } from '../domain/match-window.js';
 import type { MatchStore } from '../domain/match-store.js';
 
 /**
@@ -20,8 +21,8 @@ import type { MatchStore } from '../domain/match-store.js';
 export class SupabaseMatchCatalog implements MatchCatalog {
   constructor(private readonly store: MatchStore) {}
 
-  async list(): Promise<readonly Match[]> {
-    return this.store.list();
+  async list(window: MatchWindow): Promise<readonly Match[]> {
+    return this.store.list(window);
   }
 
   async findById(id: string): Promise<Match | null> {

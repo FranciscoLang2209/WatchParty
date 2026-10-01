@@ -12,7 +12,7 @@ handlers HTTP:
 
 ```ts
 interface MatchCatalog {
-  list(): Promise<readonly Match[]>;
+  list(window: MatchWindow): Promise<readonly Match[]>;
   findById(id: string): Promise<Match | null>;
 }
 ```
@@ -24,7 +24,7 @@ por proveedor/competición/temporada:
 
 ```ts
 interface MatchStore {
-  list(): Promise<readonly Match[]>;
+  list(window: MatchWindow): Promise<readonly Match[]>;
   findById(id: string): Promise<Match | null>;
   upsertFixture(fixture: NormalizedMatchFixture): Promise<string>;
   acquireSyncLease(
@@ -60,6 +60,12 @@ implementa `MatchCatalog` delegando `list()`/`findById()` directamente en un
   vía relación de PostgREST (`teams!matches_home_team_id_fkey`/
   `teams!matches_away_team_id_fkey`, con hint explícito porque hay dos FKs a
   `teams`).
+- `list(window)` filtra y ordena en la base (WAT-189): `kickoff_at` dentro de
+  la ventana, con inicio inclusivo y fin exclusivo, por `kickoff_at` e `id`.
+  La ventana la calcula `agendaWindow` (`domain/match-window.ts`): desde las
+  00:00 UTC de ayer hasta las 00:00 UTC del día posterior a los próximos siete
+  días. `findById()` no la aplica: el detalle de un partido histórico sigue
+  respondiendo.
 - `upsertFixture()`: una única llamada a la función de Postgres
   `upsert_match_fixture` (`supabase/migrations/20260910120000_upsert_match_fixture_function.sql`).
   Equipos y partido se guardan dentro de la misma transacción de la base:

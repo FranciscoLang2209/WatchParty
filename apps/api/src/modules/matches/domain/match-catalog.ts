@@ -1,4 +1,5 @@
 import { Match } from './match.js';
+import type { MatchWindow } from './match-window.js';
 
 /**
  * Puerto que expone el catálogo de partidos al resto del sistema.
@@ -9,6 +10,7 @@ import { Match } from './match.js';
  */
 
 export interface MatchCatalog {
-  list(): Promise<readonly Match[]>;
+  /** Partidos cuyo inicio cae en la ventana, por `kickoffAt` y, ante empate, por `id`. */
+  list(window: MatchWindow): Promise<readonly Match[]>;
   findById(id: string): Promise<Match | null>;
 }

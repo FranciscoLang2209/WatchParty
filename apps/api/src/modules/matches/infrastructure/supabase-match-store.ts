@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Match, MatchStatus } from '../domain/match.js';
+import type { MatchWindow } from '../domain/match-window.js';
 import type {
   MatchStore,
   SyncLeaseScope,
@@ -92,8 +93,16 @@ export class SupabaseMatchStore implements MatchStore {
     this.providerQuotaStore = new SupabaseProviderQuotaStore(client);
   }
 
-  async list(): Promise<readonly Match[]> {
-    const { data, error } = await this.client.from('matches').select(MATCH_SELECT_WITH_TEAMS);
+  // La ventana se filtra en la base, no en memoria: con importaciones diarias
+  // la tabla acumula históricos que el listado no tiene que traer.
+  async list(window: MatchWindow): Promise<readonly Match[]> {
+    const { data, error } = await this.client
+      .from('matches')
+      .select(MATCH_SELECT_WITH_TEAMS)
+      .gte('kickoff_at', window.from)
+      .lt('kickoff_at', window.to)
+      .order('kickoff_at', { ascending: true })
+      .order('id', { ascending: true });
 
     if (error) {
       throw new SupabasePersistenceError('No se pudo listar los partidos.', error);

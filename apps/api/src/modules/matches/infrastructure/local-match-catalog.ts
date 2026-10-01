@@ -1,5 +1,6 @@
 import type { Match } from '../domain/match.js';
 import type { MatchCatalog } from '../domain/match-catalog.js';
+import type { MatchWindow } from '../domain/match-window.js';
 
 /**
  * Catálogo de partidos embebido en memoria.
@@ -42,9 +43,15 @@ const MATCHES: readonly Match[] = [
 ];
 
 export class LocalMatchCatalog implements MatchCatalog {
-  async list(): Promise<readonly Match[]> {
+  async list(window: MatchWindow): Promise<readonly Match[]> {
     // es el patron await async, esta funcion devuelve una 'promesa' que va a devolver una lista de matches. Aca nunca falla.
-    return MATCHES;
+    const from = Date.parse(window.from);
+    const to = Date.parse(window.to);
+
+    return MATCHES.filter((match) => {
+      const kickoff = Date.parse(match.kickoffAt);
+      return kickoff >= from && kickoff < to;
+    });
   }
 
   async findById(id: string): Promise<Match | null> {
