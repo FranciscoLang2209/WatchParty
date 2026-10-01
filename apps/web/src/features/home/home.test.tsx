@@ -403,6 +403,27 @@ describe('Sala del equipo favorito', () => {
     expect(within(m.getByRole('list')).getAllByRole('listitem')).toHaveLength(2);
   });
 
+  it('si el perfil falla permite reintentarlo sin volver a pedir el catálogo', async () => {
+    const user = userEvent.setup();
+    conSesion();
+    responderPartidos({ matches: [river, racing] });
+    responderAPerfil = () => Promise.reject(new TypeError('Failed to fetch'));
+
+    renderAt('/');
+    const m = await home();
+    await m.findByText('No pudimos cargar tu equipo favorito.');
+
+    responderPerfil('team-racing-club');
+    await user.click(m.getByRole('button', { name: 'Reintentar' }));
+
+    expect(await m.findByRole('button', { name: ENTRAR_A_RACING })).toBeInTheDocument();
+    expect(m.queryByText('No pudimos cargar tu equipo favorito.')).not.toBeInTheDocument();
+    expect(m.queryByRole('button', { name: 'Reintentar' })).not.toBeInTheDocument();
+    expect(llamadasA(PERFIL_URL)).toHaveLength(2);
+    expect(llamadasA(PARTIDOS_URL)).toHaveLength(1);
+    expect(within(m.getByRole('list')).getAllByRole('listitem')).toHaveLength(2);
+  });
+
   it('si el catálogo falla no muestra la sección del favorito', async () => {
     conSesion();
     partidosFallan();

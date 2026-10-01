@@ -49,6 +49,7 @@ export function HomePage() {
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [favorito, setFavorito] = useState<Favorito>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
+  const [intentoFavorito, setIntentoFavorito] = useState(0);
 
   useEffect(() => {
     // Sin token no hay nada que pedir: el guard de rutas privadas se encarga.
@@ -68,6 +69,20 @@ export function HomePage() {
         setEstado(toEstadoError(error));
       });
 
+    return () => {
+      vigente = false;
+      controller.abort();
+    };
+  }, [accessToken, intento]);
+
+  // El perfil se pide en su propio efecto para poder reintentarlo sin volver a
+  // pedir el catálogo; reintentar el catálogo sí lo vuelve a pedir.
+  useEffect(() => {
+    if (accessToken === null) return;
+
+    const controller = new AbortController();
+    let vigente = true;
+
     // Un perfil todavía sin completar (`null`) es «sin favorito», no un fallo.
     getOwnProfile(accessToken, controller.signal)
       .then((profile) => {
@@ -81,7 +96,7 @@ export function HomePage() {
       vigente = false;
       controller.abort();
     };
-  }, [accessToken, intento]);
+  }, [accessToken, intento, intentoFavorito]);
 
   // El anuncio de carga se dispara acá y no dentro del efecto: con
   // `autoRefreshToken`, el token se renueva solo cada tanto y volver a
@@ -89,6 +104,11 @@ export function HomePage() {
   const reintentar = useCallback(() => {
     setEstado({ status: 'loading' });
     setIntento((valor) => valor + 1);
+  }, []);
+
+  const reintentarFavorito = useCallback(() => {
+    setFavorito({ status: 'loading' });
+    setIntentoFavorito((valor) => valor + 1);
   }, []);
 
   // Se calcula sobre lo ya cargado: ni la tarjeta ni los fallbacks piden nada.
@@ -165,7 +185,15 @@ export function HomePage() {
             ) : null}
 
             {favorito.status === 'error' ? (
-              <p className="text-sm text-muted-foreground">No pudimos cargar tu equipo favorito.</p>
+              <div className="flex flex-col items-start gap-3">
+                <p className="text-sm text-muted-foreground">
+                  No pudimos cargar tu equipo favorito.
+                </p>
+
+                <Button type="button" variant="outline" onClick={reintentarFavorito}>
+                  Reintentar
+                </Button>
+              </div>
             ) : null}
           </>
         ) : null}
