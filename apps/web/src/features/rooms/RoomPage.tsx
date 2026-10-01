@@ -8,13 +8,20 @@ import { RoomsApiError, isCancelled, type PublicRoom } from './types';
 import { CommentForm } from '@/features/comments/CommentForm';
 import { CommentList } from '@/features/comments/CommentList';
 import type { RoomComment } from '@/features/comments/types';
-import { subscribeToRoomComments } from '@/features/comments/realtime';
+import { subscribeToRoomComments, type RoomCommentsStatus } from '@/features/comments/realtime';
 
 type Estado =
   | { status: 'loading' }
   | { status: 'ready'; room: PublicRoom }
   | { status: 'not-found' }
   | { status: 'error'; message: string; expired: boolean };
+
+/**
+ * Estado de la escucha en vivo visto desde la pantalla. A los dos que publica
+ * la suscripción se suman los de espera: `connecting` (todavía no respondió,
+ * no es una caída) y `reconnecting` (reintento pedido y sin respuesta).
+ */
+type Conexion = RoomCommentsStatus | 'connecting' | 'reconnecting';
 
 const MENSAJE_INESPERADO = 'No pudimos abrir la sala. Intentá de nuevo.';
 
@@ -50,6 +57,8 @@ function Sala({ roomId }: { roomId: string }) {
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
   const [nuevosComentarios, setNuevosComentarios] = useState<RoomComment[]>([]);
+  const [conexion, setConexion] = useState<Conexion>('connecting');
+  const [intentoDeSuscripcion, setIntentoDeSuscripcion] = useState(0);
 
   // Un mismo comentario puede llegar dos veces (el form y el canal en vivo):
   // se acumula por `id` con una actualización funcional, así varios eventos
@@ -89,8 +98,27 @@ function Sala({ roomId }: { roomId: string }) {
   useEffect(() => {
     if (estado.status !== 'ready') return;
 
-    return subscribeToRoomComments(roomId, agregarComentario);
-  }, [roomId, estado.status, agregarComentario]);
+    // Una suscripción reemplazada o cancelada ya no opina sobre la conexión.
+    let vigente = true;
+    const cancelar = subscribeToRoomComments(roomId, agregarComentario, {
+      onStatusChange: (status) => {
+        if (vigente) setConexion(status);
+      },
+    });
+
+    return () => {
+      vigente = false;
+      cancelar();
+    };
+  }, [roomId, estado.status, agregarComentario, intentoDeSuscripcion]);
+
+  // Reinicia sólo la suscripción: la sala, la lista y el borrador no se tocan.
+  const reconectar = useCallback(() => {
+    if (conexion !== 'disconnected') return;
+
+    setConexion('reconnecting');
+    setIntentoDeSuscripcion((valor) => valor + 1);
+  }, [conexion]);
 
   const reintentar = useCallback(() => {
     setEstado({ status: 'loading' });
@@ -120,6 +148,26 @@ function Sala({ roomId }: { roomId: string }) {
         {estado.status === 'ready' && accessToken !== null ? (
           <div className="flex flex-col gap-4">
             <h2 className="text-lg font-semibold">Comentarios</h2>
+
+            {conexion === 'disconnected' || conexion === 'reconnecting' ? (
+              <div
+                role="status"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted px-3 py-2"
+              >
+                <p className="min-w-0 text-sm">Los comentarios no se están actualizando en vivo.</p>
+
+                {/* `aria-disabled` y no `disabled`: el botón no pierde el foco mientras reconecta. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-disabled={conexion === 'reconnecting'}
+                  onClick={reconectar}
+                >
+                  Reintentar
+                </Button>
+              </div>
+            ) : null}
 
             <CommentForm
               roomId={roomId}

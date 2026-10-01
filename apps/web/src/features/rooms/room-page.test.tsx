@@ -195,7 +195,9 @@ describe('Sala: éxito', () => {
     await p.findByText('room-123');
 
     await waitFor(() =>
-      expect(subscribeMock).toHaveBeenCalledWith('room-123', expect.any(Function)),
+      expect(subscribeMock).toHaveBeenCalledWith('room-123', expect.any(Function), {
+        onStatusChange: expect.any(Function),
+      }),
     );
     expect(cancelar).not.toHaveBeenCalled();
 
@@ -258,6 +260,149 @@ describe('Sala: éxito', () => {
     renderAt('/rooms/room-123');
 
     expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
+  });
+});
+
+describe('Sala: conexión de los comentarios en vivo', () => {
+  const AVISO = 'Los comentarios no se están actualizando en vivo.';
+  const comentario = {
+    id: 'comentario-1',
+    roomId: 'room-123',
+    body: '¡Qué golazo!',
+    createdAt: '2026-09-24T21:00:00.000Z',
+  };
+
+  /** Simula el aviso de estado de la suscripción número `indice` (0 = la primera). */
+  function avisarConexion(estado: 'connected' | 'disconnected', indice = 0) {
+    const [, , opciones] = subscribeMock.mock.calls[indice] as [
+      string,
+      unknown,
+      { onStatusChange: (estado: string) => void },
+    ];
+
+    act(() => opciones.onStatusChange(estado));
+  }
+
+  async function abrirSala() {
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    await p.findByText('Todavía no hay comentarios. Sé el primero en comentar la jugada.');
+    await waitFor(() => expect(subscribeMock).toHaveBeenCalledTimes(1));
+
+    return p;
+  }
+
+  it('mientras la suscripción todavía no respondió no muestra el aviso', async () => {
+    const p = await abrirSala();
+
+    expect(p.queryByText(AVISO)).not.toBeInTheDocument();
+    expect(p.queryByRole('button', { name: 'Reintentar' })).not.toBeInTheDocument();
+  });
+
+  it('conectada no muestra el aviso ni el botón', async () => {
+    const p = await abrirSala();
+
+    avisarConexion('connected');
+
+    expect(p.queryByText(AVISO)).not.toBeInTheDocument();
+    expect(p.queryByRole('button', { name: 'Reintentar' })).not.toBeInTheDocument();
+  });
+
+  it('desconectada anuncia que los comentarios no se actualizan y ofrece reintentar', async () => {
+    const p = await abrirSala();
+
+    avisarConexion('connected');
+    avisarConexion('disconnected');
+
+    expect(p.getByRole('status')).toHaveTextContent(AVISO);
+    expect(p.getByRole('button', { name: 'Reintentar' })).toBeInTheDocument();
+  });
+
+  it('también avisa si la suscripción falla antes de conectar', async () => {
+    const p = await abrirSala();
+
+    avisarConexion('disconnected');
+
+    expect(p.getByRole('status')).toHaveTextContent(AVISO);
+  });
+
+  it('reintentar cancela la suscripción caída y vuelve a suscribirse una sola vez', async () => {
+    const user = userEvent.setup();
+    const cancelar = vi.fn();
+    subscribeMock.mockReturnValue(cancelar);
+    const p = await abrirSala();
+
+    avisarConexion('disconnected');
+    const boton = p.getByRole('button', { name: 'Reintentar' });
+    await user.click(boton);
+    await user.click(boton);
+
+    expect(cancelar).toHaveBeenCalledTimes(1);
+    expect(subscribeMock).toHaveBeenCalledTimes(2);
+    expect(subscribeMock).toHaveBeenLastCalledWith('room-123', expect.any(Function), {
+      onStatusChange: expect.any(Function),
+    });
+    // Sólo se reinicia la suscripción: ni la sala ni la lista se vuelven a pedir.
+    expect(llamadasA(`${API_BASE}/rooms/room-123`)).toHaveLength(1);
+    expect(llamadasA(COMENTARIOS_URL)).toHaveLength(1);
+  });
+
+  it('tras reconectar el aviso desaparece', async () => {
+    const user = userEvent.setup();
+    const p = await abrirSala();
+
+    avisarConexion('disconnected');
+    await user.click(p.getByRole('button', { name: 'Reintentar' }));
+    avisarConexion('connected', 1);
+
+    expect(p.queryByText(AVISO)).not.toBeInTheDocument();
+    expect(p.queryByRole('button', { name: 'Reintentar' })).not.toBeInTheDocument();
+  });
+
+  it('si el reintento también falla, vuelve a ofrecer reintentar', async () => {
+    const user = userEvent.setup();
+    const p = await abrirSala();
+
+    avisarConexion('disconnected');
+    await user.click(p.getByRole('button', { name: 'Reintentar' }));
+    avisarConexion('disconnected', 1);
+    await user.click(p.getByRole('button', { name: 'Reintentar' }));
+
+    expect(subscribeMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('ignora los avisos de una suscripción ya reemplazada', async () => {
+    const user = userEvent.setup();
+    const p = await abrirSala();
+
+    avisarConexion('disconnected');
+    await user.click(p.getByRole('button', { name: 'Reintentar' }));
+    avisarConexion('connected', 1);
+    avisarConexion('disconnected', 0);
+
+    expect(p.queryByText(AVISO)).not.toBeInTheDocument();
+  });
+
+  it('la lista y el borrador sobreviven a la desconexión y al reintento', async () => {
+    const user = userEvent.setup();
+    const p = await abrirSala();
+    const [, recibir] = subscribeMock.mock.calls[0] as [string, (comentario: unknown) => void];
+
+    avisarConexion('connected');
+    act(() => recibir(comentario));
+    await user.type(p.getByLabelText('Comentario'), 'Borrador sin enviar');
+
+    avisarConexion('disconnected');
+
+    expect(p.getByText(comentario.body)).toBeInTheDocument();
+    expect(p.getByLabelText('Comentario')).toHaveValue('Borrador sin enviar');
+
+    await user.click(p.getByRole('button', { name: 'Reintentar' }));
+    avisarConexion('connected', 1);
+
+    expect(p.getByText(comentario.body)).toBeInTheDocument();
+    expect(p.getByLabelText('Comentario')).toHaveValue('Borrador sin enviar');
   });
 });
 
