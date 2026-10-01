@@ -67,6 +67,17 @@ function clampLimit(limit: number): number {
   return Math.min(Math.max(Math.trunc(limit), SEARCH_MIN_LIMIT), SEARCH_MAX_LIMIT);
 }
 
+/**
+ * Tamaño de página para el lookup interno de equipos coincidentes (ver
+ * `findAllMatchingTeamIds`). Tiene que quedar cómodamente por debajo de
+ * `max_rows` en `supabase/config.toml` (1000 en local; confirmar que el
+ * proyecto remoto use el mismo valor): ese es el límite que PostgREST
+ * trunca en silencio si se confía en que una sola consulta devuelve "todo".
+ * Acá se pagina explícitamente hasta agotar los resultados, así nunca se
+ * depende de ese límite del servidor.
+ */
+export const TEAM_LOOKUP_BATCH_SIZE = 500;
+
 // Separador improbable en un nombre real; igual el cursor nunca lo expone en
 // texto plano porque va codificado en base64url.
 const CURSOR_SEPARATOR = '\u0000';
@@ -79,6 +90,14 @@ interface DecodedCursor {
   sortValue: string;
   id: string;
 }
+
+// Mismo patrón que UUID_PATTERN en modules/comments/domain/room-comment-store.ts.
+// `id` siempre es un uuid de Postgres (teams.id/matches.id): validarlo acá,
+// no solo buscar el separador, es lo que impide que un cursor alterado
+// meta texto arbitrario en el filtro .or() de abajo. Al ser estrictamente
+// hexadecimal con guiones, un id válido tampoco puede contener ningún
+// carácter reservado de PostgREST, así que no hace falta además escaparlo.
+const CURSOR_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function decodeCursor(cursor: string): DecodedCursor {
   let decoded: string;
@@ -93,15 +112,24 @@ function decodeCursor(cursor: string): DecodedCursor {
     throw new Error('Cursor de búsqueda inválido.');
   }
 
-  return { sortValue: decoded.slice(0, separatorIndex), id: decoded.slice(separatorIndex + 1) };
+  const sortValue = decoded.slice(0, separatorIndex);
+  const id = decoded.slice(separatorIndex + 1);
+
+  if (sortValue === '' || !CURSOR_ID_PATTERN.test(id)) {
+    throw new Error('Cursor de búsqueda inválido.');
+  }
+
+  return { sortValue, id };
 }
 
-// PostgREST reserva , ( ) " para su propia sintaxis de filtro: un valor que
-// los contenga necesita ir entre comillas dobles, con las internas
-// escapadas. Mismo criterio que documenta @supabase/realtime-js para sus
-// filtros de postgres_changes.
+// PostgREST reserva , ( ) " \ para su propia sintaxis de filtro: un valor
+// que los contenga va entre comillas dobles, escapando las comillas y las
+// barras invertidas internas con una barra invertida (convención de
+// PostgREST: no se duplica la comilla, como haría SQL).
 function quoteFilterValue(value: string): string {
-  return /[,()"]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  if (!/[,()"\\]/.test(value)) return value;
+  const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return `"${escaped}"`;
 }
 
 // Escapa los caracteres especiales de ILIKE para que el texto buscado se
@@ -169,6 +197,47 @@ export class SupabaseMatchSearch implements MatchSearch {
     };
   }
 
+  /**
+   * Todos los equipos cuyo nombre coincide con `text`, sin depender del
+   * `max_rows` del servidor: pagina por `id` hasta que una página devuelve
+   * menos filas que `TEAM_LOOKUP_BATCH_SIZE`. Una sola consulta sin límite
+   * explícito corre el riesgo de que PostgREST trunque en silencio con un
+   * texto común, dejando afuera partidos de equipos que sí coincidían.
+   */
+  private async findAllMatchingTeamIds(text: string): Promise<string[]> {
+    const ids: string[] = [];
+    let lastId: string | null = null;
+
+    for (;;) {
+      let builder = this.client
+        .from('teams')
+        .select('id')
+        .ilike('name', `%${escapeLikePattern(text)}%`)
+        .order('id', { ascending: true })
+        .limit(TEAM_LOOKUP_BATCH_SIZE);
+
+      if (lastId !== null) {
+        builder = builder.gt('id', lastId);
+      }
+
+      const { data, error } = await builder;
+
+      if (error) {
+        throw new SupabasePersistenceError('No se pudo buscar equipos para el partido.', error);
+      }
+
+      const rows = (data ?? []) as { id: string }[];
+      for (const row of rows) ids.push(row.id);
+
+      const last = rows[rows.length - 1];
+      if (rows.length < TEAM_LOOKUP_BATCH_SIZE || !last) break;
+
+      lastId = last.id;
+    }
+
+    return ids;
+  }
+
   private async searchMatches(
     text: string,
     limit: number,
@@ -177,16 +246,7 @@ export class SupabaseMatchSearch implements MatchSearch {
     let teamIds: string[] | null = null;
 
     if (text !== '') {
-      const { data, error } = await this.client
-        .from('teams')
-        .select('id')
-        .ilike('name', `%${escapeLikePattern(text)}%`);
-
-      if (error) {
-        throw new SupabasePersistenceError('No se pudo buscar equipos para el partido.', error);
-      }
-
-      teamIds = (data ?? []).map((row) => (row as { id: string }).id);
+      teamIds = await this.findAllMatchingTeamIds(text);
 
       // Ningún equipo coincide: ningún partido puede coincidir. Se corta acá
       // para no tocar la tabla matches ni armar un OR con una lista vacía.

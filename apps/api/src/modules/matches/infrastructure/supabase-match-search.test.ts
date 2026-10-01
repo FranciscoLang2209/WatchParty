@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { SupabaseMatchSearch } from './supabase-match-search.js';
+import { SupabaseMatchSearch, TEAM_LOOKUP_BATCH_SIZE } from './supabase-match-search.js';
 import { SEARCH_MAX_LIMIT } from '../domain/match-search.js';
 
 type FakeResult = { data: unknown; error: { message: string; code?: string } | null };
@@ -27,6 +27,10 @@ function makeQueryBuilder(result: FakeResult) {
     }),
     limit: vi.fn((...args: unknown[]) => {
       calls.push({ method: 'limit', args });
+      return builder;
+    }),
+    gt: vi.fn((...args: unknown[]) => {
+      calls.push({ method: 'gt', args });
       return builder;
     }),
     then: (resolve: (value: FakeResult) => unknown) => resolve(result),
@@ -82,11 +86,12 @@ function nthBuilder(
   return builder;
 }
 
-const RIVER = { id: 'team-river', name: 'River Plate' };
-const RACING = { id: 'team-racing', name: 'Racing Club' };
+const RIVER = { id: 'a1111111-1111-1111-1111-111111111111', name: 'River Plate' };
+const RACING = { id: 'a2222222-2222-2222-2222-222222222222', name: 'Racing Club' };
+const BOCA = { id: 'a3333333-3333-3333-3333-333333333333', name: 'Boca Juniors' };
 
 const MATCH_ROW = {
-  id: 'match-1',
+  id: 'b1111111-1111-1111-1111-111111111111',
   kickoff_at: '2026-09-06T21:00:00+00:00',
   status: 'scheduled',
   home_team: { name: 'River Plate' },
@@ -125,7 +130,7 @@ describe('SupabaseMatchSearch', () => {
       const client = makeFakeClient({
         teams: [
           () => ({ data: [RIVER, RACING], error: null }),
-          () => ({ data: [{ id: 'team-boca', name: 'Boca Juniors' }], error: null }),
+          () => ({ data: [BOCA], error: null }),
         ],
       });
       const search = new SupabaseMatchSearch(asSupabaseClient(client));
@@ -162,6 +167,22 @@ describe('SupabaseMatchSearch', () => {
 
       expect(nthBuilder(client.builders.teams, 0).limit).toHaveBeenCalledWith(SEARCH_MAX_LIMIT + 1);
     });
+
+    it('un nombre de equipo con comillas y coma se escapa con barra invertida (PostgREST, no SQL)', async () => {
+      const TRICKY = { id: 'c1111111-1111-1111-1111-111111111111', name: 'Club "A", B' };
+      const client = makeFakeClient({
+        teams: [() => ({ data: [TRICKY, RACING], error: null }), () => ({ data: [], error: null })],
+      });
+      const search = new SupabaseMatchSearch(asSupabaseClient(client));
+
+      const first = await search.search({ query: '', kind: 'teams', limit: 1 });
+      await search.search({ query: '', kind: 'teams', limit: 1, cursor: first.nextCursor });
+
+      const expectedValue = '"Club \\"A\\", B"';
+      expect(nthBuilder(client.builders.teams, 1).or).toHaveBeenCalledWith(
+        `name.gt.${expectedValue},and(name.eq.${expectedValue},id.gt.${TRICKY.id})`,
+      );
+    });
   });
 
   describe('kind: matches', () => {
@@ -177,7 +198,7 @@ describe('SupabaseMatchSearch', () => {
       expect(page.kind).toBe('matches');
       expect(page.items).toEqual([
         {
-          id: 'match-1',
+          id: MATCH_ROW.id,
           homeTeam: 'River Plate',
           awayTeam: 'Boca Juniors',
           kickoffAt: '2026-09-06T21:00:00.000Z',
@@ -209,6 +230,60 @@ describe('SupabaseMatchSearch', () => {
 
       expect(page.kind).toBe('matches');
       expect((page.items[0] as { homeTeam?: string }).homeTeam).toBe('River Plate');
+    });
+
+    it('no trunca equipos coincidentes aunque haya más de una página, y arma los partidos con todos', async () => {
+      const KNOWN_FIRST_TEAM_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-000000000000';
+      const extraTeamId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+      const firstBatch = Array.from({ length: TEAM_LOOKUP_BATCH_SIZE }, (_, index) => ({
+        id:
+          index === 0
+            ? KNOWN_FIRST_TEAM_ID
+            : `aaaaaaaa-aaaa-aaaa-aaaa-${String(index).padStart(12, '0')}`,
+      }));
+
+      const client = makeFakeClient({
+        teams: [
+          () => ({ data: firstBatch, error: null }),
+          () => ({ data: [{ id: extraTeamId }], error: null }),
+        ],
+        matches: [() => ({ data: [MATCH_ROW], error: null })],
+      });
+      const search = new SupabaseMatchSearch(asSupabaseClient(client));
+
+      await search.search({ query: 'club', kind: 'matches', limit: 5 });
+
+      expect(client.builders.teams).toHaveLength(2);
+      expect(nthBuilder(client.builders.matches, 0).or).toHaveBeenCalledWith(
+        expect.stringContaining(extraTeamId),
+      );
+      expect(nthBuilder(client.builders.matches, 0).or).toHaveBeenCalledWith(
+        expect.stringContaining(KNOWN_FIRST_TEAM_ID),
+      );
+    });
+  });
+
+  describe('cursor inválido', () => {
+    it('un cursor sin separador interno se rechaza', async () => {
+      const client = makeFakeClient({});
+      const search = new SupabaseMatchSearch(asSupabaseClient(client));
+      const brokenCursor = Buffer.from('sin-separador-interno', 'utf8').toString('base64url');
+
+      await expect(
+        search.search({ query: '', kind: 'teams', limit: 1, cursor: brokenCursor }),
+      ).rejects.toThrow('Cursor de búsqueda inválido.');
+    });
+
+    it('un cursor cuyo id no tiene forma de uuid se rechaza', async () => {
+      const client = makeFakeClient({});
+      const search = new SupabaseMatchSearch(asSupabaseClient(client));
+      const brokenCursor = Buffer.from('River Plate\u0000no-es-un-uuid', 'utf8').toString(
+        'base64url',
+      );
+
+      await expect(
+        search.search({ query: '', kind: 'teams', limit: 1, cursor: brokenCursor }),
+      ).rejects.toThrow('Cursor de búsqueda inválido.');
     });
   });
 });

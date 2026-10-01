@@ -16,6 +16,7 @@
     "verify:sports-data": "tsx --env-file-if-exists=.env scripts/verify-sports-data-schema.ts",
     "verify:profiles": "tsx --env-file-if-exists=.env scripts/verify-profiles-schema.ts",
     "verify:comments": "tsx --env-file-if-exists=.env scripts/verify-comments-schema.ts",
+    "verify:match-search": "tsx --env-file-if-exists=.env scripts/verify-match-search.ts",
     "matches:sync": "tsx --env-file-if-exists=.env src/scripts/sync-matches.ts",
     "test": "vitest run"
   },
