@@ -153,16 +153,27 @@ describe('subscribeToRoomComments', () => {
       },
     );
 
+    it('avisa disconnected si el canal falla antes de conectar por primera vez', () => {
+      const { client, avisarEstado } = crearCliente();
+      const onStatusChange = vi.fn();
+
+      subscribeToRoomComments('room-1', vi.fn(), { client, onStatusChange });
+      avisarEstado('CHANNEL_ERROR');
+
+      expect(onStatusChange.mock.calls).toEqual([['disconnected']]);
+    });
+
     it('no repite el aviso si el estado no cambió', () => {
       const { client, avisarEstado } = crearCliente();
       const onStatusChange = vi.fn();
 
       subscribeToRoomComments('room-1', vi.fn(), { client, onStatusChange });
       avisarEstado('CHANNEL_ERROR');
+      avisarEstado('TIMED_OUT');
       avisarEstado('SUBSCRIBED');
       avisarEstado('SUBSCRIBED');
 
-      expect(onStatusChange.mock.calls).toEqual([['connected']]);
+      expect(onStatusChange.mock.calls).toEqual([['disconnected'], ['connected']]);
     });
 
     it('vuelve a connected si el canal se recupera', () => {

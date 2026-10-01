@@ -12,8 +12,9 @@ export type RoomCommentsStatus = 'connected' | 'disconnected';
 
 export interface SubscribeToRoomCommentsOptions {
   /**
-   * Avisa cada cambio de estado, nunca el estado inicial: quien escucha parte
-   * de `disconnected`.
+   * Avisa la primera respuesta del canal (aunque sea una caída) y después cada
+   * cambio de estado. Mientras no avisa nada, la suscripción sigue sin
+   * confirmar.
    */
   onStatusChange?: (status: RoomCommentsStatus) => void;
   client?: ChannelClient;
@@ -56,7 +57,9 @@ export function subscribeToRoomComments(
 ): () => void {
   const vistos = new Set<string>();
   let activa = true;
-  let estado: RoomCommentsStatus = 'disconnected';
+  // `null` hasta la primera respuesta del canal: así una caída inicial también
+  // se avisa, y quien escucha puede distinguirla de «todavía conectando».
+  let estado: RoomCommentsStatus | null = null;
 
   const cambiarEstado = (nuevo: RoomCommentsStatus) => {
     if (nuevo === estado) return;
