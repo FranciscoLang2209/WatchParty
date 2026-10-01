@@ -28,7 +28,9 @@ const session = { access_token: 'token-123', user: { id: 'user-1', email: 'a@b.c
 const river = {
   id: 'match-river-boca',
   homeTeam: 'River Plate',
+  homeTeamId: 'team-river-plate',
   awayTeam: 'Boca Juniors',
+  awayTeamId: 'team-boca-juniors',
   kickoffAt: '2026-09-06T21:00:00Z',
   status: 'scheduled',
 };
@@ -36,7 +38,9 @@ const river = {
 const racing = {
   id: 'match-racing-inde',
   homeTeam: 'Racing Club',
+  homeTeamId: 'team-racing-club',
   awayTeam: 'Independiente',
+  awayTeamId: 'team-independiente',
   kickoffAt: '2026-09-07T23:30:00Z',
   status: 'live',
 };

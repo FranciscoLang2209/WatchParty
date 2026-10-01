@@ -44,7 +44,9 @@ function buildTestApp(catalog: MatchCatalog) {
 const MATCH_EARLY: Match = {
   id: 'aaa',
   homeTeam: 'Real Madrid',
+  homeTeamId: 'team-real-madrid',
   awayTeam: 'FC Barcelona',
+  awayTeamId: 'team-fc-barcelona',
   kickoffAt: '2026-09-06T21:00:00.000Z',
   status: 'scheduled',
 };
@@ -52,7 +54,9 @@ const MATCH_EARLY: Match = {
 const MATCH_EARLY_TIE: Match = {
   id: 'bbb',
   homeTeam: 'Manchester City',
+  homeTeamId: 'team-manchester-city',
   awayTeam: 'Liverpool',
+  awayTeamId: 'team-liverpool',
   kickoffAt: '2026-09-06T21:00:00.000Z',
   status: 'scheduled',
 };
@@ -60,7 +64,9 @@ const MATCH_EARLY_TIE: Match = {
 const MATCH_LATE: Match = {
   id: 'zzz',
   homeTeam: 'River Plate',
+  homeTeamId: 'team-river-plate',
   awayTeam: 'Boca Juniors',
+  awayTeamId: 'team-boca-juniors',
   kickoffAt: '2026-09-13T19:00:00.000Z',
   status: 'scheduled',
 };

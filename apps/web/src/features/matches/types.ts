@@ -12,7 +12,10 @@ export type MatchStatus = (typeof MATCH_STATUSES)[number];
 export interface Match {
   id: string;
   homeTeam: string;
+  /** Id del equipo en el directorio. El nombre no es único: se identifica por id. */
+  homeTeamId: string;
   awayTeam: string;
+  awayTeamId: string;
   /** ISO 8601 en UTC, p. ej. «2026-09-06T21:00:00Z». */
   kickoffAt: string;
   status: MatchStatus;

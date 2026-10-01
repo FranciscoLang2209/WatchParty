@@ -67,23 +67,28 @@ async function toApiError(response: Response): Promise<MatchesApiError> {
   return fail(mapped ?? kindFromStatus(response.status));
 }
 
-/** Se queda con los cinco campos canónicos y descarta cualquier extra. */
+/** Se queda con los campos canónicos y descarta cualquier extra. */
 function toMatch(value: unknown): Match {
   if (typeof value !== 'object' || value === null) throw fail('server');
 
-  const { id, homeTeam, awayTeam, kickoffAt, status } = value as Record<string, unknown>;
+  const { id, homeTeam, homeTeamId, awayTeam, awayTeamId, kickoffAt, status } = value as Record<
+    string,
+    unknown
+  >;
 
   if (
     typeof id !== 'string' ||
     typeof homeTeam !== 'string' ||
+    typeof homeTeamId !== 'string' ||
     typeof awayTeam !== 'string' ||
+    typeof awayTeamId !== 'string' ||
     typeof kickoffAt !== 'string' ||
     !isMatchStatus(status)
   ) {
     throw fail('server');
   }
 
-  return { id, homeTeam, awayTeam, kickoffAt, status };
+  return { id, homeTeam, homeTeamId, awayTeam, awayTeamId, kickoffAt, status };
 }
 
 async function request<T>(url: string, accessToken: string, signal?: AbortSignal): Promise<T> {

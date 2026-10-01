@@ -114,7 +114,9 @@ function makeCatalog(): MatchCatalog {
   const match: Match = {
     id: MATCH_ID,
     homeTeam: 'Boca Juniors',
+    homeTeamId: 'team-boca-juniors',
     awayTeam: 'River Plate',
+    awayTeamId: 'team-river-plate',
     kickoffAt: '2026-09-20T21:00:00.000Z',
     status: 'scheduled',
   };

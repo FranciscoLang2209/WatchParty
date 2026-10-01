@@ -7,7 +7,9 @@ import type { Match } from './types';
 const partido: Match = {
   id: 'match-1',
   homeTeam: 'River Plate',
+  homeTeamId: 'team-river-plate',
   awayTeam: 'Boca Juniors',
+  awayTeamId: 'team-boca-juniors',
   kickoffAt: '2026-09-06T21:00:00Z',
   status: 'scheduled',
 };
@@ -77,7 +79,9 @@ describe('MatchCard', () => {
     renderCard({
       ...partido,
       homeTeam: 'Club Atlético Central Córdoba de Santiago del Estero',
+      homeTeamId: 'team-central-cordoba',
       awayTeam: 'Asociación Atlética Argentinos Juniors de La Paternal',
+      awayTeamId: 'team-argentinos-juniors',
     });
 
     const titulo = screen.getByRole('heading', { level: 2 });
