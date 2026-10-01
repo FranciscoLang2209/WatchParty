@@ -16,6 +16,8 @@ import { SupabasePublicRoomStore } from './modules/rooms/infrastructure/supabase
 import { createCommentsRouter } from './modules/comments/http/comments-router.js';
 import type { RoomCommentStore } from './modules/comments/domain/room-comment-store.js';
 import { SupabaseRoomCommentStore } from './modules/comments/infrastructure/supabase-room-comment-store.js';
+import type { RoomCommentReactionStore } from './modules/comments/domain/room-comment-reaction-store.js';
+import { SupabaseRoomCommentReactionStore } from './modules/comments/infrastructure/supabase-room-comment-reaction-store.js';
 
 /**
  * Cambio del ticket WAT-106: la app ya no crea su propio MatchCatalog de
@@ -33,6 +35,7 @@ export function createApp(
   profileStore: OwnProfileStore,
   commentStore: RoomCommentStore,
   roomStore: PublicRoomStore,
+  reactionStore: RoomCommentReactionStore,
 ): Express {
   const app = express();
 
@@ -41,7 +44,7 @@ export function createApp(
       origin: (origin, callback) => {
         callback(null, origin === env.WEB_ORIGIN);
       },
-      methods: ['GET', 'POST', 'PUT'],
+      methods: ['GET', 'POST', 'PUT', 'DELETE'],
       allowedHeaders: ['Authorization', 'Content-Type'],
     }),
   );
@@ -56,8 +59,7 @@ export function createApp(
   app.use('/matches', createMatchesRouter(matchCatalog));
   app.use(createProfilesRouter(profileStore));
   app.use(createRoomsRouter(roomStore));
-  app.use('/rooms', createCommentsRouter(commentStore));
-
+  app.use('/rooms', createCommentsRouter(commentStore, reactionStore));
   app.use(notFoundHandler);
   app.use(errorHandler);
 
@@ -82,5 +84,6 @@ const matchCatalog = new SupabaseMatchCatalog(matchStore);
 const profileStore = new SupabaseOwnProfileStore(sportsDataClient);
 const commentStore = new SupabaseRoomCommentStore(sportsDataClient);
 const roomStore = new SupabasePublicRoomStore(sportsDataClient, matchCatalog);
+const reactionStore = new SupabaseRoomCommentReactionStore(sportsDataClient);
 
-export default createApp(matchCatalog, profileStore, commentStore, roomStore);
+export default createApp(matchCatalog, profileStore, commentStore, roomStore, reactionStore);
