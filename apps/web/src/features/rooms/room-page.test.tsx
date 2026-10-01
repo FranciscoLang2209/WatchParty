@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,9 +6,10 @@ import type { Session } from '@supabase/supabase-js';
 
 const API_BASE = 'https://api.watchparty.test';
 
-const { authMock, fromMock } = vi.hoisted(() => ({
+const { authMock, fromMock, subscribeMock } = vi.hoisted(() => ({
   authMock: { getSession: vi.fn(), onAuthStateChange: vi.fn(), signOut: vi.fn() },
   fromMock: vi.fn(),
+  subscribeMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase', () => ({ supabase: { auth: authMock, from: fromMock } }));
@@ -19,6 +20,7 @@ vi.mock('@/lib/env', () => ({
     apiBaseUrl: API_BASE,
   }),
 }));
+vi.mock('@/features/comments/realtime', () => ({ subscribeToRoomComments: subscribeMock }));
 
 const { AuthProvider } = await import('@/auth/AuthProvider');
 const { AppRoutes } = await import('@/app/router');
@@ -40,9 +42,26 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-/** Cada llamada devuelve una `Response` nueva: el cuerpo se consume una sola vez. */
+const COMENTARIOS_URL = `${API_BASE}/rooms/room-123/comments`;
+
+/**
+ * La lista de comentarios pide su propia URL: se responde vacía para que las
+ * pruebas de la sala no dependan de ella.
+ */
 function responderCon(body: unknown, status = 200) {
-  fetchSpy.mockImplementation(() => Promise.resolve(jsonResponse(body, status)));
+  fetchSpy.mockImplementation((input: unknown) =>
+    Promise.resolve(
+      String(input).endsWith('/comments')
+        ? jsonResponse({ comments: [] })
+        : jsonResponse(body, status),
+    ),
+  );
+}
+
+function llamadasA(url: string): [string, RequestInit][] {
+  return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
+    ([destino]) => String(destino) === url,
+  );
 }
 
 /** Simula navegar dentro de la SPA a otra sala sin pasar por otra pantalla. */
@@ -74,16 +93,6 @@ async function pantalla() {
   return within(await screen.findByRole('main'));
 }
 
-function ultimaUrl(): string {
-  const calls = fetchSpy.mock.calls;
-  return String((calls[calls.length - 1] as [string, RequestInit])[0]);
-}
-
-function ultimoInit(): RequestInit {
-  const calls = fetchSpy.mock.calls;
-  return (calls[calls.length - 1] as [string, RequestInit])[1];
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   fetchSpy = vi.spyOn(globalThis, 'fetch');
@@ -93,6 +102,7 @@ beforeEach(() => {
   authMock.onAuthStateChange.mockReturnValue({
     data: { subscription: { unsubscribe: vi.fn() } },
   });
+  subscribeMock.mockReturnValue(vi.fn());
 });
 
 afterEach(() => {
@@ -109,11 +119,12 @@ describe('Sala: éxito', () => {
       await p.findByRole('heading', { level: 1, name: 'Sala del partido' }),
     ).toBeInTheDocument();
     expect(p.getByText('room-123')).toBeInTheDocument();
-    expect(ultimaUrl()).toBe(`${API_BASE}/rooms/room-123`);
-    expect(ultimoInit().method).toBe('GET');
-    expect(new Headers(ultimoInit().headers).get('Authorization')).toBe(
-      `Bearer ${session.access_token}`,
-    );
+    const llamadas = llamadasA(`${API_BASE}/rooms/room-123`);
+    const [, init] = llamadas[0] as [string, RequestInit];
+
+    expect(llamadas).toHaveLength(1);
+    expect(init.method).toBe('GET');
+    expect(new Headers(init.headers).get('Authorization')).toBe(`Bearer ${session.access_token}`);
   });
 
   it('anuncia la carga', async () => {
@@ -134,15 +145,111 @@ describe('Sala: éxito', () => {
     expect(identificador.className).toMatch(/break-all/);
   });
 
-  it('no incluye formulario ni lista de comentarios', async () => {
+  it('muestra el formulario y la lista de comentarios de la sala', async () => {
     renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+
+    expect(await p.findByLabelText('Comentario')).toBeInTheDocument();
+    expect(
+      await p.findByText('Todavía no hay comentarios. Sé el primero en comentar la jugada.'),
+    ).toBeInTheDocument();
+
+    const llamadas = llamadasA(COMENTARIOS_URL);
+    const [, init] = llamadas[0] as [string, RequestInit];
+
+    expect(llamadas).toHaveLength(1);
+    expect(init.method).toBe('GET');
+    expect(new Headers(init.headers).get('Authorization')).toBe(`Bearer ${session.access_token}`);
+  });
+
+  it('un comentario publicado aparece en la lista sin recargar', async () => {
+    const user = userEvent.setup();
+    const creado = {
+      id: 'comentario-1',
+      roomId: 'room-123',
+      body: '¡Qué golazo!',
+      createdAt: '2026-09-24T21:00:00.000Z',
+    };
+
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    await p.findByText('Todavía no hay comentarios. Sé el primero en comentar la jugada.');
+
+    fetchSpy.mockImplementation(() => Promise.resolve(jsonResponse({ comment: creado }, 201)));
+
+    await user.type(p.getByLabelText('Comentario'), creado.body);
+    await user.click(p.getByRole('button', { name: 'Comentar' }));
+
+    expect(await p.findByText(creado.body)).toBeInTheDocument();
+  });
+
+  it('escucha los comentarios en vivo de la sala y cancela al salir', async () => {
+    const cancelar = vi.fn();
+    subscribeMock.mockReturnValue(cancelar);
+
+    const { unmount } = renderAt('/rooms/room-123');
 
     const p = await pantalla();
     await p.findByText('room-123');
 
-    expect(p.queryByRole('textbox')).not.toBeInTheDocument();
-    expect(p.queryByRole('list')).not.toBeInTheDocument();
-    expect(p.queryByText(/coment/i)).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(subscribeMock).toHaveBeenCalledWith('room-123', expect.any(Function)),
+    );
+    expect(cancelar).not.toHaveBeenCalled();
+
+    unmount();
+
+    expect(cancelar).toHaveBeenCalledTimes(1);
+  });
+
+  it('los comentarios que llegan en vivo aparecen todos, sin duplicarse', async () => {
+    const primero = {
+      id: 'comentario-1',
+      roomId: 'room-123',
+      body: '¡Qué golazo!',
+      createdAt: '2026-09-24T21:00:00.000Z',
+    };
+    const segundo = { ...primero, id: 'comentario-2', body: 'Increíble jugada' };
+
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    await p.findByText('Todavía no hay comentarios. Sé el primero en comentar la jugada.');
+    await waitFor(() => expect(subscribeMock).toHaveBeenCalled());
+
+    const [, recibir] = subscribeMock.mock.calls[0] as [string, (comentario: unknown) => void];
+
+    act(() => {
+      recibir(primero);
+      recibir(segundo);
+      recibir(primero);
+    });
+
+    expect(await p.findByText(primero.body)).toBeInTheDocument();
+    expect(p.getByText(segundo.body)).toBeInTheDocument();
+    expect(p.getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  it('si la lista responde 401 ofrece reingresar con el flujo de Auth', async () => {
+    const user = userEvent.setup();
+
+    fetchSpy.mockImplementation((input: unknown) =>
+      Promise.resolve(
+        String(input).endsWith('/comments')
+          ? jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401)
+          : jsonResponse({ room: sala }),
+      ),
+    );
+
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+
+    await user.click(await p.findByRole('button', { name: 'Iniciar sesión nuevamente' }));
+
+    expect(authMock.signOut).toHaveBeenCalledTimes(1);
   });
 
   it('redirige a /login sin sesión', async () => {
@@ -184,7 +291,7 @@ describe('Sala: estados alternativos', () => {
 
     expect(await p.findByText('room-123')).toBeInTheDocument();
     expect(p.queryByRole('alert')).not.toBeInTheDocument();
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(llamadasA(`${API_BASE}/rooms/room-123`)).toHaveLength(2);
   });
 
   it('una caída de red se anuncia como error recuperable', async () => {
@@ -242,5 +349,18 @@ describe('Sala: estados alternativos', () => {
 
     expect(await p.findByText('No encontramos esa sala.')).toBeInTheDocument();
     expect(p.queryByText('room-123')).not.toBeInTheDocument();
+  });
+
+  it('no monta comentarios si la sala no existe', async () => {
+    responderCon({ error: { code: 'NOT_FOUND', message: 'Recurso no encontrado.' } }, 404);
+
+    renderAt('/rooms/desconocida');
+
+    const p = await pantalla();
+    await p.findByText('No encontramos esa sala.');
+
+    expect(p.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(llamadasA(`${API_BASE}/rooms/desconocida/comments`)).toHaveLength(0);
+    expect(subscribeMock).not.toHaveBeenCalled();
   });
 });

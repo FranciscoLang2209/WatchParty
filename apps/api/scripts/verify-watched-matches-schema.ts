@@ -5,8 +5,8 @@ import {
   getTempUserAccessToken,
 } from './utils/supabase-clients.js';
 import { printResults } from './utils/db-checks.js';
-import { checkCommentConstraints } from './checks/comment-constraints-checks.js';
-import { checkCommentReactions } from './checks/comment-reactions-checks.js';
+import { checkWatchedMatchesConstraints } from './checks/watched-matches-constraints-checks.js';
+import { checkWatchedMatchesRls } from './checks/watched-matches-rls-checks.js';
 
 async function main(): Promise<void> {
   const adminClient = createServiceRoleClient();
@@ -14,12 +14,12 @@ async function main(): Promise<void> {
   const accessToken = await getTempUserAccessToken();
   const authenticatedClient = createAuthenticatedClient(accessToken);
 
-  const constraintResults = await checkCommentConstraints(adminClient);
-  const reactionResults = await checkCommentReactions(adminClient, anonClient, authenticatedClient);
-  const results = [...constraintResults, ...reactionResults];
+  const results = [
+    ...(await checkWatchedMatchesConstraints(adminClient)),
+    ...(await checkWatchedMatchesRls(anonClient, authenticatedClient, adminClient)),
+  ];
 
   const allPassed = printResults(results);
-
   process.exitCode = allPassed ? 0 : 1;
 }
 

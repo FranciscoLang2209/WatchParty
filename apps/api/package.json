@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": "24.19.0"
+    "node": "24.x"
   },
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/server.ts",
@@ -16,6 +16,7 @@
     "verify:sports-data": "tsx --env-file-if-exists=.env scripts/verify-sports-data-schema.ts",
     "verify:profiles": "tsx --env-file-if-exists=.env scripts/verify-profiles-schema.ts",
     "verify:comments": "tsx --env-file-if-exists=.env scripts/verify-comments-schema.ts",
+    "verify:watched-matches": "tsx --env-file-if-exists=.env scripts/verify-watched-matches-schema.ts",
     "matches:sync": "tsx --env-file-if-exists=.env src/scripts/sync-matches.ts",
     "test": "vitest run"
   },

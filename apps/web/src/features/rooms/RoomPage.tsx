@@ -5,6 +5,10 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { getRoom } from './api';
 import { RoomsApiError, isCancelled, type PublicRoom } from './types';
+import { CommentForm } from '@/features/comments/CommentForm';
+import { CommentList } from '@/features/comments/CommentList';
+import type { RoomComment } from '@/features/comments/types';
+import { subscribeToRoomComments } from '@/features/comments/realtime';
 
 type Estado =
   | { status: 'loading' }
@@ -45,6 +49,16 @@ function Sala({ roomId }: { roomId: string }) {
 
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
+  const [nuevosComentarios, setNuevosComentarios] = useState<RoomComment[]>([]);
+
+  // Un mismo comentario puede llegar dos veces (el form y el canal en vivo):
+  // se acumula por `id` con una actualización funcional, así varios eventos
+  // seguidos no se pisan entre sí.
+  const agregarComentario = useCallback((comentario: RoomComment) => {
+    setNuevosComentarios((actuales) =>
+      actuales.some((actual) => actual.id === comentario.id) ? actuales : [...actuales, comentario],
+    );
+  }, []);
 
   useEffect(() => {
     // Sin token no hay nada que pedir: el guard de rutas privadas se encarga.
@@ -70,6 +84,14 @@ function Sala({ roomId }: { roomId: string }) {
     };
   }, [roomId, accessToken, intento]);
 
+  // La escucha en vivo sólo existe con la sala lista y se cancela al salir o
+  // al pasar a otra sala (Realtime, docs/decisions/realtime-comments.md).
+  useEffect(() => {
+    if (estado.status !== 'ready') return;
+
+    return subscribeToRoomComments(roomId, agregarComentario);
+  }, [roomId, estado.status, agregarComentario]);
+
   const reintentar = useCallback(() => {
     setEstado({ status: 'loading' });
     setIntento((valor) => valor + 1);
@@ -93,6 +115,25 @@ function Sala({ roomId }: { roomId: string }) {
             <p className="text-sm text-muted-foreground">Identificador de sala</p>
             <p className="min-w-0 font-mono text-sm break-all">{estado.room.id}</p>
           </Card>
+        ) : null}
+
+        {estado.status === 'ready' && accessToken !== null ? (
+          <div className="flex flex-col gap-4">
+            <h2 className="text-lg font-semibold">Comentarios</h2>
+
+            <CommentForm
+              roomId={roomId}
+              accessToken={accessToken}
+              onCommentCreated={agregarComentario}
+            />
+
+            <CommentList
+              roomId={roomId}
+              accessToken={accessToken}
+              newComments={nuevosComentarios}
+              onSessionExpired={() => void signOut()}
+            />
+          </div>
         ) : null}
 
         {estado.status === 'not-found' ? (
