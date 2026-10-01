@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { RoomComment } from '../domain/room-comment.js';
 import {
+  CURSOR_TIMESTAMP_PATTERN,
   UUID_PATTERN,
   type CreateRoomCommentInput,
   type ListRoomCommentsPageOptions,
@@ -23,14 +24,6 @@ const COMMENT_SELECT = 'id, room_id, body, created_at';
 
 const POSTGRES_UNIQUE_VIOLATION = '23505';
 const POSTGRES_INVALID_TEXT_REPRESENTATION = '22P02';
-
-// Timestamp tal como lo devuelve Postgres/PostgREST para timestamptz, con
-// hasta 6 decimales (microsegundos) y zona horaria. Se valida antes de
-// interpolarlo en el filtro `.or(...)` de PostgREST: ese filtro es un string
-// con `,` y `()` como sintaxis, así que un cursor sin validar podría alterar
-// la consulta, no solo fallar.
-const CURSOR_TIMESTAMP_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
 
 interface RoomCommentRow {
   id: string;
