@@ -47,7 +47,9 @@ function buildTestApp(catalog: MatchCatalog) {
 const MATCH: Match = {
   id: 'aaa',
   homeTeam: 'Real Madrid',
+  homeTeamId: 'team-real-madrid',
   awayTeam: 'FC Barcelona',
+  awayTeamId: 'team-fc-barcelona',
   kickoffAt: '2026-09-06T21:00:00.000Z',
   status: 'scheduled',
 };
@@ -68,7 +70,7 @@ describe('GET /matches/:matchId', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ match: MATCH });
     expect(Object.keys(response.body.match).sort()).toEqual(
-      ['id', 'homeTeam', 'awayTeam', 'kickoffAt', 'status'].sort(),
+      ['id', 'homeTeam', 'homeTeamId', 'awayTeam', 'awayTeamId', 'kickoffAt', 'status'].sort(),
     );
   });
 

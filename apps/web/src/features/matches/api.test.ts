@@ -12,7 +12,9 @@ vi.mock('../../lib/env', () => ({ readWebEnv: envMock }));
 const partido = {
   id: 'match-1',
   homeTeam: 'River Plate',
+  homeTeamId: 'team-river-plate',
   awayTeam: 'Boca Juniors',
+  awayTeamId: 'team-boca-juniors',
   kickoffAt: '2026-09-06T21:00:00Z',
   status: 'scheduled',
 };
@@ -105,6 +107,12 @@ describe('listMatches', () => {
 
   it('rechaza un estado que no es del dominio en vez de dejarlo pasar', async () => {
     respondWith({ matches: [{ ...partido, status: 'halftime' }] });
+
+    await expect(listMatches(TOKEN)).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it('rechaza un partido sin los ids de sus equipos', async () => {
+    respondWith({ matches: [{ ...partido, homeTeamId: undefined }] });
 
     await expect(listMatches(TOKEN)).rejects.toMatchObject({ kind: 'server' });
   });

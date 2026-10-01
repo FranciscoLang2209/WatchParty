@@ -9,7 +9,15 @@ const PROVIDER = 'verify-script-store';
 const EXTERNAL_MATCH_ID = 'verify-store-match-1';
 const HOME_TEAM_EXTERNAL_ID = 'verify-store-team-a';
 const AWAY_TEAM_EXTERNAL_ID = 'verify-store-team-b';
-const CANONICAL_MATCH_FIELDS = ['id', 'homeTeam', 'awayTeam', 'kickoffAt', 'status'];
+const CANONICAL_MATCH_FIELDS = [
+  'id',
+  'homeTeam',
+  'homeTeamId',
+  'awayTeam',
+  'awayTeamId',
+  'kickoffAt',
+  'status',
+];
 
 // Externa a las anteriores a propósito: nunca la usa ningún otro check de
 // este archivo, así que si aparece una fila para este external_id después

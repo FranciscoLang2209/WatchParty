@@ -28,7 +28,9 @@ const session = { access_token: 'token-123', user: { id: 'user-1', email: 'a@b.c
 const partido = {
   id: 'match-001',
   homeTeam: 'River Plate',
+  homeTeamId: 'team-river-plate',
   awayTeam: 'Boca Juniors',
+  awayTeamId: 'team-boca-juniors',
   kickoffAt: '2026-09-06T21:00:00Z',
   status: 'scheduled',
 };

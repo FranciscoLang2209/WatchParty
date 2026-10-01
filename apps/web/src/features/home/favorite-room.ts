@@ -1,10 +1,7 @@
 import type { Match } from '@/features/matches/types';
-import type { TeamOption } from '@/features/profiles/types';
 
 export interface FavoriteMatchInput {
   favoriteTeamId: string | null;
-  /** Directorio de equipos: traduce el id del favorito al nombre que usa el catálogo. */
-  teams: readonly TeamOption[];
   matches: readonly Match[];
   /** Hora actual inyectada: la función no lee el reloj para ser determinista. */
   now: Date;
@@ -26,27 +23,18 @@ function earliest(matches: Match[]): Match | null {
  * inicio más temprano o, si no hay, el `scheduled` más cercano que todavía no
  * empezó. En cualquier otro caso, `null`.
  *
- * El contrato de partidos trae nombres de equipo, no ids: el favorito se
- * relaciona por el nombre que le asigna el directorio de equipos. Es pura: sin
- * I/O y sin modificar sus argumentos.
- *
- * Limitación conocida: `teams.name` no es único, así que un equipo homónimo del
- * favorito se toma como propio y puede devolverse un partido ajeno. Se resuelve
- * comparando por id cuando `Match` exponga `homeTeamId` y `awayTeamId`.
+ * El favorito se relaciona por id y no por nombre, porque `teams.name` no es
+ * único. Es pura: sin I/O y sin modificar sus argumentos.
  */
 export function findFavoriteMatch({
   favoriteTeamId,
-  teams,
   matches,
   now,
 }: FavoriteMatchInput): Match | null {
   if (favoriteTeamId === null) return null;
 
-  const favorite = teams.find((team) => team.id === favoriteTeamId);
-  if (favorite === undefined) return null;
-
   const favoriteMatches = matches.filter(
-    (match) => match.homeTeam === favorite.name || match.awayTeam === favorite.name,
+    (match) => match.homeTeamId === favoriteTeamId || match.awayTeamId === favoriteTeamId,
   );
 
   const live = earliest(favoriteMatches.filter((match) => match.status === 'live'));

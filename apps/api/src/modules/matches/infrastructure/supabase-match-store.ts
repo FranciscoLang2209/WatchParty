@@ -17,7 +17,7 @@ import { SupabaseProviderQuotaStore } from './supabase-provider-quota-store.js';
 // relación porque `matches` tiene dos FKs a `teams` y PostgREST no puede
 // adivinar cuál embeber en cada alias.
 const MATCH_SELECT_WITH_TEAMS =
-  'id, kickoff_at, status, home_team:teams!matches_home_team_id_fkey(name), away_team:teams!matches_away_team_id_fkey(name)';
+  'id, kickoff_at, status, home_team:teams!matches_home_team_id_fkey(id, name), away_team:teams!matches_away_team_id_fkey(id, name)';
 
 const MATCH_STATUSES: readonly MatchStatus[] = [
   'scheduled',
@@ -37,7 +37,8 @@ function isMatchStatus(value: string): value is MatchStatus {
   return (MATCH_STATUSES as readonly string[]).includes(value);
 }
 
-interface EmbeddedTeamName {
+interface EmbeddedTeam {
+  id: string;
   name: string;
 }
 
@@ -45,8 +46,8 @@ interface MatchRowWithTeams {
   id: string;
   kickoff_at: string;
   status: string;
-  home_team: EmbeddedTeamName | null;
-  away_team: EmbeddedTeamName | null;
+  home_team: EmbeddedTeam | null;
+  away_team: EmbeddedTeam | null;
 }
 
 function toMatch(row: MatchRowWithTeams): Match {
@@ -65,7 +66,9 @@ function toMatch(row: MatchRowWithTeams): Match {
   return {
     id: row.id,
     homeTeam: row.home_team.name,
+    homeTeamId: row.home_team.id,
     awayTeam: row.away_team.name,
+    awayTeamId: row.away_team.id,
     kickoffAt: new Date(row.kickoff_at).toISOString(),
     status: row.status,
   };
