@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
@@ -59,6 +59,10 @@ function Sala({ roomId }: { roomId: string }) {
   const [nuevosComentarios, setNuevosComentarios] = useState<RoomComment[]>([]);
   const [conexion, setConexion] = useState<Conexion>('connecting');
   const [intentoDeSuscripcion, setIntentoDeSuscripcion] = useState(0);
+  const [reconexiones, setReconexiones] = useState(0);
+  // Hubo una caída desde la última vez que la escucha estuvo operativa: los
+  // comentarios de ese intervalo no llegaron por el canal.
+  const huboCaida = useRef(false);
 
   // Un mismo comentario puede llegar dos veces (el form y el canal en vivo):
   // se acumula por `id` con una actualización funcional, así varios eventos
@@ -102,7 +106,17 @@ function Sala({ roomId }: { roomId: string }) {
     let vigente = true;
     const cancelar = subscribeToRoomComments(roomId, agregarComentario, {
       onStatusChange: (status) => {
-        if (vigente) setConexion(status);
+        if (!vigente) return;
+
+        setConexion(status);
+
+        if (status === 'disconnected') {
+          huboCaida.current = true;
+        } else if (huboCaida.current) {
+          // Volvió la conexión: se recarga la lista para recuperar lo perdido.
+          huboCaida.current = false;
+          setReconexiones((valor) => valor + 1);
+        }
       },
     });
 
@@ -179,6 +193,7 @@ function Sala({ roomId }: { roomId: string }) {
               roomId={roomId}
               accessToken={accessToken}
               newComments={nuevosComentarios}
+              reloadSignal={reconexiones}
               onSessionExpired={() => void signOut()}
             />
           </div>

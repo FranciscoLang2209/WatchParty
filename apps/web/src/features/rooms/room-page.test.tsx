@@ -406,6 +406,136 @@ describe('Sala: conexión de los comentarios en vivo', () => {
   });
 });
 
+describe('Sala: reconciliación de comentarios al reconectar', () => {
+  const previo = {
+    id: 'comentario-1',
+    roomId: 'room-123',
+    body: 'Llegó antes de la caída',
+    createdAt: '2026-09-24T21:00:00.000Z',
+  };
+  const perdido = {
+    id: 'comentario-2',
+    roomId: 'room-123',
+    body: 'Se publicó durante la caída',
+    createdAt: '2026-09-24T21:01:00.000Z',
+  };
+  const posterior = {
+    id: 'comentario-3',
+    roomId: 'room-123',
+    body: 'Llegó en vivo después de reconectar',
+    createdAt: '2026-09-24T21:02:00.000Z',
+  };
+
+  function avisarConexion(estado: 'connected' | 'disconnected', indice = 0) {
+    const [, , opciones] = subscribeMock.mock.calls[indice] as [
+      string,
+      unknown,
+      { onStatusChange: (estado: string) => void },
+    ];
+
+    act(() => opciones.onStatusChange(estado));
+  }
+
+  function recibirEnVivo(comentario: unknown, indice = 0) {
+    const [, recibir] = subscribeMock.mock.calls[indice] as [string, (c: unknown) => void];
+
+    act(() => recibir(comentario));
+  }
+
+  /** A partir de acá, la lista REST de la sala responde con estos comentarios. */
+  function responderComentarios(comments: unknown[]) {
+    fetchSpy.mockImplementation((input: unknown) =>
+      Promise.resolve(
+        String(input).endsWith('/comments')
+          ? jsonResponse({ comments })
+          : jsonResponse({ room: sala }),
+      ),
+    );
+  }
+
+  async function abrirSala() {
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    await p.findByText('Todavía no hay comentarios. Sé el primero en comentar la jugada.');
+    await waitFor(() => expect(subscribeMock).toHaveBeenCalledTimes(1));
+
+    return p;
+  }
+
+  it('la primera conexión no vuelve a pedir los comentarios', async () => {
+    await abrirSala();
+
+    avisarConexion('connected');
+
+    expect(llamadasA(COMENTARIOS_URL)).toHaveLength(1);
+  });
+
+  it('al recuperar la conexión vuelve a cargar los comentarios de la sala, una sola vez', async () => {
+    await abrirSala();
+
+    avisarConexion('connected');
+    avisarConexion('disconnected');
+    avisarConexion('connected');
+
+    await waitFor(() => expect(llamadasA(COMENTARIOS_URL)).toHaveLength(2));
+    const [, init] = llamadasA(COMENTARIOS_URL)[1] as [string, RequestInit];
+
+    expect(init.method).toBe('GET');
+    expect(new Headers(init.headers).get('Authorization')).toBe(`Bearer ${session.access_token}`);
+    // La sala no se vuelve a pedir: sólo los comentarios.
+    expect(llamadasA(`${API_BASE}/rooms/room-123`)).toHaveLength(1);
+  });
+
+  it('también recarga cuando la conexión vuelve por un reintento', async () => {
+    const user = userEvent.setup();
+    const p = await abrirSala();
+
+    avisarConexion('disconnected');
+    await user.click(p.getByRole('button', { name: 'Reintentar' }));
+
+    expect(llamadasA(COMENTARIOS_URL)).toHaveLength(1);
+
+    avisarConexion('connected', 1);
+
+    await waitFor(() => expect(llamadasA(COMENTARIOS_URL)).toHaveLength(2));
+  });
+
+  it('fusiona por id: el repetido queda una vez, el perdido aparece y el orden es cronológico', async () => {
+    const p = await abrirSala();
+
+    avisarConexion('connected');
+    recibirEnVivo(previo);
+    avisarConexion('disconnected');
+
+    responderComentarios([previo, perdido]);
+    avisarConexion('connected');
+    recibirEnVivo(posterior);
+
+    expect(await p.findByText(perdido.body)).toBeInTheDocument();
+    expect(p.getAllByRole('listitem').map((item) => item.querySelector('p')?.textContent)).toEqual([
+      previo.body,
+      perdido.body,
+      posterior.body,
+    ]);
+  });
+
+  it('el borrador sin enviar no cambia durante la reconciliación', async () => {
+    const user = userEvent.setup();
+    const p = await abrirSala();
+
+    avisarConexion('connected');
+    await user.type(p.getByLabelText('Comentario'), 'Borrador sin enviar');
+    avisarConexion('disconnected');
+
+    responderComentarios([perdido]);
+    avisarConexion('connected');
+
+    expect(await p.findByText(perdido.body)).toBeInTheDocument();
+    expect(p.getByLabelText('Comentario')).toHaveValue('Borrador sin enviar');
+  });
+});
+
 describe('Sala: estados alternativos', () => {
   it('un 404 se comunica como sala inexistente, no como error recuperable', async () => {
     responderCon({ error: { code: 'NOT_FOUND', message: 'Recurso no encontrado.' } }, 404);
