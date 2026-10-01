@@ -192,6 +192,29 @@ describe('CommentList: comentario nuevo desde el form', () => {
     expect(items[1]).toHaveTextContent(COMMENT_2.body);
   });
 
+  it('ubica en su lugar cronológico un newComment anterior a uno ya visible', async () => {
+    const COMMENT_3: RoomComment = {
+      id: 'c3333333-3333-4333-8333-333333333333',
+      roomId: ROOM_ID,
+      body: 'Tercer comentario',
+      createdAt: '2026-09-19T12:10:00.000Z',
+    };
+
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1, COMMENT_3] }));
+
+    const { rerender } = renderList();
+    await screen.findByText(COMMENT_3.body);
+
+    rerender(<CommentList roomId={ROOM_ID} accessToken={TOKEN} newComments={[COMMENT_2]} />);
+
+    const items = within(await screen.findByRole('list')).getAllByRole('listitem');
+
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveTextContent(COMMENT_1.body);
+    expect(items[1]).toHaveTextContent(COMMENT_2.body);
+    expect(items[2]).toHaveTextContent(COMMENT_3.body);
+  });
+
   it('no duplica si newComment ya está en la lista', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1, COMMENT_2] }));
 

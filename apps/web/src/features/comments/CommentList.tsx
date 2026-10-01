@@ -9,8 +9,8 @@ export interface CommentListProps {
   accessToken: string;
   /**
    * Comentarios nuevos, de a uno o varios: los que crea `CommentForm` y los
-   * que llegan por Realtime. Se suman al final de la lista local sin volver a
-   * pedirle nada al servidor, y sólo los que su `id` todavía no está en ella.
+   * que llegan por Realtime. Se fusionan por `id` con la lista local sin
+   * volver a pedirle nada al servidor, cada uno en su lugar cronológico.
    * Quien los acumula y conecta es la pantalla de sala.
    */
   newComments?: RoomComment[];
@@ -67,9 +67,9 @@ function formatFecha(iso: string): string {
  * reordena. Si vuelve a pedirla con la lista de esa misma sala ya visible
  * (por `reloadSignal`), fusiona la respuesta con ella en vez de reemplazarla,
  * y un fallo de esa recarga no tapa lo que ya se ve. `newComments` es la puerta de entrada para lo que crea
- * `CommentForm` y lo que llega por Realtime: se agregan al final sólo si su
- * id` todavía no está en la lista, así un mismo valor recibido dos veces no
- * duplica nada.
+ * `CommentForm` y lo que llega por Realtime: se fusionan por `id` con la
+ * lista, así un mismo valor recibido dos veces no duplica nada y uno que
+ * llega fuera de orden queda en su lugar cronológico.
  */
 export function CommentList({
   roomId,
@@ -152,12 +152,10 @@ export function CommentList({
     );
   }
 
-  // Acá estado.status === 'ready'. Los nuevos se superponen sin duplicar:
-  // no se guardan, se calcula qué mostrar en cada render.
-  const nuevos = newComments.filter(
-    (nuevo) => !estado.comments.some((comment) => comment.id === nuevo.id),
-  );
-  const comentarios = nuevos.length > 0 ? [...estado.comments, ...nuevos] : estado.comments;
+  // Acá estado.status === 'ready'. Los nuevos se fusionan sin duplicar y en
+  // orden cronológico: no se guardan, se calcula qué mostrar en cada render.
+  const comentarios =
+    newComments.length > 0 ? mergeComments(estado.comments, newComments) : estado.comments;
 
   if (comentarios.length === 0) {
     return <p className="text-sm text-muted-foreground">{MENSAJE_VACIO}</p>;
