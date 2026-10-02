@@ -57,6 +57,11 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const COMENTARIOS_URL = `${API_BASE}/rooms/room-123/comments`;
 
+/** La lista de comentarios, con o sin parámetros de paginación. */
+function esComentarios(input: unknown): boolean {
+  return new URL(String(input)).pathname.endsWith('/comments');
+}
+
 function esPartido(input: unknown): boolean {
   return String(input).startsWith(`${API_BASE}/matches/`);
 }
@@ -71,16 +76,17 @@ function responderCon(body: unknown, status = 200) {
     Promise.resolve(
       esPartido(input)
         ? jsonResponse({ match: partido })
-        : String(input).endsWith('/comments')
+        : esComentarios(input)
           ? jsonResponse({ comments: [] })
           : jsonResponse(body, status),
     ),
   );
 }
 
+/** Llamadas a una URL, sin distinguir su query string (la lista pagina con `?limit=`). */
 function llamadasA(url: string): [string, RequestInit][] {
   return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
-    ([destino]) => String(destino) === url,
+    ([destino]) => String(destino).split('?')[0] === url,
   );
 }
 
@@ -250,7 +256,7 @@ describe('Sala: éxito', () => {
       Promise.resolve(
         esPartido(input)
           ? jsonResponse({ match: partido })
-          : String(input).endsWith('/comments')
+          : esComentarios(input)
             ? jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401)
             : jsonResponse({ room: sala }),
       ),
@@ -459,7 +465,7 @@ describe('Sala: reconciliación de comentarios al reconectar', () => {
       Promise.resolve(
         esPartido(input)
           ? jsonResponse({ match: partido })
-          : String(input).endsWith('/comments')
+          : esComentarios(input)
             ? jsonResponse({ comments })
             : jsonResponse({ room: sala }),
       ),
@@ -549,6 +555,49 @@ describe('Sala: reconciliación de comentarios al reconectar', () => {
   });
 });
 
+describe('Sala: paginación de comentarios', () => {
+  const primero = {
+    id: 'c1111111-1111-4111-8111-111111111111',
+    roomId: 'room-123',
+    body: 'Primer comentario',
+    createdAt: '2026-09-24T21:00:00.000Z',
+  };
+  const segundo = {
+    id: 'c2222222-2222-4222-8222-222222222222',
+    roomId: 'room-123',
+    body: 'Segundo comentario',
+    createdAt: '2026-09-24T21:01:00.000Z',
+  };
+  const cursor = { createdAt: '2026-09-24T21:00:00.123456+00:00', id: primero.id };
+
+  it('cargar más comentarios trae la página siguiente y conserva el borrador', async () => {
+    const user = userEvent.setup();
+    fetchSpy.mockImplementation((input: unknown) => {
+      if (esPartido(input)) return Promise.resolve(jsonResponse({ match: partido }));
+      if (!esComentarios(input)) return Promise.resolve(jsonResponse({ room: sala }));
+
+      return Promise.resolve(
+        new URL(String(input)).searchParams.get('beforeId') === cursor.id
+          ? jsonResponse({ comments: [segundo], nextCursor: null })
+          : jsonResponse({ comments: [primero], nextCursor: cursor }),
+      );
+    });
+
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    await p.findByText(primero.body);
+    await user.type(p.getByLabelText('Comentario'), 'Borrador sin enviar');
+    await user.click(p.getByRole('button', { name: 'Cargar más comentarios' }));
+
+    expect(await p.findByText(segundo.body)).toBeInTheDocument();
+    expect(p.getByText(primero.body)).toBeInTheDocument();
+    expect(p.getByLabelText('Comentario')).toHaveValue('Borrador sin enviar');
+    expect(p.queryByRole('button', { name: 'Cargar más comentarios' })).not.toBeInTheDocument();
+    expect(llamadasA(COMENTARIOS_URL)).toHaveLength(2);
+  });
+});
+
 describe('Sala: encabezado del partido', () => {
   const ERROR_PARTIDO = 'No pudimos cargar los datos del partido.';
   const REINTENTAR_PARTIDO = 'Reintentar la carga del partido';
@@ -559,7 +608,7 @@ describe('Sala: encabezado del partido', () => {
       Promise.resolve(
         esPartido(input)
           ? jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)
-          : String(input).endsWith('/comments')
+          : esComentarios(input)
             ? jsonResponse({ comments: [] })
             : jsonResponse({ room: sala }),
       ),
@@ -684,7 +733,7 @@ describe('Sala: encabezado del partido', () => {
       if (url === `${API_BASE}/matches/match-002`) {
         return Promise.resolve(jsonResponse({ match: otroPartido }));
       }
-      if (url.endsWith('/comments')) return Promise.resolve(jsonResponse({ comments: [] }));
+      if (esComentarios(url)) return Promise.resolve(jsonResponse({ comments: [] }));
 
       return Promise.resolve(
         jsonResponse({ room: url.endsWith('/rooms/desconocida') ? otraSala : sala }),

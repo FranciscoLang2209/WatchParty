@@ -48,6 +48,27 @@ export interface CommentsEnvelope {
 }
 
 /**
+ * Posición desde la que sigue la página siguiente (WAT-174). Es opaco: lo
+ * arma el servidor y se devuelve tal cual, sin construirlo ni interpretarlo.
+ * `createdAt` no es el `createdAt` del comentario: trae la precisión de la base.
+ */
+export interface CommentsCursor {
+  createdAt: string;
+  id: string;
+}
+
+/** Una página de comentarios. `nextCursor` es `null` cuando no quedan más. */
+export interface CommentsPage {
+  comments: RoomComment[];
+  nextCursor: CommentsCursor | null;
+}
+
+export interface CommentsPageEnvelope {
+  comments: RoomComment[];
+  nextCursor?: CommentsCursor | null;
+}
+
+/**
  * Motivo por el que falló una consulta.
  *
  * `cancelled` nunca se le muestra a la persona, `unauthorized` reingresa por

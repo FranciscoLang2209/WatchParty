@@ -58,6 +58,8 @@ function renderList(props: Partial<CommentListProps> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Descarta también las respuestas `Once` que una prueba haya dejado sin usar.
+  fetchMock.mockReset();
   envMock.mockReturnValue({
     supabaseUrl: 'https://supabase.test',
     supabaseAnonKey: 'anon',
@@ -87,7 +89,7 @@ describe('CommentList: carga', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
 
-    expect(url).toBe(`${API_BASE}/rooms/${ROOM_ID}/comments`);
+    expect(url).toBe(`${API_BASE}/rooms/${ROOM_ID}/comments?limit=20`);
     expect(init.method).toBe('GET');
     expect(new Headers(init.headers).get('Authorization')).toBe(`Bearer ${TOKEN}`);
   });
@@ -262,6 +264,185 @@ describe('CommentList: cancelación', () => {
     unmount();
 
     expect(init.signal?.aborted).toBe(true);
+  });
+});
+
+describe('CommentList: paginación', () => {
+  const CARGAR_MAS = 'Cargar más comentarios';
+  const ERROR_MAS = 'No pudimos cargar más comentarios. Intentá de nuevo.';
+  const COMMENT_3: RoomComment = {
+    id: 'c3333333-3333-4333-8333-333333333333',
+    roomId: ROOM_ID,
+    body: 'Tercer comentario',
+    createdAt: '2026-09-19T12:10:00.000Z',
+  };
+  const CURSOR_1 = { createdAt: '2026-09-19T12:00:00.123456+00:00', id: COMMENT_1.id };
+  const CURSOR_2 = { createdAt: '2026-09-19T12:05:00.123456+00:00', id: COMMENT_2.id };
+
+  function textos(): (string | null)[] {
+    return within(screen.getByRole('list'))
+      .getAllByRole('listitem')
+      .map((item) => item.querySelector('p')?.textContent ?? null);
+  }
+
+  function urlDeLlamada(indice: number): URL {
+    return new URL(fetchMock.mock.calls[indice]![0] as string);
+  }
+
+  /** Abre la lista con una primera página que deja más comentarios por cargar. */
+  async function abrirConMasPorCargar(props: Partial<CommentListProps> = {}) {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ comments: [COMMENT_1], nextCursor: CURSOR_1 }));
+    const vista = renderList(props);
+    await screen.findByText(COMMENT_1.body);
+
+    return vista;
+  }
+
+  it('la primera página pide 20 comentarios y ofrece cargar más si hay cursor', async () => {
+    await abrirConMasPorCargar();
+
+    expect(urlDeLlamada(0).searchParams.get('limit')).toBe('20');
+    expect(urlDeLlamada(0).searchParams.has('beforeId')).toBe(false);
+    expect(screen.getByRole('button', { name: CARGAR_MAS })).toBeInTheDocument();
+  });
+
+  it('sin cursor no ofrece cargar más', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1], nextCursor: null }));
+
+    renderList();
+    await screen.findByText(COMMENT_1.body);
+
+    expect(screen.queryByRole('button', { name: CARGAR_MAS })).not.toBeInTheDocument();
+  });
+
+  it('cargar más pide la página siguiente con el cursor y la suma en orden', async () => {
+    const { user } = await abrirConMasPorCargar();
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ comments: [COMMENT_2], nextCursor: CURSOR_2 }));
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+
+    await screen.findByText(COMMENT_2.body);
+    expect(textos()).toEqual([COMMENT_1.body, COMMENT_2.body]);
+    expect(urlDeLlamada(1).searchParams.get('limit')).toBe('20');
+    expect(urlDeLlamada(1).searchParams.get('beforeCreatedAt')).toBe(CURSOR_1.createdAt);
+    expect(urlDeLlamada(1).searchParams.get('beforeId')).toBe(CURSOR_1.id);
+    // Queda otra página: la acción sigue disponible y usa el cursor nuevo.
+    fetchMock.mockResolvedValueOnce(jsonResponse({ comments: [COMMENT_3], nextCursor: null }));
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+
+    await screen.findByText(COMMENT_3.body);
+    expect(urlDeLlamada(2).searchParams.get('beforeId')).toBe(CURSOR_2.id);
+  });
+
+  it('al llegar al final oculta la acción', async () => {
+    const { user } = await abrirConMasPorCargar();
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ comments: [COMMENT_2], nextCursor: null }));
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+
+    await screen.findByText(COMMENT_2.body);
+    expect(screen.queryByRole('button', { name: CARGAR_MAS })).not.toBeInTheDocument();
+  });
+
+  it('bloquea pedidos simultáneos: dos clics seguidos piden una sola página', async () => {
+    const { user } = await abrirConMasPorCargar();
+    let responder: (response: Response) => void = () => {};
+    fetchMock.mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        responder = resolve;
+      }),
+    );
+
+    const boton = screen.getByRole('button', { name: CARGAR_MAS });
+    await user.click(boton);
+    await user.click(boton);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(boton).toHaveAttribute('aria-disabled', 'true');
+
+    responder(jsonResponse({ comments: [COMMENT_2], nextCursor: null }));
+
+    await screen.findByText(COMMENT_2.body);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('si falla conserva los comentarios y el cursor, avisa y permite reintentar', async () => {
+    const { user } = await abrirConMasPorCargar();
+
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(ERROR_MAS);
+    expect(textos()).toEqual([COMMENT_1.body]);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ comments: [COMMENT_2], nextCursor: null }));
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+
+    await screen.findByText(COMMENT_2.body);
+    expect(textos()).toEqual([COMMENT_1.body, COMMENT_2.body]);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    // El reintento usa el mismo cursor que el pedido fallido.
+    expect(urlDeLlamada(2).searchParams.get('beforeId')).toBe(CURSOR_1.id);
+    expect(urlDeLlamada(2).searchParams.get('beforeCreatedAt')).toBe(CURSOR_1.createdAt);
+  });
+
+  it('si cargar más responde 401 ofrece reingresar', async () => {
+    const { user, onSessionExpired } = await abrirConMasPorCargar();
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: { code: 'UNAUTHORIZED' } }, 401));
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+    await user.click(await screen.findByRole('button', { name: 'Iniciar sesión nuevamente' }));
+
+    expect(onSessionExpired).toHaveBeenCalledTimes(1);
+  });
+
+  it('un comentario que llega por Realtime y también en la página queda una sola vez', async () => {
+    const { user, rerender } = await abrirConMasPorCargar();
+    rerender(<CommentList roomId={ROOM_ID} accessToken={TOKEN} newComments={[COMMENT_3]} />);
+    await screen.findByText(COMMENT_3.body);
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ comments: [COMMENT_2, COMMENT_3], nextCursor: null }),
+    );
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+
+    await screen.findByText(COMMENT_2.body);
+    expect(textos()).toEqual([COMMENT_1.body, COMMENT_2.body, COMMENT_3.body]);
+  });
+
+  it('la recarga por reconexión pide la lista completa y oculta la paginación', async () => {
+    const { rerender } = await abrirConMasPorCargar();
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ comments: [COMMENT_1, COMMENT_2, COMMENT_3] }));
+    rerender(<CommentList roomId={ROOM_ID} accessToken={TOKEN} reloadSignal={1} />);
+
+    await screen.findByText(COMMENT_3.body);
+    expect(textos()).toEqual([COMMENT_1.body, COMMENT_2.body, COMMENT_3.body]);
+    // La recuperación es el listado completo de siempre: sin parámetros de página.
+    expect(urlDeLlamada(1).search).toBe('');
+    expect(screen.queryByRole('button', { name: CARGAR_MAS })).not.toBeInTheDocument();
+  });
+
+  it('una página pedida antes de la reconexión no vuelve a mostrar la paginación', async () => {
+    const { user, rerender } = await abrirConMasPorCargar();
+    let responderPagina: (response: Response) => void = () => {};
+    fetchMock.mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        responderPagina = resolve;
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ comments: [COMMENT_1, COMMENT_2, COMMENT_3] }));
+    rerender(<CommentList roomId={ROOM_ID} accessToken={TOKEN} reloadSignal={1} />);
+    await screen.findByText(COMMENT_3.body);
+
+    responderPagina(jsonResponse({ comments: [COMMENT_2], nextCursor: CURSOR_2 }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await Promise.resolve();
+    expect(textos()).toEqual([COMMENT_1.body, COMMENT_2.body, COMMENT_3.body]);
+    expect(screen.queryByRole('button', { name: CARGAR_MAS })).not.toBeInTheDocument();
   });
 });
 
