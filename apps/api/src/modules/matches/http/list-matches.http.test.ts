@@ -31,10 +31,14 @@ function buildCatalog(matches: readonly Match[]): MatchCatalog {
   };
 }
 
-function buildTestApp(catalog: MatchCatalog) {
+// Reloj controlado: «hoy» es el 6 de septiembre de 2026 en UTC.
+const NOW = new Date('2026-09-06T15:00:00.000Z');
+const WINDOW = { from: '2026-09-05T00:00:00.000Z', to: '2026-09-14T00:00:00.000Z' };
+
+function buildTestApp(catalog: MatchCatalog, now: () => Date = () => NOW) {
   const app = express();
 
-  app.use('/matches', createMatchesRouter(catalog));
+  app.use('/matches', createMatchesRouter(catalog, now));
   app.use(notFoundHandler);
   app.use(errorHandler);
 
@@ -107,6 +111,60 @@ describe('GET /matches', () => {
       'bbb',
       'zzz',
     ]);
+  });
+
+  it('pide al catálogo sólo la ventana móvil calculada con el reloj', async () => {
+    mockAuthenticated();
+    const list = vi.fn(async () => [MATCH_EARLY]);
+    const app = buildTestApp({ list, findById: vi.fn() });
+
+    await request(app).get('/matches').set('Authorization', 'Bearer good-token');
+
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledWith(WINDOW);
+  });
+
+  it('recalcula la ventana en cada pedido: al cambiar de mes pide la del nuevo día', async () => {
+    const list = vi.fn(async () => []);
+    let now = new Date('2026-09-30T23:59:59.000Z');
+    const app = buildTestApp({ list, findById: vi.fn() }, () => now);
+
+    mockAuthenticated();
+    await request(app).get('/matches').set('Authorization', 'Bearer good-token');
+    now = new Date('2026-10-01T00:00:00.000Z');
+    mockAuthenticated();
+    await request(app).get('/matches').set('Authorization', 'Bearer good-token');
+
+    expect(list.mock.calls).toEqual([
+      [{ from: '2026-09-29T00:00:00.000Z', to: '2026-10-08T00:00:00.000Z' }],
+      [{ from: '2026-09-30T00:00:00.000Z', to: '2026-10-09T00:00:00.000Z' }],
+    ]);
+  });
+
+  it('el detalle por id sigue respondiendo un partido que quedó fuera de la ventana', async () => {
+    const historico: Match = {
+      ...MATCH_EARLY,
+      id: 'historico',
+      kickoffAt: '2020-01-01T21:00:00.000Z',
+    };
+    const catalog: MatchCatalog = {
+      // Catálogo que respeta la ventana: el histórico no entra en el listado.
+      list: async ({ from, to }) =>
+        [historico].filter((match) => match.kickoffAt >= from && match.kickoffAt < to),
+      findById: async (id) => (id === historico.id ? historico : null),
+    };
+    const app = buildTestApp(catalog);
+
+    mockAuthenticated();
+    const listado = await request(app).get('/matches').set('Authorization', 'Bearer good-token');
+    mockAuthenticated();
+    const detalle = await request(app)
+      .get('/matches/historico')
+      .set('Authorization', 'Bearer good-token');
+
+    expect(listado.body).toEqual({ matches: [] });
+    expect(detalle.status).toBe(200);
+    expect(detalle.body).toEqual({ match: historico });
   });
 
   it('sin token no invoca el catálogo y responde 401 UNAUTHORIZED', async () => {

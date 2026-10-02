@@ -1,4 +1,5 @@
 import type { Match } from './match.js';
+import type { MatchWindow } from './match-window.js';
 import type { NormalizedMatchFixture } from './normalized-match-fixture.js';
 
 /**
@@ -44,7 +45,7 @@ export interface SyncAttemptSummary {
  * falla) y nunca "robar" un lease vigente ni cerrar uno vencido.
  */
 export interface MatchStore {
-  list(): Promise<readonly Match[]>;
+  list(window: MatchWindow): Promise<readonly Match[]>;
   findById(id: string): Promise<Match | null>;
 
   /**
