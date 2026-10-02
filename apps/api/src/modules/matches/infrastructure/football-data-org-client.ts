@@ -13,6 +13,12 @@ export interface FetchFootballDataOrgMatchesParams {
   competitionCode: string;
   /** Filtro de estado del proveedor, p. ej. "SCHEDULED". Opcional. */
   status?: string;
+  /** Temporada del proveedor (año de inicio), p. ej. "2026". Opcional. */
+  season?: string;
+  /** Primer día incluido, `YYYY-MM-DD` (UTC). Opcional. */
+  dateFrom?: string;
+  /** Último día incluido, `YYYY-MM-DD` (UTC). Opcional. */
+  dateTo?: string;
 }
 
 export type FootballDataOrgFetchOutcome =
@@ -55,6 +61,15 @@ export function createFootballDataOrgClient({
       const url = new URL(`/v4/competitions/${params.competitionCode}/matches`, baseUrl);
       if (params.status !== undefined) {
         url.searchParams.set('status', params.status);
+      }
+      if (params.season !== undefined) {
+        url.searchParams.set('season', params.season);
+      }
+      if (params.dateFrom !== undefined) {
+        url.searchParams.set('dateFrom', params.dateFrom);
+      }
+      if (params.dateTo !== undefined) {
+        url.searchParams.set('dateTo', params.dateTo);
       }
 
       try {
