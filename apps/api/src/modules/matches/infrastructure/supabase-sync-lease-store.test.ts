@@ -17,6 +17,109 @@ function asSupabaseClient(fakeClient: ReturnType<typeof makeFakeClient>): Supaba
 
 const SCOPE = { provider: 'api-football', competitionExternalId: 'liga-1', season: '2026' };
 
+describe('recordSyncResult() — resumen del intento (WAT-184)', () => {
+  const SUMMARY = { imported: 12, updated: 3, skipped: 2, errors: 1, queries: 4 };
+
+  it('envía las cantidades del resumen a la RPC', async () => {
+    const client = makeFakeClient();
+    const store = new SupabaseSyncLeaseStore(asSupabaseClient(client));
+
+    await store.recordSyncResult(SCOPE, 'token-1', true, { summary: SUMMARY });
+
+    expect(client.rpc).toHaveBeenCalledWith(
+      'record_provider_sync_result',
+      expect.objectContaining({
+        p_imported_count: 12,
+        p_updated_count: 3,
+        p_skipped_count: 2,
+        p_error_count: 1,
+        p_queries_count: 4,
+      }),
+    );
+  });
+
+  it('conserva los ceros (un intento sin novedades no es "sin resumen")', async () => {
+    const client = makeFakeClient();
+    const store = new SupabaseSyncLeaseStore(asSupabaseClient(client));
+
+    await store.recordSyncResult(SCOPE, 'token-1', true, {
+      summary: { imported: 0, updated: 0, skipped: 0, errors: 0, queries: 0 },
+    });
+
+    const [, params] = client.rpc.mock.calls[0]!;
+    expect(params).toMatchObject({
+      p_imported_count: 0,
+      p_updated_count: 0,
+      p_skipped_count: 0,
+      p_error_count: 0,
+      p_queries_count: 0,
+    });
+  });
+
+  it('sin summary, todas las cantidades viajan como null', async () => {
+    const client = makeFakeClient();
+    const store = new SupabaseSyncLeaseStore(asSupabaseClient(client));
+
+    await store.recordSyncResult(SCOPE, 'token-1', true);
+
+    const [, params] = client.rpc.mock.calls[0]!;
+    expect(params).toMatchObject({
+      p_imported_count: null,
+      p_updated_count: null,
+      p_skipped_count: null,
+      p_error_count: null,
+      p_queries_count: null,
+    });
+  });
+
+  it('un contador inválido (negativo, decimal o NaN) se guarda como null sin romper el cierre', async () => {
+    const client = makeFakeClient();
+    const store = new SupabaseSyncLeaseStore(asSupabaseClient(client));
+
+    await store.recordSyncResult(SCOPE, 'token-1', true, {
+      summary: { imported: -1, updated: 1.5, skipped: Number.NaN, errors: 2, queries: 3 },
+    });
+
+    const [, params] = client.rpc.mock.calls[0]!;
+    expect(params).toMatchObject({
+      p_imported_count: null,
+      p_updated_count: null,
+      p_skipped_count: null,
+      p_error_count: 2,
+      p_queries_count: 3,
+    });
+  });
+
+  it('en un fallo manda resumen y error sanitizado juntos, con el token del lease', async () => {
+    const client = makeFakeClient();
+    const store = new SupabaseSyncLeaseStore(asSupabaseClient(client));
+
+    await store.recordSyncResult(SCOPE, 'token-1', false, {
+      error: 'falló https://api.example.com/x?key=secreto',
+      summary: SUMMARY,
+    });
+
+    const [fn, params] = client.rpc.mock.calls[0]!;
+    expect(fn).toBe('record_provider_sync_result');
+    expect(params).toMatchObject({
+      p_lease_token: 'token-1',
+      p_success: false,
+      p_error: 'falló [redactado]',
+      p_imported_count: 12,
+      p_error_count: 1,
+    });
+  });
+
+  it('devuelve false cuando la RPC rechaza el cierre (lease vencido o token distinto)', async () => {
+    const client = makeFakeClient({ data: false, error: null });
+    const store = new SupabaseSyncLeaseStore(asSupabaseClient(client));
+
+    await expect(
+      store.recordSyncResult(SCOPE, 'token-viejo', true, { summary: SUMMARY }),
+    ).resolves.toBe(false);
+  });
+});
+
 describe('SupabaseSyncLeaseStore', () => {
   describe('recordSyncResult() — sanitización de details.error', () => {
     it('sin details, p_error es null', async () => {

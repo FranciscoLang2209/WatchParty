@@ -43,6 +43,12 @@ interface MatchStore {
 }
 ```
 
+`SyncResultDetails.summary` (WAT-184) lleva las cantidades del último intento
+(`imported`, `updated`, `skipped`, `errors`, `queries`); `recordSyncResult` las
+persiste en `provider_sync_state` junto con las fechas y el error. Son totales
+(sin motivos) y se reemplazan en cada cierre; si el caller no informa `summary`
+quedan en `NULL`.
+
 Es Interface Segregation a propósito: los handlers HTTP dependen solo de
 `MatchCatalog` y nunca se enteran de que existen operaciones de escritura.
 WAT-107 va a depender de `MatchStore`, nunca al revés.

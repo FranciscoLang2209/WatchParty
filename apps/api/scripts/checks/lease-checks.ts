@@ -22,7 +22,9 @@ async function acquireLease(adminClient: SupabaseClient, owner: string): Promise
 async function readLeaseState(adminClient: SupabaseClient) {
   const { data, error } = await adminClient
     .from('provider_sync_state')
-    .select('lease_owner, lease_token, lease_expires_at, last_success_at')
+    .select(
+      'lease_owner, lease_token, lease_expires_at, last_success_at, last_error, last_attempt_imported_count, last_attempt_updated_count, last_attempt_skipped_count, last_attempt_error_count, last_attempt_queries_count',
+    )
     .eq('provider', PROVIDER)
     .eq('competition_external_id', COMPETITION_EXTERNAL_ID)
     .eq('season', SEASON)
@@ -159,6 +161,121 @@ export async function checkLeaseLifecycle(adminClient: SupabaseClient): Promise<
     label: 'record_provider_sync_result: deja last_success_at actualizado y el lease libre',
     passed: finalState.last_success_at !== null && finalState.lease_token === null,
     detail: `last_success_at=${finalState.last_success_at}, lease_token=${finalState.lease_token}`,
+  });
+  // 7b. WAT-184: el resumen del último intento queda persistido, el éxito
+  // limpia last_error y un intento posterior (fallido, sin resumen) pisa las
+  // cantidades en vez de dejar las del intento anterior.
+  const tokenSummaryOk = await acquireLease(adminClient, 'verify-script-summary-ok');
+  if (!tokenSummaryOk) {
+    throw new Error('No se pudo adquirir el lease para probar el resumen del intento.');
+  }
+  const recordSummaryOk = await adminClient.rpc('record_provider_sync_result', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+    p_lease_token: tokenSummaryOk,
+    p_success: true,
+    p_imported_count: 12,
+    p_updated_count: 3,
+    p_skipped_count: 2,
+    p_error_count: 0,
+    p_queries_count: 4,
+  });
+  const stateSummaryOk = await readLeaseState(adminClient);
+  results.push({
+    label: 'record_provider_sync_result: persiste el resumen del intento exitoso',
+    passed:
+      recordSummaryOk.data === true &&
+      stateSummaryOk.last_attempt_imported_count === 12 &&
+      stateSummaryOk.last_attempt_updated_count === 3 &&
+      stateSummaryOk.last_attempt_skipped_count === 2 &&
+      stateSummaryOk.last_attempt_error_count === 0 &&
+      stateSummaryOk.last_attempt_queries_count === 4 &&
+      stateSummaryOk.last_error === null &&
+      stateSummaryOk.lease_token === null,
+    detail: recordSummaryOk.error?.message ?? JSON.stringify(stateSummaryOk),
+  });
+
+  const tokenSummaryFail = await acquireLease(adminClient, 'verify-script-summary-fail');
+  if (!tokenSummaryFail) {
+    throw new Error('No se pudo adquirir el lease para probar el resumen de un intento fallido.');
+  }
+  const successAtBeforeFailure = stateSummaryOk.last_success_at;
+  const recordSummaryFail = await adminClient.rpc('record_provider_sync_result', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+    p_lease_token: tokenSummaryFail,
+    p_success: false,
+    p_error: 'fallo de prueba',
+    p_imported_count: 1,
+    p_updated_count: 0,
+    p_skipped_count: 0,
+    p_error_count: 1,
+    p_queries_count: 2,
+  });
+  const stateSummaryFail = await readLeaseState(adminClient);
+  results.push({
+    label: 'record_provider_sync_result: un fallo guarda resumen y error sin tocar last_success_at',
+    passed:
+      recordSummaryFail.data === true &&
+      stateSummaryFail.last_attempt_imported_count === 1 &&
+      stateSummaryFail.last_attempt_error_count === 1 &&
+      stateSummaryFail.last_attempt_queries_count === 2 &&
+      stateSummaryFail.last_error === 'fallo de prueba' &&
+      stateSummaryFail.last_success_at === successAtBeforeFailure,
+    detail: recordSummaryFail.error?.message ?? JSON.stringify(stateSummaryFail),
+  });
+
+  const tokenNoSummary = await acquireLease(adminClient, 'verify-script-no-summary');
+  if (!tokenNoSummary) {
+    throw new Error('No se pudo adquirir el lease para probar un cierre sin resumen.');
+  }
+  await adminClient.rpc('record_provider_sync_result', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+    p_lease_token: tokenNoSummary,
+    p_success: true,
+  });
+  const stateNoSummary = await readLeaseState(adminClient);
+  results.push({
+    label:
+      'record_provider_sync_result: un cierre sin resumen no deja cantidades del intento anterior',
+    passed:
+      stateNoSummary.last_attempt_imported_count === null &&
+      stateNoSummary.last_attempt_updated_count === null &&
+      stateNoSummary.last_attempt_skipped_count === null &&
+      stateNoSummary.last_attempt_error_count === null &&
+      stateNoSummary.last_attempt_queries_count === null,
+    detail: JSON.stringify(stateNoSummary),
+  });
+
+  // Un contador negativo lo rechaza el CHECK de la tabla y el intento no se cierra.
+  const tokenNegative = await acquireLease(adminClient, 'verify-script-negative');
+  if (!tokenNegative) {
+    throw new Error('No se pudo adquirir el lease para probar el CHECK de contadores.');
+  }
+  const recordNegative = await adminClient.rpc('record_provider_sync_result', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+    p_lease_token: tokenNegative,
+    p_success: true,
+    p_imported_count: -1,
+  });
+  results.push({
+    label: 'record_provider_sync_result: rechaza contadores negativos (CHECK de la tabla)',
+    passed: recordNegative.error?.code === '23514',
+    detail: recordNegative.error
+      ? `code=${recordNegative.error.code}`
+      : 'No debería haber aceptado un contador negativo.',
+  });
+  await adminClient.rpc('release_provider_sync_lease', {
+    p_provider: PROVIDER,
+    p_competition_external_id: COMPETITION_EXTERNAL_ID,
+    p_season: SEASON,
+    p_lease_token: tokenNegative,
   });
 
   // 8. acquire_provider_sync_lease valida sus entradas: owner vacío o

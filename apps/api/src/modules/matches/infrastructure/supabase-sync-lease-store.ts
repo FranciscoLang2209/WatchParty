@@ -65,6 +65,16 @@ function sanitizeSyncError(error: unknown): string | null {
 }
 
 /**
+ * Normaliza un contador del resumen antes de persistirlo: solo enteros no
+ * negativos. Cualquier otra cosa (undefined, NaN, negativo, decimal) se
+ * guarda como NULL en vez de dejar que el CHECK de la tabla rechace el cierre
+ * del intento y deje el lease sin liberar.
+ */
+function sanitizeCount(value: number | undefined): number | null {
+  return value !== undefined && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/**
  * Coordinación del lease de sincronización (`provider_sync_state`, WAT-103).
  *
  * Separado de `SupabaseMatchStore` porque no comparte ninguna FK ni relación
@@ -144,6 +154,11 @@ export class SupabaseSyncLeaseStore {
       p_error: sanitizeSyncError(details?.error),
       p_observed_quota_remaining: details?.observedQuotaRemaining ?? null,
       p_observed_quota_window_reset_at: details?.observedQuotaWindowResetAt ?? null,
+      p_imported_count: sanitizeCount(details?.summary?.imported),
+      p_updated_count: sanitizeCount(details?.summary?.updated),
+      p_skipped_count: sanitizeCount(details?.summary?.skipped),
+      p_error_count: sanitizeCount(details?.summary?.errors),
+      p_queries_count: sanitizeCount(details?.summary?.queries),
     });
 
     if (error) {
