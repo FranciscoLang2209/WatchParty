@@ -8,9 +8,14 @@ import type { OwnProfileStore } from './modules/profiles/domain/own-profile-stor
 import type { PublicRoomStore } from './modules/rooms/domain/public-room-store.js';
 import type { RoomCommentStore } from './modules/comments/domain/room-comment-store.js';
 import type { RoomCommentReactionStore } from './modules/comments/domain/room-comment-reaction-store.js';
+import type { WatchedMatchStore } from './modules/watched/domain/watched-match-store.js';
 
 const noopReactionStore: RoomCommentReactionStore = {
   setReaction: async () => null,
+};
+
+const noopWatchedStore: WatchedMatchStore = {
+  setWatched: async () => null,
 };
 
 process.env.SUPABASE_URL = 'https://example.supabase.co';
@@ -51,6 +56,7 @@ const app = createApp(
   noopCommentStore,
   noopRoomStore,
   noopReactionStore,
+  noopWatchedStore,
 );
 
 describe('GET /health', () => {
@@ -65,6 +71,20 @@ describe('GET /health', () => {
 });
 
 describe('CORS', () => {
+  it.each(['PUT', 'DELETE'])(
+    'el preflight autoriza método %s para marcar y deshacer un partido visto (WAT-178)',
+    async (method) => {
+      const response = await request(app)
+        .options('/matches/aaa/watched')
+        .set('Origin', process.env.WEB_ORIGIN!)
+        .set('Access-Control-Request-Method', method)
+        .set('Access-Control-Request-Headers', 'Authorization');
+
+      expect(response.headers['access-control-allow-methods']).toContain(method);
+      expect(response.headers['access-control-allow-headers']).toContain('Authorization');
+    },
+  );
+
   it('el preflight autoriza método DELETE para quitar una reacción (WAT-176)', async () => {
     const response = await request(app)
       .options('/rooms/aaa/comments/bbb/reaction')
