@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { listComments, postComment } from './api';
+import { COMMENTS_PAGE_SIZE, listComments, listCommentsPage, postComment } from './api';
 import { CommentsApiError, isCancelled, isUnauthorized } from './types';
 
 const API_BASE = 'https://api.watchparty.test';
@@ -119,6 +119,82 @@ describe('listComments', () => {
     respondWith({ error: { code: 'NOT_FOUND' } }, { status: 404 });
 
     await expect(listComments(ROOM_ID, TOKEN)).rejects.toMatchObject({ kind: 'not-found' });
+  });
+});
+
+describe('listCommentsPage', () => {
+  // El cursor es opaco: el `createdAt` crudo de la base, con microsegundos y offset.
+  const CURSOR = {
+    createdAt: '2026-09-19T12:00:00.123456+00:00',
+    id: 'c1111111-1111-4111-8111-111111111111',
+  };
+
+  it('pide la primera página con limit=20 y bearer, sin cursor', async () => {
+    respondWith({ comments: [COMMENT], nextCursor: null });
+
+    await listCommentsPage(ROOM_ID, TOKEN);
+
+    expect(COMMENTS_PAGE_SIZE).toBe(20);
+    expect(requestUrl()).toBe(`${API_BASE}/rooms/${ROOM_ID}/comments?limit=20`);
+    expect(requestInit().method).toBe('GET');
+    expect(new Headers(requestInit().headers).get('Authorization')).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('con cursor manda beforeCreatedAt y beforeId juntos, codificados', async () => {
+    respondWith({ comments: [], nextCursor: null });
+
+    await listCommentsPage(ROOM_ID, TOKEN, { cursor: CURSOR });
+
+    const url = new URL(requestUrl());
+
+    expect(url.pathname).toBe(`/rooms/${ROOM_ID}/comments`);
+    expect([...url.searchParams.keys()].sort()).toEqual(['beforeCreatedAt', 'beforeId', 'limit']);
+    expect(url.searchParams.get('limit')).toBe('20');
+    // El «+» del offset tiene que viajar codificado: sin codificar llega como espacio.
+    expect(url.searchParams.get('beforeCreatedAt')).toBe(CURSOR.createdAt);
+    expect(url.searchParams.get('beforeId')).toBe(CURSOR.id);
+  });
+
+  it('devuelve los comentarios y el cursor de la página siguiente', async () => {
+    respondWith({ comments: [COMMENT], nextCursor: { ...CURSOR, extra: 'x' } });
+
+    await expect(listCommentsPage(ROOM_ID, TOKEN)).resolves.toEqual({
+      comments: [COMMENT],
+      nextCursor: CURSOR,
+    });
+  });
+
+  it.each([
+    ['null', { comments: [COMMENT], nextCursor: null }],
+    ['ausente', { comments: [COMMENT] }],
+  ])('sin página siguiente (nextCursor %s) devuelve nextCursor null', async (_caso, body) => {
+    respondWith(body);
+
+    await expect(listCommentsPage(ROOM_ID, TOKEN)).resolves.toEqual({
+      comments: [COMMENT],
+      nextCursor: null,
+    });
+  });
+
+  it('rechaza un nextCursor con forma inesperada', async () => {
+    respondWith({ comments: [COMMENT], nextCursor: { createdAt: 5 } });
+
+    await expect(listCommentsPage(ROOM_ID, TOKEN)).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it('rechaza un envelope sin la clave comments', async () => {
+    respondWith({ nextCursor: null });
+
+    await expect(listCommentsPage(ROOM_ID, TOKEN)).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it('propaga la señal de abort al fetch', async () => {
+    respondWith({ comments: [], nextCursor: null });
+    const controller = new AbortController();
+
+    await listCommentsPage(ROOM_ID, TOKEN, { signal: controller.signal });
+
+    expect(requestInit().signal).toBe(controller.signal);
   });
 });
 
