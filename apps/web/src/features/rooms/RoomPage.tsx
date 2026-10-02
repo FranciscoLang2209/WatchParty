@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { getRoom } from './api';
+import { RoomMatchHeader } from './RoomMatchHeader';
 import { RoomsApiError, isCancelled, type PublicRoom } from './types';
 import { CommentForm } from '@/features/comments/CommentForm';
 import { CommentList } from '@/features/comments/CommentList';
@@ -152,11 +152,8 @@ function Sala({ roomId }: { roomId: string }) {
           </p>
         ) : null}
 
-        {estado.status === 'ready' ? (
-          <Card className="gap-2 p-4">
-            <p className="text-sm text-muted-foreground">Identificador de sala</p>
-            <p className="min-w-0 font-mono text-sm break-all">{estado.room.id}</p>
-          </Card>
+        {estado.status === 'ready' && accessToken !== null ? (
+          <RoomMatchHeader matchId={estado.room.matchId} accessToken={accessToken} />
         ) : null}
 
         {estado.status === 'ready' && accessToken !== null ? (

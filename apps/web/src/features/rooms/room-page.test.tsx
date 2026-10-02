@@ -33,6 +33,19 @@ const sala = {
   createdAt: '2026-09-18T21:00:00.000Z',
 };
 
+const partido = {
+  id: 'match-001',
+  homeTeam: 'River Plate',
+  homeTeamId: 'team-river-plate',
+  awayTeam: 'Boca Juniors',
+  awayTeamId: 'team-boca-juniors',
+  kickoffAt: '2026-09-06T21:00:00Z',
+  status: 'live',
+};
+
+const PARTIDO_URL = `${API_BASE}/matches/match-001`;
+const TITULO_PARTIDO = 'River Plate vs. Boca Juniors';
+
 let fetchSpy: ReturnType<typeof vi.spyOn>;
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -44,16 +57,23 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const COMENTARIOS_URL = `${API_BASE}/rooms/room-123/comments`;
 
+function esPartido(input: unknown): boolean {
+  return String(input).startsWith(`${API_BASE}/matches/`);
+}
+
 /**
- * La lista de comentarios pide su propia URL: se responde vacía para que las
- * pruebas de la sala no dependan de ella.
+ * La lista de comentarios y el partido del encabezado piden sus propias URL:
+ * se responden con una lista vacía y un partido válido para que las pruebas de
+ * la sala no dependan de ellos.
  */
 function responderCon(body: unknown, status = 200) {
   fetchSpy.mockImplementation((input: unknown) =>
     Promise.resolve(
-      String(input).endsWith('/comments')
-        ? jsonResponse({ comments: [] })
-        : jsonResponse(body, status),
+      esPartido(input)
+        ? jsonResponse({ match: partido })
+        : String(input).endsWith('/comments')
+          ? jsonResponse({ comments: [] })
+          : jsonResponse(body, status),
     ),
   );
 }
@@ -118,7 +138,6 @@ describe('Sala: éxito', () => {
     expect(
       await p.findByRole('heading', { level: 1, name: 'Sala del partido' }),
     ).toBeInTheDocument();
-    expect(p.getByText('room-123')).toBeInTheDocument();
     const llamadas = llamadasA(`${API_BASE}/rooms/room-123`);
     const [, init] = llamadas[0] as [string, RequestInit];
 
@@ -133,16 +152,6 @@ describe('Sala: éxito', () => {
     renderAt('/rooms/room-123');
 
     expect(await (await pantalla()).findByRole('status')).toHaveTextContent('Cargando la sala…');
-  });
-
-  it('en móvil el identificador corta línea en vez de desbordar', async () => {
-    renderAt('/rooms/room-123');
-
-    const p = await pantalla();
-    const identificador = await p.findByText('room-123');
-
-    expect(identificador.className).toMatch(/min-w-0/);
-    expect(identificador.className).toMatch(/break-all/);
   });
 
   it('muestra el formulario y la lista de comentarios de la sala', async () => {
@@ -192,7 +201,7 @@ describe('Sala: éxito', () => {
     const { unmount } = renderAt('/rooms/room-123');
 
     const p = await pantalla();
-    await p.findByText('room-123');
+    await p.findByRole('heading', { name: TITULO_PARTIDO });
 
     await waitFor(() =>
       expect(subscribeMock).toHaveBeenCalledWith('room-123', expect.any(Function), {
@@ -239,9 +248,11 @@ describe('Sala: éxito', () => {
 
     fetchSpy.mockImplementation((input: unknown) =>
       Promise.resolve(
-        String(input).endsWith('/comments')
-          ? jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401)
-          : jsonResponse({ room: sala }),
+        esPartido(input)
+          ? jsonResponse({ match: partido })
+          : String(input).endsWith('/comments')
+            ? jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401)
+            : jsonResponse({ room: sala }),
       ),
     );
 
@@ -446,9 +457,11 @@ describe('Sala: reconciliación de comentarios al reconectar', () => {
   function responderComentarios(comments: unknown[]) {
     fetchSpy.mockImplementation((input: unknown) =>
       Promise.resolve(
-        String(input).endsWith('/comments')
-          ? jsonResponse({ comments })
-          : jsonResponse({ room: sala }),
+        esPartido(input)
+          ? jsonResponse({ match: partido })
+          : String(input).endsWith('/comments')
+            ? jsonResponse({ comments })
+            : jsonResponse({ room: sala }),
       ),
     );
   }
@@ -536,6 +549,170 @@ describe('Sala: reconciliación de comentarios al reconectar', () => {
   });
 });
 
+describe('Sala: encabezado del partido', () => {
+  const ERROR_PARTIDO = 'No pudimos cargar los datos del partido.';
+  const REINTENTAR_PARTIDO = 'Reintentar la carga del partido';
+
+  /** El partido del encabezado falla con un 500; sala y comentarios responden bien. */
+  function partidoFalla() {
+    fetchSpy.mockImplementation((input: unknown) =>
+      Promise.resolve(
+        esPartido(input)
+          ? jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)
+          : String(input).endsWith('/comments')
+            ? jsonResponse({ comments: [] })
+            : jsonResponse({ room: sala }),
+      ),
+    );
+  }
+
+  it('pide el partido de la sala con bearer y muestra los equipos en vez del UUID', async () => {
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+
+    expect(await p.findByRole('heading', { name: TITULO_PARTIDO })).toBeInTheDocument();
+    expect(p.queryByText('room-123')).not.toBeInTheDocument();
+    expect(p.queryByText('Identificador de sala')).not.toBeInTheDocument();
+
+    const llamadas = llamadasA(PARTIDO_URL);
+    const [, init] = llamadas[0] as [string, RequestInit];
+
+    expect(llamadas).toHaveLength(1);
+    expect(init.method).toBe('GET');
+    expect(new Headers(init.headers).get('Authorization')).toBe(`Bearer ${session.access_token}`);
+  });
+
+  it('muestra el horario en hora local y el estado del partido', async () => {
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    await p.findByRole('heading', { name: TITULO_PARTIDO });
+
+    // 21:00 UTC son las 18:00 en Argentina.
+    expect(p.getByText(/18:00/)).toBeInTheDocument();
+    expect(p.getByText('En vivo')).toBeInTheDocument();
+  });
+
+  it('enlaza al detalle del partido por su id opaco, con nombre accesible', async () => {
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+
+    expect(await p.findByRole('link', { name: `Ver partido: ${TITULO_PARTIDO}` })).toHaveAttribute(
+      'href',
+      '/matches/match-001',
+    );
+  });
+
+  it('en móvil los nombres de los equipos cortan línea en vez de desbordar', async () => {
+    renderAt('/rooms/room-123');
+
+    const titulo = await (await pantalla()).findByRole('heading', { name: TITULO_PARTIDO });
+
+    expect(titulo.className).toMatch(/min-w-0/);
+    expect(titulo.className).toMatch(/break-words/);
+  });
+
+  it('si el partido falla lo avisa y conserva la sala, el formulario y los comentarios', async () => {
+    partidoFalla();
+
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+
+    expect(await p.findByRole('alert')).toHaveTextContent(ERROR_PARTIDO);
+    expect(p.getByRole('button', { name: REINTENTAR_PARTIDO })).toBeInTheDocument();
+    expect(p.getByRole('heading', { level: 1, name: 'Sala del partido' })).toBeInTheDocument();
+    expect(p.getByLabelText('Comentario')).toBeInTheDocument();
+    expect(
+      await p.findByText('Todavía no hay comentarios. Sé el primero en comentar la jugada.'),
+    ).toBeInTheDocument();
+  });
+
+  it('el reintento vuelve a pedir sólo el partido y conserva el borrador y los comentarios', async () => {
+    const user = userEvent.setup();
+    const comentario = {
+      id: 'comentario-1',
+      roomId: 'room-123',
+      body: '¡Qué golazo!',
+      createdAt: '2026-09-24T21:00:00.000Z',
+    };
+    partidoFalla();
+
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    await p.findByRole('alert');
+    await waitFor(() => expect(subscribeMock).toHaveBeenCalledTimes(1));
+    const [, recibir] = subscribeMock.mock.calls[0] as [string, (c: unknown) => void];
+    act(() => recibir(comentario));
+    await user.type(p.getByLabelText('Comentario'), 'Borrador sin enviar');
+
+    responderCon({ room: sala });
+    await user.click(p.getByRole('button', { name: REINTENTAR_PARTIDO }));
+
+    expect(await p.findByRole('heading', { name: TITULO_PARTIDO })).toBeInTheDocument();
+    expect(p.queryByRole('alert')).not.toBeInTheDocument();
+    expect(p.getByLabelText('Comentario')).toHaveValue('Borrador sin enviar');
+    expect(p.getByText(comentario.body)).toBeInTheDocument();
+    expect(llamadasA(PARTIDO_URL)).toHaveLength(2);
+    expect(llamadasA(`${API_BASE}/rooms/room-123`)).toHaveLength(1);
+    expect(llamadasA(COMENTARIOS_URL)).toHaveLength(1);
+    expect(subscribeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('al cambiar de sala cancela el partido anterior y no muestra su respuesta tardía', async () => {
+    const user = userEvent.setup();
+    const otraSala = { id: 'desconocida', matchId: 'match-002', createdAt: sala.createdAt };
+    const otroPartido = {
+      ...partido,
+      id: 'match-002',
+      homeTeam: 'Racing Club',
+      awayTeam: 'Independiente',
+    };
+    let responderPartidoViejo: () => void = () => {};
+
+    fetchSpy.mockImplementation((input: unknown) => {
+      const url = String(input);
+
+      if (url === PARTIDO_URL) {
+        return new Promise<Response>((resolve) => {
+          responderPartidoViejo = () => resolve(jsonResponse({ match: partido }));
+        });
+      }
+      if (url === `${API_BASE}/matches/match-002`) {
+        return Promise.resolve(jsonResponse({ match: otroPartido }));
+      }
+      if (url.endsWith('/comments')) return Promise.resolve(jsonResponse({ comments: [] }));
+
+      return Promise.resolve(
+        jsonResponse({ room: url.endsWith('/rooms/desconocida') ? otraSala : sala }),
+      );
+    });
+
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    await waitFor(() => expect(llamadasA(PARTIDO_URL)).toHaveLength(1));
+    const [, init] = llamadasA(PARTIDO_URL)[0] as [string, RequestInit];
+
+    await user.click(screen.getByRole('button', { name: 'Ir a otra sala' }));
+
+    expect(init.signal?.aborted).toBe(true);
+    expect(
+      await p.findByRole('heading', { name: 'Racing Club vs. Independiente' }),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      responderPartidoViejo();
+    });
+
+    expect(p.queryByRole('heading', { name: TITULO_PARTIDO })).not.toBeInTheDocument();
+    expect(p.getByRole('heading', { name: 'Racing Club vs. Independiente' })).toBeInTheDocument();
+  });
+});
+
 describe('Sala: estados alternativos', () => {
   it('un 404 se comunica como sala inexistente, no como error recuperable', async () => {
     responderCon({ error: { code: 'NOT_FOUND', message: 'Recurso no encontrado.' } }, 404);
@@ -564,7 +741,7 @@ describe('Sala: estados alternativos', () => {
     responderCon({ room: sala });
     await user.click(p.getByRole('button', { name: 'Reintentar' }));
 
-    expect(await p.findByText('room-123')).toBeInTheDocument();
+    expect(await p.findByRole('heading', { name: TITULO_PARTIDO })).toBeInTheDocument();
     expect(p.queryByRole('alert')).not.toBeInTheDocument();
     expect(llamadasA(`${API_BASE}/rooms/room-123`)).toHaveLength(2);
   });
@@ -604,7 +781,7 @@ describe('Sala: estados alternativos', () => {
     renderAt('/rooms/room-123');
 
     const p = await pantalla();
-    await p.findByText('room-123');
+    await p.findByRole('heading', { name: TITULO_PARTIDO });
 
     let responder404: () => void = () => {};
     fetchSpy.mockImplementation(
@@ -618,12 +795,12 @@ describe('Sala: estados alternativos', () => {
     await user.click(screen.getByRole('button', { name: 'Ir a otra sala' }));
 
     expect(await p.findByRole('status')).toHaveTextContent('Cargando la sala…');
-    expect(p.queryByText('room-123')).not.toBeInTheDocument();
+    expect(p.queryByRole('heading', { name: TITULO_PARTIDO })).not.toBeInTheDocument();
 
     responder404();
 
     expect(await p.findByText('No encontramos esa sala.')).toBeInTheDocument();
-    expect(p.queryByText('room-123')).not.toBeInTheDocument();
+    expect(p.queryByRole('heading', { name: TITULO_PARTIDO })).not.toBeInTheDocument();
   });
 
   it('no monta comentarios si la sala no existe', async () => {
