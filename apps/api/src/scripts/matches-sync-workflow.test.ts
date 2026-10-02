@@ -18,7 +18,7 @@ interface WorkflowStep {
 interface Workflow {
   on: { schedule?: { cron: string }[]; workflow_dispatch?: unknown };
   concurrency: { group: string; 'cancel-in-progress': boolean };
-  jobs: Record<string, { 'continue-on-error'?: unknown; steps: WorkflowStep[] }>;
+  jobs: Record<string, { 'continue-on-error'?: unknown; if?: string; steps: WorkflowStep[] }>;
 }
 
 const source = readFileSync(WORKFLOW_PATH, 'utf8');
@@ -27,6 +27,11 @@ const steps = Object.values(workflow.jobs).flatMap((job) => job.steps);
 const syncStep = steps.find((step) => step.run?.includes('matches:sync'));
 
 describe('workflow matches-sync (OPS-02)', () => {
+  it('queda deshabilitado hasta activar explícitamente MATCHES_SYNC_ENABLED', () => {
+    for (const job of Object.values(workflow.jobs)) {
+      expect(job.if).toBe("${{ vars.MATCHES_SYNC_ENABLED == 'true' }}");
+    }
+  });
   it('programa una corrida diaria a las 06:17 UTC y permite disparo manual', () => {
     expect(workflow.on.schedule).toEqual([{ cron: '17 6 * * *' }]);
     expect(workflow.on).toHaveProperty('workflow_dispatch');

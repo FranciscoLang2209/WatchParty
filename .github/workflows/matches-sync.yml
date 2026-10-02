@@ -22,6 +22,11 @@ concurrency:
 
 jobs:
   sync:
+    # Interruptor de activación: el job no corre (ni por schedule ni manualmente)
+    # hasta que exista la variable de repositorio MATCHES_SYNC_ENABLED con valor
+    # "true". Se activa recién cuando OPS-03/OPS-04 y la integración del proveedor
+    # vigente estén listos. Un job omitido no es un error enmascarado: no ejecuta nada.
+    if: ${{ vars.MATCHES_SYNC_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
