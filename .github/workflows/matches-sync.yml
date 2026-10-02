@@ -1,0 +1,60 @@
+name: Matches sync
+
+# Sincronización de producción: reutiliza el comando existente `matches:sync`
+# (WAT-107). No hay endpoint, worker ni scheduler propio; GitHub Actions solo
+# lo dispara. Ver docs/runbooks/matches-sync-command.md.
+on:
+  schedule:
+    # 06:17 UTC = 03:17 Argentina (UTC-3). GitHub no garantiza puntualidad
+    # exacta: una corrida programada puede demorarse o saltearse en picos de carga.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serializa las corridas del workflow. `cancel-in-progress: false` encola la
+# nueva en vez de cancelar una sincronización en curso. El lease en base
+# (provider_sync_state) se conserva como segunda barrera.
+concurrency:
+  group: matches-sync-production
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    # Interruptor de activación: el job no corre (ni por schedule ni manualmente)
+    # hasta que exista la variable de repositorio MATCHES_SYNC_ENABLED con valor
+    # "true". Se activa recién cuando OPS-03/OPS-04 y la integración del proveedor
+    # vigente estén listos. Un job omitido no es un error enmascarado: no ejecuta nada.
+    if: ${{ vars.MATCHES_SYNC_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Sin `continue-on-error` ni `|| true`: si el comando sale con un código
+      # distinto de 0 (1 = parcial, 2 = configuración inválida o lease tomado),
+      # el step y el workflow fallan con ese mismo resultado.
+      - name: Sync matches
+        run: pnpm --filter @watchparty/api matches:sync
+        env:
+          API_FOOTBALL_BASE_URL: ${{ secrets.API_FOOTBALL_BASE_URL }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # `config/env.ts` exige estas dos al importarse, aunque la sincronización no las use.
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          WEB_ORIGIN: ${{ secrets.WEB_ORIGIN }}

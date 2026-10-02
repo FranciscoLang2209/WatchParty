@@ -17,6 +17,14 @@ Requiere, en el entorno del backend (`apps/api/.env`, nunca comiteado):
 - `API_FOOTBALL_BASE_URL`, `API_FOOTBALL_KEY` — credenciales del proveedor, cargadas exclusivamente por este comando (ninguna ruta HTTP, el arranque de la API, los tests ni `pnpm validate` las tocan).
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — mismas variables que ya requiere el resto de la API para persistencia.
 
+## Ejecución programada (WAT-185)
+
+El workflow `Matches sync` corre `pnpm --filter @watchparty/api matches:sync` todos los días a las 06:17 UTC (03:17 Argentina) y también con `workflow_dispatch` (Actions → Matches sync → Run workflow). GitHub no garantiza puntualidad exacta del schedule.
+
+- Las corridas del workflow se serializan (`concurrency` con `cancel-in-progress: false`): una nueva espera a la que está en curso. El lease en base sigue siendo la segunda barrera.
+- El código de salida del comando se propaga tal cual: cualquier valor distinto de `0` deja la corrida en rojo.
+- Secrets de repositorio requeridos: `API_FOOTBALL_BASE_URL`, `API_FOOTBALL_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` y `WEB_ORIGIN` (las dos últimas solo porque `config/env.ts` las exige al importarse). Su carga es parte de OPS-03/OPS-04.
+
 ## Códigos de salida
 
 | Código | Significado                                                                                                                                                                                                                                                        |
