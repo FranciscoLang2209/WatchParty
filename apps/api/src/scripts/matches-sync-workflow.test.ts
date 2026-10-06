@@ -64,6 +64,8 @@ describe('workflow matches-sync (OPS-02)', () => {
   it('entrega las credenciales solo desde secrets, sin valores literales', () => {
     const env = syncStep?.env ?? {};
     const required = [
+      'FOOTBALL_DATA_ORG_BASE_URL',
+      'FOOTBALL_DATA_ORG_API_KEY',
       'API_FOOTBALL_BASE_URL',
       'API_FOOTBALL_KEY',
       'SUPABASE_URL',
@@ -75,5 +77,9 @@ describe('workflow matches-sync (OPS-02)', () => {
     for (const name of required) {
       expect(env[name], name).toBe(`\${{ secrets.${name} }}`);
     }
+  });
+
+  it('el proveedor se elige con una variable de repositorio, sin valor literal', () => {
+    expect(syncStep?.env?.MATCHES_SYNC_PROVIDER).toBe('${{ vars.MATCHES_SYNC_PROVIDER }}');
   });
 });

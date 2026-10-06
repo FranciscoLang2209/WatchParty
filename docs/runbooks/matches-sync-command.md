@@ -33,7 +33,7 @@ El workflow `Matches sync` corre `pnpm --filter @watchparty/api matches:sync` to
 
 - Las corridas del workflow se serializan (`concurrency` con `cancel-in-progress: false`): una nueva espera a la que está en curso. El lease en base sigue siendo la segunda barrera.
 - El código de salida del comando se propaga tal cual: cualquier valor distinto de `0` deja la corrida en rojo.
-- Secrets de repositorio requeridos: `API_FOOTBALL_BASE_URL`, `API_FOOTBALL_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` y `WEB_ORIGIN` (las dos últimas solo porque `config/env.ts` las exige al importarse). Su carga es parte de OPS-03/OPS-04.
+- Secrets de repositorio requeridos: `FOOTBALL_DATA_ORG_BASE_URL` y `FOOTBALL_DATA_ORG_API_KEY` (proveedor por defecto), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` y `WEB_ORIGIN` (las dos últimas solo porque `config/env.ts` las exige al importarse). Para usar API-Football desde el workflow, definir la variable de repositorio `MATCHES_SYNC_PROVIDER=api-football` y cargar también `API_FOOTBALL_BASE_URL` y `API_FOOTBALL_KEY`. Su carga es parte de OPS-03/OPS-04.
 
 ## Códigos de salida
 

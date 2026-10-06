@@ -553,13 +553,21 @@ function footballHttpError(status: number): FootballDataOrgFetchOutcome {
 }
 
 describe('toFootballDataOrgDateRange', () => {
-  it('el séptimo día entra: el filtro inclusivo termina un día antes del fin exclusivo', () => {
-    const window = agendaWindow(new Date(Date.UTC(2026, 8, 12, 10, 0, 0)));
+  const window = agendaWindow(new Date(Date.UTC(2026, 8, 12, 10, 0, 0)));
 
+  it('el filtro inclusivo termina un día antes del fin exclusivo de la ventana', () => {
     expect(toFootballDataOrgDateRange(window)).toEqual({
       dateFrom: '2026-09-11',
       dateTo: '2026-09-19',
     });
+  });
+
+  it('el séptimo día entra en el filtro inclusivo y el octavo no', () => {
+    const { dateFrom, dateTo } = toFootballDataOrgDateRange(window);
+
+    // Comparar fechas ISO como texto equivale a compararlas como fechas.
+    expect('2026-09-19' >= dateFrom && '2026-09-19' <= dateTo).toBe(true);
+    expect('2026-09-20' >= dateFrom && '2026-09-20' <= dateTo).toBe(false);
   });
 });
 

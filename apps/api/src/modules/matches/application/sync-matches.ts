@@ -305,12 +305,17 @@ function createApiFootballSource(
 
 /**
  * Convierte la ventana de la agenda (instantes UTC, fin exclusivo) al filtro
- * de football-data.org, que trabaja con días `YYYY-MM-DD` y cuyo `dateTo` es
- * INCLUSIVO (verificado contra la API real). El fin de la ventana es el
- * 00:00 UTC del día posterior al séptimo, así que el último día que hay que
- * pedir es el del instante inmediatamente anterior: pasar la fecha del fin
- * exclusivo tal cual pediría un día de más, y restarle un día de más
- * perdería el séptimo.
+ * de football-data.org, que trabaja con días `YYYY-MM-DD`. La documentación
+ * oficial de la API v4 dice que `dateTo` es exclusivo, pero el comportamiento
+ * real es INCLUSIVO: lo comprobamos el 2026-10-06 con consultas de límite
+ * contra la API real, con `dateFrom` distinto de `dateTo`.
+ * `dateFrom=2026-10-09&dateTo=2026-10-10` devuelve los 6 partidos del 10-10, y
+ * `dateFrom=2026-10-10&dateTo=2026-10-12` devuelve 10 partidos, el último del
+ * 10-12. Como el fin de la ventana es exclusivo (00:00 UTC del día posterior
+ * al séptimo), el último día que hay que pedir es el del instante
+ * inmediatamente anterior: pasar la fecha del fin tal cual pediría un día de
+ * más, y restarle un día de más perdería el séptimo. Si el proveedor alineara
+ * la API con su documentación, este cálculo habría que revisarlo.
  */
 export function toFootballDataOrgDateRange(window: MatchWindow): {
   dateFrom: string;
