@@ -46,6 +46,24 @@ describe('createFootballDataOrgClient', () => {
     expect(requestUrl.searchParams.get('status')).toBe('SCHEDULED');
   });
 
+  it('incluye temporada y rango de fechas cuando se piden', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ matches: [] }));
+    const client = createFootballDataOrgClient({ fetchFn, baseUrl: BASE_URL, apiKey: API_KEY });
+
+    await client.fetchMatches({
+      competitionCode: 'PL',
+      season: '2026',
+      dateFrom: '2026-10-01',
+      dateTo: '2026-10-09',
+    });
+
+    const [url] = fetchFn.mock.calls[0]!;
+    const requestUrl = new URL(url as string | URL);
+    expect(requestUrl.searchParams.get('season')).toBe('2026');
+    expect(requestUrl.searchParams.get('dateFrom')).toBe('2026-10-01');
+    expect(requestUrl.searchParams.get('dateTo')).toBe('2026-10-09');
+  });
+
   it('devuelve el status y el body en una respuesta exitosa', async () => {
     const body = { matches: [{}] };
     const fetchFn = vi.fn().mockResolvedValue(jsonResponse(body));

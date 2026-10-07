@@ -51,6 +51,11 @@ jobs:
       - name: Sync matches
         run: pnpm --filter @watchparty/api matches:sync
         env:
+          # Proveedor por defecto: football-data.org. Con la variable de repositorio
+          # MATCHES_SYNC_PROVIDER=api-football se usa API-Football; vacía, el por defecto.
+          MATCHES_SYNC_PROVIDER: ${{ vars.MATCHES_SYNC_PROVIDER }}
+          FOOTBALL_DATA_ORG_BASE_URL: ${{ secrets.FOOTBALL_DATA_ORG_BASE_URL }}
+          FOOTBALL_DATA_ORG_API_KEY: ${{ secrets.FOOTBALL_DATA_ORG_API_KEY }}
           API_FOOTBALL_BASE_URL: ${{ secrets.API_FOOTBALL_BASE_URL }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

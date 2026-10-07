@@ -55,8 +55,8 @@ explícito entre ambos vocabularios, no asumir que coinciden.
 - **Filtro por competición**: por código en el path (`/competitions/PL/matches`), no por id numérico.
 - **Filtro `status`**: aceptado y filtra correctamente (aunque con el vocabulario propio del
   proveedor).
-- Otros filtros documentados por el proveedor (`dateFrom`, `dateTo`, `season`, `matchday`) no se
-  probaron en esta verificación — quedan para cuando se implemente el cliente.
+- **Filtro de fechas (`dateFrom` / `dateTo`)**: comprobado el 2026-10-06 con consultas de límite. En la práctica ambos extremos son **inclusivos**, aunque la documentación oficial de la API v4 describe `dateTo` como exclusivo: `dateFrom=2026-10-09&dateTo=2026-10-10` devolvió los 6 partidos del 10-10, y `dateFrom=2026-10-10&dateTo=2026-10-12` devolvió 10 partidos, el último del 10-12.
+- **`season`** combinado con el rango de fechas: aceptado (`season=2026&dateFrom=2026-10-01&dateTo=2026-10-09`, 9 días, respuesta válida sin partidos). `matchday` no se probó.
 
 ## Límites observados
 

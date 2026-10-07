@@ -4,7 +4,14 @@ Este runbook documenta el uso del comando `matches:sync`, sus códigos de salida
 
 ## Qué hace
 
-`matches:sync` sincroniza, en una única ejecución manual, la ventana de fixtures aprobada por B1.1 (Liga Profesional Argentina, ID externo `128`, temporada `2023`, rango `2023-03-01` a `2023-03-14`) hacia Supabase. No es un cron, no es un endpoint HTTP y no se dispara automáticamente desde ningún lado: solo corre cuando alguien lo ejecuta a mano.
+`matches:sync` sincroniza, en una única ejecución, los fixtures del proveedor seleccionado hacia Supabase. No es un endpoint HTTP: lo dispara una persona o el workflow `Matches sync`. El proveedor se elige con `MATCHES_SYNC_PROVIDER` (una sola fuente por corrida; nunca consulta ambos):
+
+| Valor                             | Qué importa                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `football-data-org` (por defecto) | Premier League (código `PL`, id externo `2021`), temporada verificada `2026` (año de inicio según el proveedor, no el año calendario). Ventana móvil de la agenda: desde las 00:00 UTC de ayer hasta las 00:00 UTC del día posterior a los próximos siete días (fin exclusivo). El filtro externo `dateTo` es el séptimo día, inclusivo. |
+| `api-football`                    | La ventana histórica aprobada por B1.1 (Liga Profesional Argentina, ID externo `128`, temporada `2023`, rango `2023-03-01` a `2023-03-14`).                                                                                                                                                                                              |
+
+Al cerrar el intento se guarda el resumen (importados, actualizados, omitidos, errores y consultas) en `provider_sync_state`.
 
 ## Cómo ejecutarlo
 
@@ -14,8 +21,11 @@ pnpm --filter @watchparty/api matches:sync
 
 Requiere, en el entorno del backend (`apps/api/.env`, nunca comiteado):
 
-- `API_FOOTBALL_BASE_URL`, `API_FOOTBALL_KEY` — credenciales del proveedor, cargadas exclusivamente por este comando (ninguna ruta HTTP, el arranque de la API, los tests ni `pnpm validate` las tocan).
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — mismas variables que ya requiere el resto de la API para persistencia.
+- Con `football-data-org` (por defecto): `FOOTBALL_DATA_ORG_BASE_URL`, `FOOTBALL_DATA_ORG_API_KEY`.
+- Con `MATCHES_SYNC_PROVIDER=api-football`: `API_FOOTBALL_BASE_URL`, `API_FOOTBALL_KEY`.
+- Siempre: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — mismas variables que ya requiere el resto de la API para persistencia.
+
+Las credenciales del proveedor las carga exclusivamente este comando (ninguna ruta HTTP, el arranque de la API, los tests ni `pnpm validate` las tocan).
 
 ## Ejecución programada (WAT-185)
 
@@ -23,7 +33,7 @@ El workflow `Matches sync` corre `pnpm --filter @watchparty/api matches:sync` to
 
 - Las corridas del workflow se serializan (`concurrency` con `cancel-in-progress: false`): una nueva espera a la que está en curso. El lease en base sigue siendo la segunda barrera.
 - El código de salida del comando se propaga tal cual: cualquier valor distinto de `0` deja la corrida en rojo.
-- Secrets de repositorio requeridos: `API_FOOTBALL_BASE_URL`, `API_FOOTBALL_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` y `WEB_ORIGIN` (las dos últimas solo porque `config/env.ts` las exige al importarse). Su carga es parte de OPS-03/OPS-04.
+- Secrets de repositorio requeridos: `FOOTBALL_DATA_ORG_BASE_URL` y `FOOTBALL_DATA_ORG_API_KEY` (proveedor por defecto), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` y `WEB_ORIGIN` (las dos últimas solo porque `config/env.ts` las exige al importarse). Para usar API-Football desde el workflow, definir la variable de repositorio `MATCHES_SYNC_PROVIDER=api-football` y cargar también `API_FOOTBALL_BASE_URL` y `API_FOOTBALL_KEY`. Su carga es parte de OPS-03/OPS-04.
 
 ## Códigos de salida
 
@@ -31,7 +41,7 @@ El workflow `Matches sync` corre `pnpm --filter @watchparty/api matches:sync` to
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `0`    | Ejecución completa: se procesaron todas las páginas de la ventana sin errores de página ni de persistencia.                                                                                                                                                        |
 | `1`    | Ejecución parcial: cuota diaria agotada (propia o informada por el proveedor), error de proveedor (HTTP no exitoso, timeout tras el reintento permitido, cuerpo/paginación inválidos) o error de persistencia. No se borra ni reemplaza ningún dato ya persistido. |
-| `2`    | Configuración inválida (falta `API_FOOTBALL_BASE_URL`/`API_FOOTBALL_KEY`) o no se pudo adquirir el lease de sincronización (ya hay otra ejecución en curso).                                                                                                       |
+| `2`    | Configuración inválida (falta la configuración del proveedor seleccionado, o `MATCHES_SYNC_PROVIDER` tiene un valor desconocido) o no se pudo adquirir el lease de sincronización (ya hay otra ejecución en curso).                                                |
 
 ## Resumen impreso al finalizar (código 0 o 1)
 
