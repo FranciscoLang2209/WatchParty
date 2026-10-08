@@ -386,6 +386,98 @@ describe('CommentList: paginación', () => {
     expect(urlDeLlamada(2).searchParams.get('beforeCreatedAt')).toBe(CURSOR_1.createdAt);
   });
 
+  it('mientras llega la página avisa que está cargando y queda ocupado', async () => {
+    const { user } = await abrirConMasPorCargar();
+    let responder: (response: Response) => void = () => {};
+    fetchMock.mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        responder = resolve;
+      }),
+    );
+
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+
+    const boton = screen.getByRole('button', { name: 'Cargando comentarios…' });
+    expect(boton).toHaveAttribute('aria-busy', 'true');
+    expect(boton).toHaveAttribute('aria-disabled', 'true');
+
+    responder(jsonResponse({ comments: [COMMENT_2], nextCursor: CURSOR_2 }));
+
+    await screen.findByText(COMMENT_2.body);
+    expect(screen.getByRole('button', { name: CARGAR_MAS })).toHaveAttribute('aria-busy', 'false');
+  });
+
+  it('respeta el orden del servidor entre páginas aunque dos comentarios compartan el milisegundo', async () => {
+    // El servidor puso primero a «ultimoDeLaPagina» (microsegundos), aunque
+    // su id sea mayor: la API publica a ambos con el mismo milisegundo.
+    const ultimoDeLaPagina: RoomComment = {
+      id: 'cfffffff-ffff-4fff-8fff-ffffffffffff',
+      roomId: ROOM_ID,
+      body: 'Último de la primera página',
+      createdAt: '2026-09-19T12:00:00.123Z',
+    };
+    const primeroDeLaSiguiente: RoomComment = {
+      id: 'c0000000-0000-4000-8000-000000000000',
+      roomId: ROOM_ID,
+      body: 'Primero de la segunda página',
+      createdAt: '2026-09-19T12:00:00.123Z',
+    };
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        comments: [ultimoDeLaPagina],
+        nextCursor: { createdAt: '2026-09-19T12:00:00.123400+00:00', id: ultimoDeLaPagina.id },
+      }),
+    );
+    const { user } = renderList();
+    await screen.findByText(ultimoDeLaPagina.body);
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ comments: [primeroDeLaSiguiente], nextCursor: null }),
+    );
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+
+    await screen.findByText(primeroDeLaSiguiente.body);
+    expect(textos()).toEqual([ultimoDeLaPagina.body, primeroDeLaSiguiente.body]);
+  });
+
+  it('al renovarse el token cancela la página pendiente y su 401 tardío no tapa la lista', async () => {
+    const { user, rerender, onSessionExpired } = await abrirConMasPorCargar();
+    let responderPagina: (response: Response) => void = () => {};
+    fetchMock.mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        responderPagina = resolve;
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+
+    const TOKEN_NUEVO = 'token-nuevo';
+    fetchMock.mockResolvedValueOnce(jsonResponse({ comments: [COMMENT_1], nextCursor: CURSOR_1 }));
+    rerender(
+      <CommentList
+        roomId={ROOM_ID}
+        accessToken={TOKEN_NUEVO}
+        onSessionExpired={onSessionExpired}
+      />,
+    );
+
+    expect(requestInit(1).signal?.aborted).toBe(true);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+    // La respuesta del token viejo llega tarde y ya no vale.
+    responderPagina(jsonResponse({ error: { code: 'UNAUTHORIZED' } }, 401));
+    await Promise.resolve();
+
+    expect(textos()).toEqual([COMMENT_1.body]);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    // La acción vuelve a estar disponible y pide con el token nuevo.
+    fetchMock.mockResolvedValueOnce(jsonResponse({ comments: [COMMENT_2], nextCursor: null }));
+    await user.click(screen.getByRole('button', { name: CARGAR_MAS }));
+
+    await screen.findByText(COMMENT_2.body);
+    expect(new Headers(requestInit(3).headers).get('Authorization')).toBe(`Bearer ${TOKEN_NUEVO}`);
+    expect(urlDeLlamada(3).searchParams.get('beforeId')).toBe(CURSOR_1.id);
+  });
+
   it('si cargar más responde 401 ofrece reingresar', async () => {
     const { user, onSessionExpired } = await abrirConMasPorCargar();
 

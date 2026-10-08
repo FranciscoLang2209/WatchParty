@@ -150,8 +150,24 @@ export function CommentList({
     };
   }, [roomId, accessToken, intento, reloadSignal]);
 
-  // Al salir o cambiar de sala se cancela la página que estuviera en camino.
-  useEffect(() => () => pedidoDeMas.current?.abort(), [roomId]);
+  // Al salir, cambiar de sala o renovarse el token se cancela la página que
+  // estuviera en camino: su respuesta (p. ej. un 401 del token viejo) ya no
+  // vale. La acción queda libre para volver a pedirla con el token nuevo.
+  useEffect(
+    () => () => {
+      if (!pedidoDeMas.current) return;
+
+      pedidoDeMas.current.abort();
+      pedidoDeMas.current = null;
+      cargandoMas.current = false;
+      setEstado((previo) =>
+        previo.status === 'ready' && previo.more === 'loading'
+          ? { ...previo, more: 'idle' }
+          : previo,
+      );
+    },
+    [roomId, accessToken],
+  );
 
   const reintentar = useCallback(() => {
     setIntento((valor) => valor + 1);
@@ -175,6 +191,8 @@ export function CommentList({
 
     listCommentsPage(sala, accessToken, { cursor, signal: controller.signal })
       .then((page) => {
+        if (controller.signal.aborted) return;
+
         setEstado((previo) => {
           if (previo.status !== 'ready' || previo.roomId !== sala) return previo;
 
@@ -188,7 +206,9 @@ export function CommentList({
         });
       })
       .catch((error: unknown) => {
-        if (isCancelled(error)) return;
+        // Un pedido cancelado no se anuncia, aunque su error haya llegado
+        // después de cancelarlo.
+        if (controller.signal.aborted || isCancelled(error)) return;
 
         const fallo = toEstadoError(error);
 
@@ -202,6 +222,9 @@ export function CommentList({
         });
       })
       .finally(() => {
+        if (pedidoDeMas.current !== controller) return;
+
+        pedidoDeMas.current = null;
         cargandoMas.current = false;
       });
   }, [estado, accessToken]);
@@ -271,9 +294,10 @@ export function CommentList({
             type="button"
             variant="outline"
             aria-disabled={estado.more === 'loading'}
+            aria-busy={estado.more === 'loading'}
             onClick={cargarMas}
           >
-            Cargar más comentarios
+            {estado.more === 'loading' ? 'Cargando comentarios…' : 'Cargar más comentarios'}
           </Button>
         </div>
       ) : null}
