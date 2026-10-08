@@ -3,8 +3,11 @@ import {
   CommentsApiError,
   type CommentEnvelope,
   type CommentInput,
+  type CommentsCursor,
   type CommentsEnvelope,
   type CommentsErrorKind,
+  type CommentsPage,
+  type CommentsPageEnvelope,
   type RoomComment,
 } from './types';
 
@@ -90,6 +93,18 @@ function toComment(value: unknown): RoomComment {
   return { id, roomId, body, createdAt };
 }
 
+/** `null` o ausente es «no hay más páginas»; cualquier otra forma es un fallo. */
+function toCursor(value: unknown): CommentsCursor | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object') throw fail('server');
+
+  const { createdAt, id } = value as Record<string, unknown>;
+
+  if (typeof createdAt !== 'string' || typeof id !== 'string') throw fail('server');
+
+  return { createdAt, id };
+}
+
 interface RequestOptions {
   method: 'GET' | 'POST';
   accessToken: string;
@@ -131,7 +146,10 @@ async function request<T>(
   }
 }
 
-/** Comentarios de una sala, en el orden que ya viene del servidor. */
+/**
+ * Todos los comentarios de una sala, en el orden que ya viene del servidor.
+ * Es el listado completo: lo usa la recuperación tras una reconexión.
+ */
 export async function listComments(
   roomId: string,
   accessToken: string,
@@ -148,6 +166,42 @@ export async function listComments(
   }
 
   return body.comments.map(toComment);
+}
+
+/** Tamaño de página de la lista de la sala (WAT-190). */
+export const COMMENTS_PAGE_SIZE = 20;
+
+/**
+ * Una página de comentarios de una sala, de a `COMMENTS_PAGE_SIZE`. Sin
+ * `cursor` es la primera; con `cursor`, la que sigue a esa posición.
+ *
+ * Los parámetros del cursor se llaman `before*` en la API, pero el servidor
+ * avanza en orden ascendente: la página trae comentarios posteriores. Viajan
+ * siempre juntos, y `URLSearchParams` codifica el «+» del offset horario.
+ */
+export async function listCommentsPage(
+  roomId: string,
+  accessToken: string,
+  { cursor, signal }: { cursor?: CommentsCursor; signal?: AbortSignal } = {},
+): Promise<CommentsPage> {
+  const params = new URLSearchParams({ limit: String(COMMENTS_PAGE_SIZE) });
+
+  if (cursor) {
+    params.set('beforeCreatedAt', cursor.createdAt);
+    params.set('beforeId', cursor.id);
+  }
+
+  const body = await request<CommentsPageEnvelope>(`${commentsUrl(roomId)}?${params}`, {
+    method: 'GET',
+    accessToken,
+    signal,
+  });
+
+  if (typeof body !== 'object' || body === null || !Array.isArray(body.comments)) {
+    throw fail('server');
+  }
+
+  return { comments: body.comments.map(toComment), nextCursor: toCursor(body.nextCursor) };
 }
 
 /**

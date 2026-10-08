@@ -23,11 +23,27 @@ describe('mergeComments', () => {
     expect(mergeComments([A, C], [A, B])).toEqual([A, B, C]);
   });
 
-  it('ante el mismo instante desempata por id, como el servidor', () => {
-    const gemeloZ = comentario('z', A.createdAt);
-    const gemeloM = comentario('m', A.createdAt);
+  it('ante el mismo milisegundo deja lo nuevo después de lo que ya estaba, sin desempatar por id', () => {
+    // El servidor ordena por microsegundos: «z» fue antes que «m» aunque su id
+    // sea mayor, y la API publica a ambos con el mismo milisegundo.
+    const primero = comentario('z', '2026-09-24T21:00:00.123Z');
+    const segundo = comentario('m', '2026-09-24T21:00:00.123Z');
 
-    expect(mergeComments([gemeloZ], [gemeloM, A])).toEqual([A, gemeloM, gemeloZ]);
+    expect(mergeComments([A, primero], [segundo])).toEqual([A, primero, segundo]);
+  });
+
+  it('entre los nuevos del mismo milisegundo conserva el orden recibido', () => {
+    const primero = comentario('z', '2026-09-24T21:00:00.123Z');
+    const segundo = comentario('m', '2026-09-24T21:00:00.123Z');
+
+    expect(mergeComments([A], [primero, segundo])).toEqual([A, primero, segundo]);
+  });
+
+  it('no reordena lo que ya estaba al recibirlo de nuevo', () => {
+    const primero = comentario('z', '2026-09-24T21:00:00.123Z');
+    const segundo = comentario('m', '2026-09-24T21:00:00.123Z');
+
+    expect(mergeComments([primero, segundo], [segundo, primero])).toEqual([primero, segundo]);
   });
 
   it('ordena por instante aunque las fechas vengan con distinto formato', () => {

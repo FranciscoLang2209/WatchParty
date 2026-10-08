@@ -1,27 +1,48 @@
 import type { RoomComment } from './types';
 
-/** Mismo orden que el servidor: por instante de creación y, ante empate, por `id`. */
-function byCreation(a: RoomComment, b: RoomComment): number {
-  const diferencia = Date.parse(a.createdAt) - Date.parse(b.createdAt);
-  if (diferencia !== 0) return diferencia;
-
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+/**
+ * Instante de creación en milisegundos. El servidor ordena por `created_at`
+ * con microsegundos pero lo publica truncado a milisegundos: dos comentarios
+ * del mismo milisegundo no se pueden ordenar acá, sólo respetar el orden en
+ * que llegaron.
+ */
+function instante(comment: RoomComment): number {
+  return Date.parse(comment.createdAt);
 }
 
 /**
  * Fusiona la lista en memoria con una respuesta del servidor. La identidad es
- * el `id`: lo repetido queda una sola vez (gana la versión recibida) y lo que
- * sólo está en una de las dos se conserva. Devuelve una lista nueva en orden
- * cronológico, sin modificar las recibidas.
+ * el `id`: lo repetido queda una sola vez (gana la versión recibida, en el
+ * lugar que ya ocupaba) y lo que sólo está en una de las dos se conserva.
+ *
+ * `current` ya está en el orden del servidor y no se reordena. Lo nuevo se
+ * intercala por instante; ante el mismo milisegundo queda después de lo que ya
+ * estaba y, entre sí, en el orden recibido. Así una página siguiente —que el
+ * servidor garantiza posterior al cursor— nunca se mete delante de la
+ * anterior. Devuelve una lista nueva, sin modificar las recibidas.
  */
 export function mergeComments(
   current: readonly RoomComment[],
   incoming: readonly RoomComment[],
 ): RoomComment[] {
-  const porId = new Map<string, RoomComment>();
+  const recibidos = new Map<string, RoomComment>();
+  for (const comment of incoming) recibidos.set(comment.id, comment);
 
-  for (const comment of current) porId.set(comment.id, comment);
-  for (const comment of incoming) porId.set(comment.id, comment);
+  const enMemoria = new Set(current.map((comment) => comment.id));
+  const actuales = current.map((comment) => recibidos.get(comment.id) ?? comment);
+  // `sort` es estable: los del mismo milisegundo conservan el orden recibido.
+  const nuevos = [...recibidos.values()]
+    .filter((comment) => !enMemoria.has(comment.id))
+    .sort((a, b) => instante(a) - instante(b));
 
-  return [...porId.values()].sort(byCreation);
+  const fusion: RoomComment[] = [];
+  let i = 0;
+  let j = 0;
+
+  while (i < actuales.length && j < nuevos.length) {
+    if (instante(nuevos[j]!) < instante(actuales[i]!)) fusion.push(nuevos[j++]!);
+    else fusion.push(actuales[i++]!);
+  }
+
+  return fusion.concat(actuales.slice(i), nuevos.slice(j));
 }

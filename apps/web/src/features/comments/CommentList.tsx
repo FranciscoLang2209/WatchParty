@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../../components/ui/button';
-import { listComments } from './api';
+import { listComments, listCommentsPage } from './api';
 import { mergeComments } from './merge';
-import { CommentsApiError, isCancelled, type RoomComment } from './types';
+import { CommentsApiError, isCancelled, type CommentsCursor, type RoomComment } from './types';
 
 export interface CommentListProps {
   roomId: string;
@@ -15,9 +15,10 @@ export interface CommentListProps {
    */
   newComments?: RoomComment[];
   /**
-   * Cada vez que cambia, la lista se vuelve a pedir y se fusiona por `id` con
+   * Cada vez que cambia, se pide la lista completa y se fusiona por `id` con
    * lo que ya está visible, sin anunciar carga. La pantalla de sala lo cambia
    * al recuperar la escucha en vivo, para traer lo que se perdió en la caída.
+   * Con la lista ya recuperada entera no queda nada por paginar.
    */
   reloadSignal?: number;
   /**
@@ -32,10 +33,19 @@ export interface CommentListProps {
 
 type Estado =
   | { status: 'loading' }
-  | { status: 'ready'; roomId: string; comments: RoomComment[] }
+  | {
+      status: 'ready';
+      roomId: string;
+      comments: RoomComment[];
+      /** Desde dónde sigue la página siguiente; `null` si no quedan más. */
+      nextCursor: CommentsCursor | null;
+      /** Estado del pedido de «Cargar más comentarios». */
+      more: 'idle' | 'loading' | 'error';
+    }
   | { status: 'error'; message: string; expired: boolean };
 
 const MENSAJE_INESPERADO = 'No pudimos cargar los comentarios. Intentá de nuevo.';
+const MENSAJE_MAS = 'No pudimos cargar más comentarios. Intentá de nuevo.';
 const MENSAJE_VACIO = 'Todavía no hay comentarios. Sé el primero en comentar la jugada.';
 
 function toEstadoError(error: unknown): Estado {
@@ -62,11 +72,14 @@ function formatFecha(iso: string): string {
 /**
  * Lista de comentarios de una sala.
  *
- * Consulta `listComments` al montarse (y de nuevo si cambia `roomId` o
+ * Pide la primera página al montarse (y de nuevo si cambia `roomId` o
  * `accessToken`) y respeta el orden que ya viene del servidor — no
- * reordena. Si vuelve a pedirla con la lista de esa misma sala ya visible
- * (por `reloadSignal`), fusiona la respuesta con ella en vez de reemplazarla,
- * y un fallo de esa recarga no tapa lo que ya se ve. `newComments` es la puerta de entrada para lo que crea
+ * reordena. Mientras el servidor informe un cursor ofrece «Cargar más
+ * comentarios», que trae la página siguiente y la fusiona por `id`. Si vuelve
+ * a pedir con la lista de esa misma sala ya visible, fusiona la respuesta con
+ * ella en vez de reemplazarla, y un fallo de esa recarga no tapa lo que ya se
+ * ve. Por `reloadSignal` pide la lista completa: recuperada entera, ya no
+ * pagina. `newComments` es la puerta de entrada para lo que crea
  * `CommentForm` y lo que llega por Realtime: se fusionan por `id` con la
  * lista, así un mismo valor recibido dos veces no duplica nada y uno que
  * llega fuera de orden queda en su lugar cronológico.
@@ -80,23 +93,41 @@ export function CommentList({
 }: CommentListProps) {
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
+  // Hay un pedido de página en curso: bloquea un segundo clic aunque todavía
+  // no se haya vuelto a renderizar.
+  const cargandoMas = useRef(false);
+  const pedidoDeMas = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     let vigente = true;
+    // Tras una reconexión se recupera la lista completa (WAT-171), no una página.
+    const completa = reloadSignal !== 0;
 
-    listComments(roomId, accessToken, controller.signal)
-      .then((comments) => {
+    const pedido = completa
+      ? listComments(roomId, accessToken, controller.signal).then((comments) => ({
+          comments,
+          nextCursor: null,
+        }))
+      : listCommentsPage(roomId, accessToken, { signal: controller.signal });
+
+    pedido
+      .then((page) => {
         if (!vigente) return;
 
-        setEstado((previo) => ({
-          status: 'ready',
-          roomId,
-          comments:
-            previo.status === 'ready' && previo.roomId === roomId
-              ? mergeComments(previo.comments, comments)
-              : comments,
-        }));
+        setEstado((previo) => {
+          const mismaSala = previo.status === 'ready' && previo.roomId === roomId;
+
+          return {
+            status: 'ready',
+            roomId,
+            comments: mismaSala ? mergeComments(previo.comments, page.comments) : page.comments,
+            // Volver a pedir la primera página (p. ej. al renovarse el token) no
+            // retrocede el cursor de quien ya había cargado más.
+            nextCursor: completa ? null : mismaSala ? previo.nextCursor : page.nextCursor,
+            more: mismaSala && !completa ? previo.more : 'idle',
+          };
+        });
       })
       .catch((error: unknown) => {
         // Una respuesta descartada por desmontaje o cambio de sala no se anuncia.
@@ -119,10 +150,84 @@ export function CommentList({
     };
   }, [roomId, accessToken, intento, reloadSignal]);
 
+  // Al salir, cambiar de sala o renovarse el token se cancela la página que
+  // estuviera en camino: su respuesta (p. ej. un 401 del token viejo) ya no
+  // vale. La acción queda libre para volver a pedirla con el token nuevo.
+  useEffect(
+    () => () => {
+      if (!pedidoDeMas.current) return;
+
+      pedidoDeMas.current.abort();
+      pedidoDeMas.current = null;
+      cargandoMas.current = false;
+      setEstado((previo) =>
+        previo.status === 'ready' && previo.more === 'loading'
+          ? { ...previo, more: 'idle' }
+          : previo,
+      );
+    },
+    [roomId, accessToken],
+  );
+
   const reintentar = useCallback(() => {
     setIntento((valor) => valor + 1);
     setEstado({ status: 'loading' });
   }, []);
+
+  const cargarMas = useCallback(() => {
+    if (estado.status !== 'ready' || estado.nextCursor === null || cargandoMas.current) return;
+
+    const cursor = estado.nextCursor;
+    const sala = estado.roomId;
+    const controller = new AbortController();
+
+    cargandoMas.current = true;
+    pedidoDeMas.current = controller;
+    setEstado((previo) =>
+      previo.status === 'ready' && previo.nextCursor === cursor
+        ? { ...previo, more: 'loading' }
+        : previo,
+    );
+
+    listCommentsPage(sala, accessToken, { cursor, signal: controller.signal })
+      .then((page) => {
+        if (controller.signal.aborted) return;
+
+        setEstado((previo) => {
+          if (previo.status !== 'ready' || previo.roomId !== sala) return previo;
+
+          const comments = mergeComments(previo.comments, page.comments);
+
+          // Si el cursor cambió mientras tanto (la reconexión ya trajo todo),
+          // la página sólo aporta comentarios: no reabre la paginación.
+          return previo.nextCursor === cursor
+            ? { ...previo, comments, nextCursor: page.nextCursor, more: 'idle' }
+            : { ...previo, comments };
+        });
+      })
+      .catch((error: unknown) => {
+        // Un pedido cancelado no se anuncia, aunque su error haya llegado
+        // después de cancelarlo.
+        if (controller.signal.aborted || isCancelled(error)) return;
+
+        const fallo = toEstadoError(error);
+
+        // El fallo conserva los comentarios y el cursor para reintentar, salvo
+        // que la sesión haya vencido: ahí hace falta ofrecer el reingreso.
+        setEstado((previo) => {
+          if (previo.status !== 'ready' || previo.roomId !== sala) return previo;
+          if (esSesionVencida(fallo)) return fallo;
+
+          return previo.nextCursor === cursor ? { ...previo, more: 'error' } : previo;
+        });
+      })
+      .finally(() => {
+        if (pedidoDeMas.current !== controller) return;
+
+        pedidoDeMas.current = null;
+        cargandoMas.current = false;
+      });
+  }, [estado, accessToken]);
 
   if (estado.status === 'loading') {
     return (
@@ -162,16 +267,40 @@ export function CommentList({
   }
 
   return (
-    <ul className="flex w-full list-none flex-col gap-3">
-      {comentarios.map((comment) => (
-        <li
-          key={comment.id}
-          className="w-full min-w-0 rounded-md border border-border bg-card px-3 py-2"
-        >
-          <p className="text-sm break-words whitespace-pre-wrap">{comment.body}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{formatFecha(comment.createdAt)}</p>
-        </li>
-      ))}
-    </ul>
+    <div className="flex w-full flex-col gap-3">
+      <ul className="flex w-full list-none flex-col gap-3">
+        {comentarios.map((comment) => (
+          <li
+            key={comment.id}
+            className="w-full min-w-0 rounded-md border border-border bg-card px-3 py-2"
+          >
+            <p className="text-sm break-words whitespace-pre-wrap">{comment.body}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{formatFecha(comment.createdAt)}</p>
+          </li>
+        ))}
+      </ul>
+
+      {estado.nextCursor !== null ? (
+        <div className="flex flex-col items-start gap-3">
+          {estado.more === 'error' ? (
+            <p role="alert" className="text-sm text-destructive">
+              {MENSAJE_MAS}
+            </p>
+          ) : null}
+
+          {/* El mismo botón reintenta tras un fallo. `aria-disabled` y no
+              `disabled`: no pierde el foco mientras llega la página. */}
+          <Button
+            type="button"
+            variant="outline"
+            aria-disabled={estado.more === 'loading'}
+            aria-busy={estado.more === 'loading'}
+            onClick={cargarMas}
+          >
+            {estado.more === 'loading' ? 'Cargando comentarios…' : 'Cargar más comentarios'}
+          </Button>
+        </div>
+      ) : null}
+    </div>
   );
 }
