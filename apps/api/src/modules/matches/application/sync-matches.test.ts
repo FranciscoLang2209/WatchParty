@@ -125,6 +125,11 @@ class FakeMatchStore implements MatchStore {
     return { id, wasInserted: true };
   }
 
+  /** Filas guardadas, para comprobar que reimportar no duplica nada. */
+  get storedFixtures(): { id: string; fixture: NormalizedMatchFixture }[] {
+    return [...this.fixturesByKey.values()];
+  }
+
   async acquireSyncLease(
     _scope: SyncLeaseScope,
     owner: string,
@@ -811,5 +816,216 @@ describe('syncMatches (API-Football) y el contrato de OPS-01', () => {
         summary: { imported: 1, updated: 0, skipped: 0, errors: 0, queries: 1 },
       }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Idempotencia, concurrencia y cuota del flujo de football-data.org (WAT-183)
+// ---------------------------------------------------------------------------
+
+function runFootball(
+  store: FakeMatchStore,
+  clock: FakeClock,
+  client: FakeFootballDataOrgClient,
+  owner: string,
+  config: SyncFootballDataOrgConfig = FOOTBALL_CONFIG,
+) {
+  return syncFootballDataOrgMatches({ client, store, clock, owner }, config);
+}
+
+describe('syncFootballDataOrgMatches: idempotencia (WAT-183)', () => {
+  it('reimportar el mismo partido lo actualiza, conserva su UUID y no agrega filas', async () => {
+    const clock = new FakeClock();
+    const store = new FakeMatchStore(clock);
+
+    const first = await runFootball(
+      store,
+      clock,
+      new FakeFootballDataOrgClient([footballSuccess([buildMatchRaw(560593)])]),
+      'owner-1',
+    );
+    const idAntes = store.storedFixtures[0]!.id;
+
+    const second = await runFootball(
+      store,
+      clock,
+      new FakeFootballDataOrgClient([
+        footballSuccess([
+          buildMatchRaw(560593, { status: 'IN_PLAY', utcDate: '2026-09-13T15:30:00Z' }),
+        ]),
+      ]),
+      'owner-2',
+    );
+
+    expect(first).toMatchObject({ exitCode: 0, summary: { importados: 1, actualizados: 0 } });
+    expect(second).toMatchObject({ exitCode: 0, summary: { importados: 0, actualizados: 1 } });
+    expect(store.storedFixtures).toHaveLength(1);
+    expect(store.storedFixtures[0]!.id).toBe(idAntes);
+    expect(store.storedFixtures[0]!.fixture).toMatchObject({
+      status: 'live',
+      kickoffAt: '2026-09-13T15:30:00.000Z',
+    });
+  });
+
+  it('el mismo ID externo en dos proveedores son partidos distintos y nunca se pisan', async () => {
+    const clock = new FakeClock();
+    const store = new FakeMatchStore(clock);
+
+    await runFootball(
+      store,
+      clock,
+      new FakeFootballDataOrgClient([footballSuccess([buildMatchRaw(7)])]),
+      'owner-1',
+    );
+    await syncMatches(
+      {
+        client: new FakeClient([successOutcome([buildFixtureRaw(7)])]),
+        store,
+        clock,
+        owner: 'owner-2',
+      },
+      SMALL_CONFIG,
+    );
+
+    expect(store.storedFixtures).toHaveLength(2);
+    expect(store.storedFixtures.map((row) => row.fixture.provider).sort()).toEqual([
+      'api-football',
+      'football-data-org',
+    ]);
+    expect(new Set(store.storedFixtures.map((row) => row.id)).size).toBe(2);
+  });
+});
+
+describe('syncFootballDataOrgMatches: concurrencia (WAT-183)', () => {
+  it('dos ejecuciones concurrentes sobre el mismo scope consultan al proveedor una sola vez', async () => {
+    const clock = new FakeClock();
+    const store = new FakeMatchStore(clock);
+    const acquireSpy = vi.spyOn(store, 'acquireSyncLease');
+    const reserveSpy = vi.spyOn(store, 'reserveProviderQuotaUnit');
+    const recordSpy = vi.spyOn(store, 'recordSyncResult');
+    const clientA = new FakeFootballDataOrgClient([footballSuccess([buildMatchRaw(1)])]);
+    const clientB = new FakeFootballDataOrgClient([footballSuccess([buildMatchRaw(1)])]);
+
+    const results = await Promise.all([
+      runFootball(store, clock, clientA, 'owner-a'),
+      runFootball(store, clock, clientB, 'owner-b'),
+    ]);
+
+    // Una completa y la otra sale por lease tomado.
+    expect(results.map((result) => result.exitCode).sort()).toEqual([0, 2]);
+    expect(clientA.calls.length + clientB.calls.length).toBe(1);
+
+    // Solo una adquirió el lease; la otra no reservó cuota ni cerró un intento ajeno.
+    const leases = await Promise.all(acquireSpy.mock.results.map((result) => result.value));
+    expect(leases.filter((token) => token !== null)).toHaveLength(1);
+    expect(reserveSpy).toHaveBeenCalledTimes(1);
+    expect(recordSpy).toHaveBeenCalledTimes(1);
+    expect(store.storedFixtures).toHaveLength(1);
+  });
+
+  it('libera el lease al terminar, incluso con error, y una ejecución posterior lo adquiere', async () => {
+    const clock = new FakeClock();
+    const store = new FakeMatchStore(clock);
+
+    const first = await runFootball(
+      store,
+      clock,
+      new FakeFootballDataOrgClient([{ kind: 'network-error', message: 'boom' }]),
+      'owner-1',
+    );
+    const second = await runFootball(
+      store,
+      clock,
+      new FakeFootballDataOrgClient([footballSuccess([buildMatchRaw(1)])]),
+      'owner-2',
+    );
+
+    expect(first.exitCode).toBe(1);
+    expect(second.exitCode).toBe(0);
+  });
+});
+
+describe('syncFootballDataOrgMatches: cuota (WAT-183)', () => {
+  it('la reserva persiste entre ejecuciones y, agotada, no se hacen nuevas solicitudes', async () => {
+    const config: SyncFootballDataOrgConfig = { ...FOOTBALL_CONFIG, dailyQuotaLimit: 2 };
+    const clock = new FakeClock();
+    const store = new FakeMatchStore(clock);
+    const clientOne = new FakeFootballDataOrgClient([footballSuccess([])]);
+    const clientTwo = new FakeFootballDataOrgClient([footballSuccess([])]);
+    const clientThree = new FakeFootballDataOrgClient([footballSuccess([])]);
+
+    const first = await runFootball(store, clock, clientOne, 'owner-1', config);
+    const second = await runFootball(store, clock, clientTwo, 'owner-2', config);
+    const third = await runFootball(store, clock, clientThree, 'owner-3', config);
+
+    expect([first.exitCode, second.exitCode, third.exitCode]).toEqual([0, 0, 1]);
+    expect(clientOne.calls).toHaveLength(1);
+    expect(clientTwo.calls).toHaveLength(1);
+    expect(clientThree.calls).toHaveLength(0);
+
+    if (third.exitCode === 2) throw new Error('unreachable');
+    expect(third.summary).toMatchObject({
+      consultasReservadas: 0,
+      consultasRealizadas: 0,
+      presupuestoRestante: 0,
+    });
+  });
+
+  it('un reintento reserva su propia unidad: sin cuota para el reintento, no se vuelve a llamar', async () => {
+    const config: SyncFootballDataOrgConfig = { ...FOOTBALL_CONFIG, dailyQuotaLimit: 1 };
+    const clock = new FakeClock();
+    const store = new FakeMatchStore(clock);
+    const client = new FakeFootballDataOrgClient([
+      { kind: 'timeout' },
+      footballSuccess([buildMatchRaw(1)]),
+    ]);
+
+    const result = await runFootball(store, clock, client, 'owner-1', config);
+
+    expect(client.calls).toHaveLength(1);
+    expect(result.exitCode).toBe(1);
+    if (result.exitCode === 2) throw new Error('unreachable');
+    expect(result.summary).toMatchObject({
+      importados: 0,
+      consultasReservadas: 1,
+      consultasRealizadas: 1,
+      presupuestoRestante: 0,
+    });
+  });
+
+  it('agotar la cuota de API-Football no bloquea a football-data.org', async () => {
+    const clock = new FakeClock();
+    const store = new FakeMatchStore(clock);
+    for (let i = 0; i < SMALL_CONFIG.dailyQuotaLimit; i += 1) {
+      await store.reserveProviderQuotaUnit(
+        SMALL_CONFIG.provider,
+        QUOTA_DATE_UTC,
+        SMALL_CONFIG.dailyQuotaLimit,
+      );
+    }
+    const client = new FakeFootballDataOrgClient([footballSuccess([])]);
+
+    const result = await runFootball(store, clock, client, 'owner-1');
+
+    expect(result.exitCode).toBe(0);
+    expect(client.calls).toHaveLength(1);
+  });
+
+  it('agotar la cuota de football-data.org no bloquea a API-Football', async () => {
+    const clock = new FakeClock();
+    const store = new FakeMatchStore(clock);
+    for (let i = 0; i < FOOTBALL_CONFIG.dailyQuotaLimit; i += 1) {
+      await store.reserveProviderQuotaUnit(
+        FOOTBALL_CONFIG.provider,
+        QUOTA_DATE_UTC,
+        FOOTBALL_CONFIG.dailyQuotaLimit,
+      );
+    }
+    const client = new FakeClient([successOutcome([])]);
+
+    const result = await syncMatches({ client, store, clock, owner: 'owner-1' }, SMALL_CONFIG);
+
+    expect(result.exitCode).toBe(0);
+    expect(client.calls).toHaveLength(1);
   });
 });
