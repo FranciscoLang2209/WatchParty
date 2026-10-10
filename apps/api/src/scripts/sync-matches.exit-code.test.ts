@@ -5,6 +5,25 @@ import { describe, it, expect } from 'vitest';
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 /**
+ * El script carga `apps/api/.env` (`--env-file-if-exists`), y Node no pisa una
+ * variable ya definida, ni siquiera vacía. Se definen vacías para que un `.env`
+ * local no altere el resultado del test.
+ */
+const BLANK_ENV: Record<string, string> = Object.fromEntries(
+  [
+    'SUPABASE_URL',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_ANON_KEY',
+    'WEB_ORIGIN',
+    'FOOTBALL_DATA_ORG_BASE_URL',
+    'FOOTBALL_DATA_ORG_API_KEY',
+    'API_FOOTBALL_BASE_URL',
+    'API_FOOTBALL_KEY',
+    'MATCHES_SYNC_PROVIDER',
+  ].map((name) => [name, '']),
+);
+
+/**
  * Ejecuta el comando real como lo hace el workflow, con un entorno mínimo y
  * controlado. Ningún caso llega a la red: todos fallan en validación de
  * configuración antes de crear clientes.
@@ -17,6 +36,7 @@ function runSyncCommand(extraEnv: Record<string, string>) {
     env: {
       PATH: process.env.PATH ?? '',
       HOME: process.env.HOME ?? '',
+      ...BLANK_ENV,
       ...extraEnv,
     },
   });
@@ -60,5 +80,14 @@ describe('matches:sync — propagación del código de salida', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.status).not.toBeNull();
+  });
+  it('sale con código 2 nombrando lo que falta si no hay configuración de Supabase', () => {
+    const result = runSyncCommand({
+      FOOTBALL_DATA_ORG_BASE_URL: 'https://example.invalid',
+      FOOTBALL_DATA_ORG_API_KEY: 'test-key',
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('SUPABASE_SERVICE_ROLE_KEY');
   });
 });

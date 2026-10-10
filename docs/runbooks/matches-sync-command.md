@@ -35,6 +35,33 @@ El workflow `Matches sync` corre `pnpm --filter @watchparty/api matches:sync` to
 - El código de salida del comando se propaga tal cual: cualquier valor distinto de `0` deja la corrida en rojo.
 - Secrets de repositorio requeridos: `FOOTBALL_DATA_ORG_BASE_URL` y `FOOTBALL_DATA_ORG_API_KEY` (proveedor por defecto), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` y `WEB_ORIGIN` (las dos últimas solo porque `config/env.ts` las exige al importarse). Para usar API-Football desde el workflow, definir la variable de repositorio `MATCHES_SYNC_PROVIDER=api-football` y cargar también `API_FOOTBALL_BASE_URL` y `API_FOOTBALL_KEY`. Su carga es parte de OPS-03/OPS-04.
 
+## Configuración de producción y preflight (WAT-186)
+
+Al arrancar, `matches:sync` valida todo el entorno (Supabase y el proveedor seleccionado) antes de crear clientes, consultar al proveedor o escribir en la base. Si falta o es inválida alguna variable, sale con código `2` y un mensaje que las lista todas juntas, sin mostrar nunca sus valores.
+
+- El preflight verifica que cada variable esté presente (no vacía ni solo espacios) y que las URLs sean http(s) válidas. **No prueba que las credenciales funcionen**: una clave con formato válido pero equivocada falla recién cuando el proveedor o Supabase la rechazan (código `1`).
+- Solo se exigen las variables del proveedor elegido con `MATCHES_SYNC_PROVIDER`. Las credenciales de Supabase y las del proveedor son independientes.
+
+### Secrets de producción
+
+Se cargan como secrets de repositorio (Settings → Secrets and variables → Actions → Secrets). Nunca como valores literales en el workflow.
+
+| Secret                                      | Qué es                                                                             |
+| ------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `SUPABASE_URL`                              | URL del proyecto Supabase que usa la API publicada.                                |
+| `SUPABASE_SERVICE_ROLE_KEY`                 | Clave `service_role` del mismo proyecto. Salta RLS: solo backend.                  |
+| `SUPABASE_ANON_KEY`                         | Solo porque `config/env.ts` la exige al importarse; la sincronización no la usa.   |
+| `WEB_ORIGIN`                                | Ídem: origen del frontend publicado, exigido por `config/env.ts`.                  |
+| `FOOTBALL_DATA_ORG_BASE_URL`                | Proveedor por defecto: base URL de football-data.org.                              |
+| `FOOTBALL_DATA_ORG_API_KEY`                 | Token de la cuenta Free verificada en WAT-180.                                     |
+| `API_FOOTBALL_BASE_URL`, `API_FOOTBALL_KEY` | Solo si se define la variable de repositorio `MATCHES_SYNC_PROVIDER=api-football`. |
+
+Reglas:
+
+- Ninguna de estas claves puede llamarse `VITE_*` ni llegar al bundle del frontend (un test del repo lo verifica).
+- No existe un endpoint HTTP que dispare importaciones: el único disparador es el comando, desde una persona o el workflow.
+- Una vez cargados los secrets, el workflow se activa creando la variable de repositorio `MATCHES_SYNC_ENABLED=true`.
+
 ## Códigos de salida
 
 | Código | Significado                                                                                                                                                                                                                                                        |

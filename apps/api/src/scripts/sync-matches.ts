@@ -7,7 +7,7 @@ import {
 } from '../config/sports-provider-env.js';
 import { createApiFootballClient } from '../modules/matches/infrastructure/api-football-client.js';
 import { createFootballDataOrgClient } from '../modules/matches/infrastructure/football-data-org-client.js';
-import { createSupabaseSportsDataClient } from '../modules/matches/infrastructure/supabase-sports-data-client.js';
+import { checkSyncEnv, syncEnvRequirements } from '../config/sync-preflight.js';
 import { SupabaseMatchStore } from '../modules/matches/infrastructure/supabase-match-store.js';
 import {
   syncFootballDataOrgMatches,
@@ -53,13 +53,26 @@ function createProviderRunner(provider: SyncProviderName): ProviderRunner {
 async function main(): Promise<void> {
   let runProvider: ProviderRunner;
   try {
-    runProvider = createProviderRunner(resolveSyncProvider());
+    const provider = resolveSyncProvider();
+    // Preflight (WAT-186): valida todo el entorno, Supabase incluido, antes de
+    // consultar al proveedor o escribir en la base.
+    const preflight = checkSyncEnv(process.env, syncEnvRequirements(provider));
+
+    if (!preflight.ok) {
+      throw new Error(preflight.message);
+    }
+
+    runProvider = createProviderRunner(provider);
   } catch (error) {
     console.error(error instanceof Error ? error.message : 'Configuración inválida.');
     process.exitCode = 2;
     return;
   }
 
+  // Import dinámico: `config/env.ts` lanza al cargarse si falta una variable, y
+  // eso debe pasar recién después del preflight para que el fallo salga con código 2.
+  const { createSupabaseSportsDataClient } =
+    await import('../modules/matches/infrastructure/supabase-sports-data-client.js');
   const store = new SupabaseMatchStore(createSupabaseSportsDataClient());
   const clock = {
     now: () => new Date(),
