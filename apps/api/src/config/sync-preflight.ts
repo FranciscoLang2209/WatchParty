@@ -29,13 +29,15 @@ export type SyncPreflightResult =
 
 const URL_REASON = 'debe ser una URL http(s) válida';
 
+const HTTP_SCHEME = /^https?:\/\//i;
+
+/**
+ * `new URL` normaliza `https:/host` a `https://host/`, así que no alcanza para
+ * detectar una URL malformada: Supabase y `fetch` reciben el valor tal cual y
+ * lo rechazan. Por eso se exige el prefijo `http://` o `https://` literal.
+ */
 export function httpUrl(value: string): string | null {
-  try {
-    const { protocol } = new URL(value);
-    return protocol === 'http:' || protocol === 'https:' ? null : URL_REASON;
-  } catch {
-    return URL_REASON;
-  }
+  return HTTP_SCHEME.test(value) && URL.canParse(value) ? null : URL_REASON;
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   SUPABASE_ENV_REQUIREMENTS,
   checkSyncEnv,
   syncEnvRequirements,
+  httpUrl,
 } from './sync-preflight.js';
 
 const ALL_REQUIREMENTS = syncEnvRequirements('football-data-org');
@@ -21,6 +22,25 @@ const VALID_ENV: NodeJS.ProcessEnv = {
   FOOTBALL_DATA_ORG_API_KEY: 'provider-secret',
 };
 
+describe('httpUrl', () => {
+  it.each(['https://example.supabase.co', 'http://127.0.0.1:54321', 'HTTPS://example.com'])(
+    'acepta %s',
+    (value) => {
+      expect(httpUrl(value)).toBeNull();
+    },
+  );
+
+  it.each([
+    'https:/example.invalid',
+    'http:/example.invalid',
+    'https:example.invalid',
+    'https://',
+    'ftp://host',
+    'no-es-una-url',
+  ])('rechaza %s', (value) => {
+    expect(httpUrl(value)).not.toBeNull();
+  });
+});
 describe('checkSyncEnv — configuración válida', () => {
   it('acepta un entorno completo', () => {
     expect(checkSyncEnv(VALID_ENV, ALL_REQUIREMENTS)).toEqual({ ok: true });
@@ -60,6 +80,19 @@ describe('checkSyncEnv — configuración incompleta', () => {
     expect(result.invalid.map(({ name }) => name)).toEqual([
       'SUPABASE_URL',
       'FOOTBALL_DATA_ORG_BASE_URL',
+    ]);
+  });
+
+  it('marca como inválida una URL que new URL() normalizaría, como https:/host', () => {
+    const result = checkSyncEnv(
+      { ...VALID_ENV, SUPABASE_URL: 'https:/example.invalid' },
+      ALL_REQUIREMENTS,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.invalid).toEqual([
+      { name: 'SUPABASE_URL', reason: 'debe ser una URL http(s) válida' },
     ]);
   });
 

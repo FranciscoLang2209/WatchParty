@@ -90,4 +90,16 @@ describe('matches:sync — propagación del código de salida', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('SUPABASE_SERVICE_ROLE_KEY');
   });
+  it('sale con código 2 si una URL es malformada aunque new URL() la acepte', () => {
+    const result = runSyncCommand({
+      ...SUPABASE_ENV,
+      SUPABASE_URL: 'https:/example.invalid',
+      FOOTBALL_DATA_ORG_BASE_URL: 'https://api.football-data.org',
+      FOOTBALL_DATA_ORG_API_KEY: 'test-key',
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('SUPABASE_URL');
+    expect(result.stderr).toContain('debe ser una URL http(s) válida');
+  });
 });
