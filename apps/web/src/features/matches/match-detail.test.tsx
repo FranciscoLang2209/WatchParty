@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -348,5 +348,189 @@ describe('Retorno a Home', () => {
     await user.click(m.getByRole('link', { name: 'Volver a Home' }));
 
     expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
+  });
+});
+
+describe('Marcar como visto', () => {
+  const URL_VISTO = `${API_BASE}/matches/match-001/watched`;
+
+  /** El detalle se carga siempre bien; la respuesta de «visto» la decide cada prueba. */
+  function responderVisto(respuesta: (metodo: string) => Promise<Response>) {
+    fetchSpy.mockImplementation((url: RequestInfo | URL, init?: RequestInit) =>
+      String(url) === URL_VISTO
+        ? respuesta(init?.method ?? 'GET')
+        : Promise.resolve(jsonResponse({ match: partido })),
+    );
+  }
+
+  /** Confirma el estado que se pidió: PUT marca y DELETE deshace. */
+  function servidorQueConfirma() {
+    responderVisto((metodo) => Promise.resolve(jsonResponse({ watched: metodo === 'PUT' })));
+  }
+
+  function llamadasVisto(): [string, RequestInit][] {
+    return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
+      ([url]) => String(url) === URL_VISTO,
+    );
+  }
+
+  async function abrirDetalle() {
+    renderAt('/matches/match-001');
+    return detalle();
+  }
+
+  it('muestra «Marcar como visto» al abrir, con un nombre inequívoco, sin consultar nada', async () => {
+    const m = await abrirDetalle();
+
+    expect(await m.findByRole('button', { name: 'Marcar como visto' })).toBeEnabled();
+    expect(m.getAllByRole('button', { name: /visto/i })).toHaveLength(1);
+    expect(llamadasVisto()).toHaveLength(0);
+  });
+
+  it('marca con PUT y bearer, y el texto pasa a «Deshacer visto»', async () => {
+    const user = userEvent.setup();
+    servidorQueConfirma();
+
+    const m = await abrirDetalle();
+    await user.click(await m.findByRole('button', { name: 'Marcar como visto' }));
+
+    expect(await m.findByRole('button', { name: 'Deshacer visto' })).toBeEnabled();
+    expect(llamadasVisto()).toHaveLength(1);
+
+    const [url, init] = llamadasVisto()[0]!;
+    expect(url).toBe(URL_VISTO);
+    expect(init.method).toBe('PUT');
+    expect(new Headers(init.headers).get('Authorization')).toBe(`Bearer ${session.access_token}`);
+  });
+
+  it('deshace con DELETE y el texto vuelve a «Marcar como visto»', async () => {
+    const user = userEvent.setup();
+    servidorQueConfirma();
+
+    const m = await abrirDetalle();
+    await user.click(await m.findByRole('button', { name: 'Marcar como visto' }));
+    await user.click(await m.findByRole('button', { name: 'Deshacer visto' }));
+
+    expect(await m.findByRole('button', { name: 'Marcar como visto' })).toBeEnabled();
+    expect(llamadasVisto().map(([, init]) => init.method)).toEqual(['PUT', 'DELETE']);
+  });
+
+  it('mientras espera deshabilita la acción y no dispara operaciones duplicadas', async () => {
+    const user = userEvent.setup();
+    responderVisto(() => new Promise<Response>(() => {}));
+
+    const m = await abrirDetalle();
+    const boton = await m.findByRole('button', { name: 'Marcar como visto' });
+    await user.click(boton);
+    await user.click(boton);
+
+    expect(boton).toBeDisabled();
+    expect(boton).toHaveAttribute('aria-busy', 'true');
+    // El estado no cambia hasta que el servidor responda.
+    expect(boton).toHaveTextContent('Marcar como visto');
+    expect(llamadasVisto()).toHaveLength(1);
+  });
+
+  it('un error de API avisa, conserva el estado confirmado y deja reintentar', async () => {
+    const user = userEvent.setup();
+    let fallar = true;
+    responderVisto((metodo) =>
+      Promise.resolve(
+        fallar
+          ? jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)
+          : jsonResponse({ watched: metodo === 'PUT' }),
+      ),
+    );
+
+    const m = await abrirDetalle();
+    await user.click(await m.findByRole('button', { name: 'Marcar como visto' }));
+
+    expect(await m.findByRole('alert')).toHaveTextContent(
+      'No pudimos actualizar el partido visto. Intentá de nuevo.',
+    );
+    // Sigue el último estado confirmado y la acción queda disponible.
+    expect(m.getByRole('button', { name: 'Marcar como visto' })).toBeEnabled();
+
+    fallar = false;
+    await user.click(m.getByRole('button', { name: 'Marcar como visto' }));
+
+    expect(await m.findByRole('button', { name: 'Deshacer visto' })).toBeEnabled();
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('un error al deshacer conserva «Deshacer visto»', async () => {
+    const user = userEvent.setup();
+    responderVisto((metodo) =>
+      Promise.resolve(
+        metodo === 'PUT'
+          ? jsonResponse({ watched: true })
+          : jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500),
+      ),
+    );
+
+    const m = await abrirDetalle();
+    await user.click(await m.findByRole('button', { name: 'Marcar como visto' }));
+    await user.click(await m.findByRole('button', { name: 'Deshacer visto' }));
+
+    expect(await m.findByRole('alert')).toBeInTheDocument();
+    expect(m.getByRole('button', { name: 'Deshacer visto' })).toBeEnabled();
+  });
+
+  it('una caída de red avisa y no cambia el estado', async () => {
+    const user = userEvent.setup();
+    responderVisto(() => Promise.reject(new TypeError('Failed to fetch')));
+
+    const m = await abrirDetalle();
+    await user.click(await m.findByRole('button', { name: 'Marcar como visto' }));
+
+    expect(await m.findByRole('alert')).toHaveTextContent('No pudimos conectarnos.');
+    expect(m.getByRole('button', { name: 'Marcar como visto' })).toBeEnabled();
+  });
+
+  it('muestra el estado que confirma el servidor, no el que se pidió', async () => {
+    const user = userEvent.setup();
+    responderVisto(() => Promise.resolve(jsonResponse({ watched: false })));
+
+    const m = await abrirDetalle();
+    await user.click(await m.findByRole('button', { name: 'Marcar como visto' }));
+
+    await waitFor(() => expect(llamadasVisto()).toHaveLength(1));
+    expect(await m.findByRole('button', { name: 'Marcar como visto' })).toBeEnabled();
+    expect(m.queryByRole('button', { name: 'Deshacer visto' })).not.toBeInTheDocument();
+  });
+
+  it('ante un 401 ofrece reingresar con el flujo de Auth existente', async () => {
+    const user = userEvent.setup();
+    responderVisto(() =>
+      Promise.resolve(jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401)),
+    );
+
+    const m = await abrirDetalle();
+    await user.click(await m.findByRole('button', { name: 'Marcar como visto' }));
+
+    expect(await m.findByRole('alert')).toHaveTextContent(
+      'La sesión venció. Iniciá sesión nuevamente.',
+    );
+
+    await user.click(m.getByRole('button', { name: 'Iniciar sesión nuevamente' }));
+
+    expect(authMock.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('se opera con el teclado: Enter marca y Espacio deshace', async () => {
+    const user = userEvent.setup();
+    servidorQueConfirma();
+
+    const m = await abrirDetalle();
+    const marcar = await m.findByRole('button', { name: 'Marcar como visto' });
+    marcar.focus();
+    await user.keyboard('{Enter}');
+
+    const deshacer = await m.findByRole('button', { name: 'Deshacer visto' });
+    deshacer.focus();
+    await user.keyboard(' ');
+
+    expect(await m.findByRole('button', { name: 'Marcar como visto' })).toBeEnabled();
+    expect(llamadasVisto().map(([, init]) => init.method)).toEqual(['PUT', 'DELETE']);
   });
 });

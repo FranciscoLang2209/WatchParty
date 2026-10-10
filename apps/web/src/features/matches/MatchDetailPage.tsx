@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { enterRoom } from '@/features/rooms/api';
 import { RoomsApiError, isCancelled as isRoomCancelled } from '@/features/rooms/types';
+import { setWatched } from '@/features/watched/api';
+import { WatchedApiError, isCancelled as isWatchedCancelled } from '@/features/watched/types';
 import { formatKickoff, matchStatusLabel } from './format';
 import { getMatch } from './api';
 import { MatchesApiError, isCancelled, type Match } from './types';
@@ -16,10 +18,12 @@ type Estado =
   | { status: 'error'; message: string; expired: boolean };
 
 type ErrorSala = { message: string; expired: boolean };
+type ErrorVisto = { message: string; expired: boolean };
 
 const TITULO_NEUTRO = 'Detalle del partido';
 const MENSAJE_INESPERADO = 'No pudimos cargar el partido. Intentá de nuevo.';
 const MENSAJE_INESPERADO_SALA = 'No pudimos abrir la sala. Intentá de nuevo.';
+const MENSAJE_INESPERADO_VISTO = 'No pudimos actualizar el partido visto. Intentá de nuevo.';
 
 function toEstadoError(error: unknown): Estado {
   if (error instanceof MatchesApiError) {
@@ -41,6 +45,14 @@ function toErrorSala(error: unknown): ErrorSala {
   return { message: MENSAJE_INESPERADO_SALA, expired: false };
 }
 
+function toErrorVisto(error: unknown): ErrorVisto {
+  if (error instanceof WatchedApiError) {
+    return { message: error.message, expired: error.kind === 'unauthorized' };
+  }
+
+  return { message: MENSAJE_INESPERADO_VISTO, expired: false };
+}
+
 function VolverAHome() {
   return (
     <Link
@@ -49,6 +61,80 @@ function VolverAHome() {
     >
       Volver a Home
     </Link>
+  );
+}
+
+interface MarcarVistoProps {
+  matchId: string;
+  accessToken: string | null;
+  onSessionExpired: () => void;
+}
+
+/**
+ * Control de «visto» del partido mostrado (WAT-179).
+ *
+ * El estado local arranca en falso: no hay consulta del estado actual (el
+ * listado de vistos queda fuera de alcance). SOLO cambia con la respuesta
+ * exitosa del servidor: mientras la petición está en curso la acción queda
+ * deshabilitada, y un fallo conserva el último estado confirmado y deja
+ * reintentar con el mismo botón. Se monta con `key` por partido, así al
+ * cambiar de partido el estado arranca de cero.
+ */
+function MarcarVisto({ matchId, accessToken, onSessionExpired }: MarcarVistoProps) {
+  const [visto, setVisto] = useState(false);
+  const [actualizando, setActualizando] = useState(false);
+  const [error, setError] = useState<ErrorVisto | null>(null);
+  const controller = useRef<AbortController | null>(null);
+
+  // Si la pantalla se desmonta mientras espera, la respuesta se descarta.
+  useEffect(() => () => controller.current?.abort(), []);
+
+  const alternar = useCallback(() => {
+    if (accessToken === null || actualizando) return;
+
+    const abortController = new AbortController();
+    controller.current = abortController;
+    setActualizando(true);
+    setError(null);
+
+    setWatched(matchId, !visto, accessToken, abortController.signal)
+      .then((confirmado) => {
+        setVisto(confirmado);
+        setActualizando(false);
+      })
+      .catch((caught: unknown) => {
+        if (isWatchedCancelled(caught)) return;
+
+        setError(toErrorVisto(caught));
+        setActualizando(false);
+      });
+  }, [accessToken, actualizando, matchId, visto]);
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        className="self-start"
+        disabled={actualizando}
+        aria-busy={actualizando}
+        onClick={alternar}
+      >
+        {visto ? 'Deshacer visto' : 'Marcar como visto'}
+      </Button>
+
+      {error ? (
+        <div role="alert" className="flex flex-col items-start gap-3">
+          <p className="text-sm text-destructive">{error.message}</p>
+
+          {error.expired ? (
+            <Button type="button" onClick={onSessionExpired}>
+              Iniciar sesión nuevamente
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -174,6 +260,13 @@ export function MatchDetailPage() {
                 ) : null}
               </div>
             ) : null}
+
+            <MarcarVisto
+              key={estado.match.id}
+              matchId={estado.match.id}
+              accessToken={accessToken}
+              onSessionExpired={() => void signOut()}
+            />
           </>
         ) : null}
 
