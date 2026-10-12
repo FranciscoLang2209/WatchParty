@@ -90,7 +90,7 @@ export function LandingPage() {
             className="mx-auto grid w-full max-w-7xl items-center gap-10 px-4 py-12 sm:py-16 desktop:grid-cols-2 desktop:px-6 desktop:py-24"
           >
             <div className="flex flex-col gap-6">
-              <p className="text-sm font-semibold tracking-widest text-primary uppercase">
+              <p className="text-sm font-semibold tracking-widest text-foreground uppercase dark:text-primary">
                 Fútbol en vivo, en comunidad
               </p>
               <h1
