@@ -498,6 +498,7 @@ async function runSync<O extends SyncFetchOutcome>(
 
   let firstErrorReason: string | undefined;
   let quotaExhausted = false;
+  let resultRecordingFailed = false;
 
   try {
     let page = 1;
@@ -508,6 +509,7 @@ async function runSync<O extends SyncFetchOutcome>(
 
       if (attempt.kind === 'quota-exhausted') {
         quotaExhausted = true;
+        firstErrorReason ??= 'quota-exhausted';
         break;
       }
 
@@ -547,13 +549,27 @@ async function runSync<O extends SyncFetchOutcome>(
     if (state.providerObservedRemaining !== null) {
       details.observedQuotaRemaining = state.providerObservedRemaining;
     }
-    await deps.store.recordSyncResult(scope, leaseToken, firstErrorReason === undefined, details);
+    try {
+      const recorded = await deps.store.recordSyncResult(
+        scope,
+        leaseToken,
+        firstErrorReason === undefined,
+        details,
+      );
+      if (!recorded) {
+        resultRecordingFailed = true;
+        incrementReasonCount(summary.errores, 'result-not-recorded');
+      }
+    } catch {
+      resultRecordingFailed = true;
+      incrementReasonCount(summary.errores, 'result-record-error');
+    }
   }
 
   summary.presupuestoRestante = Math.max(config.dailyQuotaLimit - state.lastReservedCount, 0);
 
-  const exitCode: 0 | 1 = firstErrorReason !== undefined || quotaExhausted ? 1 : 0;
-
+  const exitCode: 0 | 1 =
+    firstErrorReason !== undefined || quotaExhausted || resultRecordingFailed ? 1 : 0;
   return { exitCode, summary };
 }
 
