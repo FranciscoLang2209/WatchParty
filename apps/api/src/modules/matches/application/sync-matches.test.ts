@@ -1028,4 +1028,85 @@ describe('syncFootballDataOrgMatches: cuota (WAT-183)', () => {
     expect(result.exitCode).toBe(0);
     expect(client.calls).toHaveLength(1);
   });
+  describe('syncMatches: fallos no pueden parecer éxito (OPS-05)', () => {
+    it('cuota agotada: registra fallo (no éxito) y sale con código 1', async () => {
+      const clock = new FakeClock();
+      const store = new FakeMatchStore(clock);
+      for (let i = 0; i < SMALL_CONFIG.dailyQuotaLimit; i += 1) {
+        await store.reserveProviderQuotaUnit(
+          SMALL_CONFIG.provider,
+          QUOTA_DATE_UTC,
+          SMALL_CONFIG.dailyQuotaLimit,
+        );
+      }
+      const recordSpy = vi.spyOn(store, 'recordSyncResult');
+      const client = new FakeClient([]);
+
+      const result = await syncMatches({ client, store, clock, owner: 'owner-1' }, SMALL_CONFIG);
+
+      expect(result.exitCode).toBe(1);
+      expect(client.calls).toHaveLength(0);
+      expect(recordSpy).toHaveBeenCalledWith(
+        SCOPE,
+        expect.any(String),
+        false,
+        expect.objectContaining({ error: 'quota-exhausted' }),
+      );
+    });
+
+    it('falla del proveedor: registra fallo y sale con código 1', async () => {
+      const clock = new FakeClock();
+      const store = new FakeMatchStore(clock);
+      const recordSpy = vi.spyOn(store, 'recordSyncResult');
+      const client = new FakeClient([httpErrorOutcome(500)]);
+
+      const result = await syncMatches({ client, store, clock, owner: 'owner-1' }, SMALL_CONFIG);
+
+      expect(result.exitCode).toBe(1);
+      expect(recordSpy).toHaveBeenCalledWith(
+        SCOPE,
+        expect.any(String),
+        false,
+        expect.objectContaining({ error: 'http-error' }),
+      );
+    });
+
+    it('si recordSyncResult devuelve false, no hay éxito aparente: sale con código 1', async () => {
+      const clock = new FakeClock();
+      const store = new FakeMatchStore(clock);
+      vi.spyOn(store, 'recordSyncResult').mockResolvedValueOnce(false);
+      const client = new FakeClient([successOutcome([buildFixtureRaw(1)])]);
+
+      const result = await syncMatches({ client, store, clock, owner: 'owner-1' }, SMALL_CONFIG);
+
+      expect(result.exitCode).toBe(1);
+      if (result.exitCode !== 1) throw new Error('unreachable');
+      expect(result.summary.errores).toEqual([{ reason: 'result-not-recorded', count: 1 }]);
+    });
+
+    it('si recordSyncResult lanza error, no se propaga y sale con código 1', async () => {
+      const clock = new FakeClock();
+      const store = new FakeMatchStore(clock);
+      vi.spyOn(store, 'recordSyncResult').mockRejectedValueOnce(new Error('base caída'));
+      const client = new FakeClient([successOutcome([buildFixtureRaw(1)])]);
+
+      const result = await syncMatches({ client, store, clock, owner: 'owner-1' }, SMALL_CONFIG);
+
+      expect(result.exitCode).toBe(1);
+      if (result.exitCode !== 1) throw new Error('unreachable');
+      expect(result.summary.errores).toEqual([{ reason: 'result-record-error', count: 1 }]);
+    });
+
+    it('control: una corrida sana registra éxito y sale con código 0', async () => {
+      const clock = new FakeClock();
+      const store = new FakeMatchStore(clock);
+      const recordSpy = vi.spyOn(store, 'recordSyncResult');
+      const client = new FakeClient([successOutcome([buildFixtureRaw(1)])]);
+
+      const result = await syncMatches({ client, store, clock, owner: 'owner-1' }, SMALL_CONFIG);
+
+      expect(result.exitCode).toBe(0);
+      expect(recordSpy).toHaveBeenCalledWith(SCOPE, expect.any(String), true, expect.anything());
+    });
+  });
 });
