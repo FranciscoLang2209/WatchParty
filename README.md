@@ -128,6 +128,9 @@ desarrollo predeterminadas (no son secretos reales; son las mismas para cualquie
   `pg-meta` y analytics no tienen autenticación.
 - No ejecutar `supabase link` ni commitear `project_ref`, claves ni credenciales de un proyecto remoto.
 - `supabase/.temp` y los datos generados localmente no se versionan (ver `.gitignore`).
+- Las migraciones al proyecto remoto no se aplican desde este flujo local: ver
+  [`docs/runbooks/production-migrations.md`](./docs/runbooks/production-migrations.md)
+  (usa `--db-url`, sin `supabase link`).
 
 ## Despliegue (Vercel)
 
