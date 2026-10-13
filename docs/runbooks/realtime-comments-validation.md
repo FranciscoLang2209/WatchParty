@@ -38,7 +38,7 @@ incógnito), se registró un usuario de prueba en cada una y ambas abrieron la m
 
 ## Límites conocidos
 
-- La migración está aplicada en producción desde AAAA-MM-DD (WAT-196, ver production-migrations.md).- El aislamiento por sala lo da el filtro del cliente, no la policy (ver la decisión).
+- La migración está aplicada en producción desde 2026-10-13 (WAT-196, ver production-migrations.md).- El aislamiento por sala lo da el filtro del cliente, no la policy (ver la decisión).
 - No se probó carga ni reconexión tras una caída de red.
 - No se inspeccionó el contenido de cada mensaje del WebSocket más allá de verificar que llegan
   al comentar.

@@ -72,7 +72,6 @@ el cliente al suscribirse.
 - **Escala**: Postgres Changes autoriza por suscriptor. Con muchas personas simultáneas en una misma
   sala habría que evaluar Broadcast (según la documentación de Supabase, a partir de unos ~3.000
   suscriptores simultáneos).
-- **Remoto**: la migración se valida en local (`supabase db reset --local`). Aplicarla al proyecto
-  remoto queda pendiente y sin ella Realtime no entrega eventos en producción.
+  -- **Remoto**: la migración se valida en local (`supabase db reset --local`) y está aplicada en el proyecto remoto (aplicación verificada el 2026-10-13, WAT-196). Sin ella Realtime no entrega eventos en producción.
 - **Fuera de alcance de esta decisión**: eventos de reacciones, canal global, reintentos y estado de
   conexión (tickets aparte).
