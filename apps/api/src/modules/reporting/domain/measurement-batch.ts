@@ -19,11 +19,11 @@ export const MAX_BATCH_ROWS = 10;
  * `measured_at`.
  */
 export interface MeasurementRow {
-  kpi_id: KpiId;
-  date: string;
-  env: ReporterEnv;
-  value: number;
-  run_id: string;
+  readonly kpi_id: KpiId;
+  readonly date: string;
+  readonly env: ReporterEnv;
+  readonly value: number;
+  readonly run_id: string;
 }
 
 const ROW_KEYS = ['kpi_id', 'date', 'env', 'value', 'run_id'] as const;
@@ -61,10 +61,49 @@ export interface BatchIssue {
   field?: string;
 }
 
+/**
+ * Motivos de omisión conocidos: los códigos fijos que producen la fuente SQL,
+ * los sondeos HTTP y este módulo. Son la única forma en que un motivo llega al
+ * archivo: ningún texto libre (mensajes de error, URLs, credenciales) se archiva.
+ * Un código nuevo se agrega acá, de forma explícita.
+ */
+export const OMISSION_REASONS = [
+  // Este módulo.
+  'invalid-value',
+  'not-collected',
+  // Fuente SQL de `catalog_match_count`.
+  'config-missing',
+  'config-invalid',
+  'invalid-cutoff',
+  'connection-failed',
+  'permission-denied',
+  'query-failed',
+  'invalid-result',
+  // Sondeos HTTP.
+  'api-config-missing',
+  'api-config-invalid',
+  'timeout',
+  'network-error',
+  'not-200',
+  'unexpected-status',
+  // Error no previsto del colector.
+  'unexpected-error',
+] as const;
+
+/** Código que reemplaza a cualquier motivo que no esté en `OMISSION_REASONS`. */
+export const UNKNOWN_OMISSION_REASON = 'unknown-reason';
+
+export type OmissionReason = (typeof OMISSION_REASONS)[number] | typeof UNKNOWN_OMISSION_REASON;
+
+function sanitizeOmissionReason(reason: unknown): OmissionReason {
+  return (OMISSION_REASONS as readonly unknown[]).includes(reason)
+    ? (reason as OmissionReason)
+    : UNKNOWN_OMISSION_REASON;
+}
+
 export interface KpiOmission {
-  kpi_id: KpiId;
-  /** Motivo fijo y sanitizado. */
-  reason: string;
+  readonly kpi_id: KpiId;
+  readonly reason: OmissionReason;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -107,13 +146,14 @@ export function toArgentinaDate(cutoff: Date): string {
 }
 
 export type ValidationResult =
-  { ok: true; rows: MeasurementRow[] } | { ok: false; issues: BatchIssue[] };
+  { ok: true; rows: readonly MeasurementRow[] } | { ok: false; issues: BatchIssue[] };
 
 /**
  * Valida un lote ya armado (por ejemplo, el JSON que se va a enviar). Es todo o
  * nada: una sola fila inválida invalida el lote entero y no se devuelven filas.
  * Exige filas con exactamente los cinco campos del contrato, KPIs del catálogo
- * sin repetir, valores válidos y `run_id`, `env` y `date` comunes.
+ * sin repetir, valores válidos y `run_id`, `env` y `date` comunes. Las filas
+ * que devuelve son copias congeladas: no se pueden modificar después.
  */
 export function validateMeasurementBatch(input: unknown): ValidationResult {
   if (!Array.isArray(input)) {
@@ -129,7 +169,6 @@ export function validateMeasurementBatch(input: unknown): ValidationResult {
   }
 
   const issues: BatchIssue[] = [];
-  const rows: MeasurementRow[] = [];
   const seenKpis = new Set<string>();
   const runIds = new Set<unknown>();
   const envs = new Set<unknown>();
@@ -203,18 +242,18 @@ export function validateMeasurementBatch(input: unknown): ValidationResult {
     return { ok: false, issues };
   }
 
-  for (const candidate of input as Record<string, unknown>[]) {
-    // Se copian solo los cinco campos, en orden fijo.
-    rows.push({
+  // Se copian solo los cinco campos, en orden fijo, y las copias se congelan.
+  const rows = (input as Record<string, unknown>[]).map((candidate) =>
+    Object.freeze<MeasurementRow>({
       kpi_id: candidate.kpi_id as KpiId,
       date: candidate.date as string,
       env: candidate.env as ReporterEnv,
       value: candidate.value as number,
       run_id: candidate.run_id as string,
-    });
-  }
+    }),
+  );
 
-  return { ok: true, rows };
+  return { ok: true, rows: Object.freeze(rows) };
 }
 
 export interface BuildBatchInput {
@@ -225,32 +264,36 @@ export interface BuildBatchInput {
   runId: string;
   /** KPIs con valor calculado. El valor se valida acá: no se asume correcto. */
   results: readonly { kpi: string; value: unknown }[];
-  /** KPIs sin fuente válida, con su motivo. */
+  /**
+   * KPIs sin fuente válida, con su motivo. Solo los códigos de `OMISSION_REASONS`
+   * llegan al lote: cualquier otro texto se reemplaza por `unknown-reason`.
+   */
   omissions: readonly { kpi: string; reason: string }[];
   /** `true` para identificar el artefacto como simulado (pruebas). */
   simulated?: boolean;
 }
 
-/** Lote listo para enviar más el registro de la corrida que se archiva. */
+/** Lote listo para enviar más el registro de la corrida que se archiva. Se entrega congelado. */
 export interface ReportBatch {
   /** Corte T en ISO 8601 UTC. */
-  cutoff: string;
-  date: string;
-  env: ReporterEnv;
-  run_id: string;
+  readonly cutoff: string;
+  readonly date: string;
+  readonly env: ReporterEnv;
+  readonly run_id: string;
   /** Mediciones a enviar: solo los cinco campos del contrato. */
-  rows: MeasurementRow[];
+  readonly rows: readonly MeasurementRow[];
   /** KPIs omitidos con su motivo. Nunca se envían como null ni como cero. */
-  omissions: KpiOmission[];
+  readonly omissions: readonly KpiOmission[];
   /** `true` solo si están los cinco KPIs. Con menos, el día no está completo. */
-  complete: boolean;
+  readonly complete: boolean;
   /** `true` si se omitió algún KPI: el workflow debe marcar el fallo de forma visible. */
-  visible_failure: boolean;
-  simulated: boolean;
+  readonly visible_failure: boolean;
+  readonly simulated: boolean;
 }
 
 export type BuildResult =
-  { ok: true; batch: ReportBatch } | { ok: false; issues: BatchIssue[]; omissions: KpiOmission[] };
+  | { ok: true; batch: ReportBatch }
+  | { ok: false; issues: BatchIssue[]; omissions: readonly KpiOmission[] };
 
 /**
  * Arma el lote de una corrida a partir de lo que dejó el colector.
@@ -272,7 +315,7 @@ export function buildMeasurementBatch(input: BuildBatchInput): BuildResult {
   }
 
   const resultByKpi = new Map<KpiId, unknown>();
-  const reasonByKpi = new Map<KpiId, string>();
+  const reasonByKpi = new Map<KpiId, OmissionReason>();
 
   for (const result of input.results) {
     if (!isKpiId(result.kpi)) {
@@ -291,7 +334,7 @@ export function buildMeasurementBatch(input: BuildBatchInput): BuildResult {
       // Repetido, o con valor y omitido a la vez: la fuente es ambigua.
       issues.push({ row: null, code: 'duplicate-kpi' });
     } else {
-      reasonByKpi.set(omission.kpi, omission.reason);
+      reasonByKpi.set(omission.kpi, sanitizeOmissionReason(omission.reason));
     }
   }
 
@@ -310,12 +353,16 @@ export function buildMeasurementBatch(input: BuildBatchInput): BuildResult {
       if (isValidKpiValue(id, value)) {
         rows.push({ kpi_id: id, date, env: input.env, value, run_id: input.runId });
       } else {
-        omissions.push({ kpi_id: id, reason: 'invalid-value' });
+        omissions.push(Object.freeze({ kpi_id: id, reason: 'invalid-value' as const }));
       }
     } else {
-      omissions.push({ kpi_id: id, reason: reasonByKpi.get(id) ?? 'not-collected' });
+      omissions.push(
+        Object.freeze({ kpi_id: id, reason: reasonByKpi.get(id) ?? ('not-collected' as const) }),
+      );
     }
   }
+
+  Object.freeze(omissions);
 
   if (rows.length === 0) {
     return { ok: false, issues: [{ row: null, code: 'empty-batch' }], omissions };
@@ -330,7 +377,7 @@ export function buildMeasurementBatch(input: BuildBatchInput): BuildResult {
 
   return {
     ok: true,
-    batch: {
+    batch: Object.freeze({
       cutoff: input.cutoff.toISOString(),
       date,
       env: input.env,
@@ -340,16 +387,73 @@ export function buildMeasurementBatch(input: BuildBatchInput): BuildResult {
       complete: rows.length === KPI_CATALOG.length,
       visible_failure: omissions.length > 0,
       simulated: input.simulated ?? false,
-    },
+    }),
   };
 }
 
-/** Cuerpo exacto a enviar: solo las filas del contrato. */
-export function serializeBatchPayload(rows: readonly MeasurementRow[]): string {
-  return JSON.stringify(rows);
+export type SerializeResult = { ok: true; json: string } | { ok: false; issues: BatchIssue[] };
+
+/**
+ * Cuerpo exacto a enviar. Las filas se revalidan SIEMPRE antes de serializar,
+ * sin importar de dónde vengan: con una sola fila inválida (valor no finito,
+ * campo prohibido o extra, etc.) se rechaza el lote completo y no se genera
+ * ningún JSON. Así `JSON.stringify` nunca llega a convertir un NaN en `null`.
+ */
+export function serializeBatchPayload(rows: unknown): SerializeResult {
+  const validation = validateMeasurementBatch(rows);
+
+  if (!validation.ok) {
+    return { ok: false, issues: validation.issues };
+  }
+
+  return { ok: true, json: JSON.stringify(validation.rows) };
 }
 
-/** Registro archivable de la corrida (JSON y corte, sin secretos). */
-export function serializeArchive(batch: ReportBatch): string {
-  return JSON.stringify(batch, null, 2);
+/**
+ * Registro archivable de la corrida (JSON y corte, sin secretos). No serializa
+ * el objeto tal cual: revalida las filas, deriva el resto de los campos de ellas
+ * y limita los motivos a códigos conocidos, así que ningún texto libre llega al
+ * archivo aunque el lote haya sido modificado o armado a mano.
+ */
+export function serializeArchive(batch: ReportBatch): SerializeResult {
+  const validation = validateMeasurementBatch(batch.rows);
+
+  if (!validation.ok) {
+    return { ok: false, issues: validation.issues };
+  }
+
+  const cutoffMs = typeof batch.cutoff === 'string' ? Date.parse(batch.cutoff) : Number.NaN;
+
+  if (!Number.isFinite(cutoffMs)) {
+    return { ok: false, issues: [{ row: null, code: 'invalid-cutoff' }] };
+  }
+
+  if (!Array.isArray(batch.omissions) || !batch.omissions.every((o) => isKpiId(o?.kpi_id))) {
+    return { ok: false, issues: [{ row: null, code: 'unknown-kpi' }] };
+  }
+
+  const first = validation.rows[0]!;
+  const omissions = batch.omissions.map((omission) => ({
+    kpi_id: omission.kpi_id,
+    reason: sanitizeOmissionReason(omission.reason),
+  }));
+
+  return {
+    ok: true,
+    json: JSON.stringify(
+      {
+        cutoff: new Date(cutoffMs).toISOString(),
+        date: first.date,
+        env: first.env,
+        run_id: first.run_id,
+        rows: validation.rows,
+        omissions,
+        complete: validation.rows.length === KPI_CATALOG.length,
+        visible_failure: omissions.length > 0,
+        simulated: batch.simulated === true,
+      },
+      null,
+      2,
+    ),
+  };
 }

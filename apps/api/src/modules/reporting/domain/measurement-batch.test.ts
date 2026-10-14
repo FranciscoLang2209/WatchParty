@@ -8,6 +8,9 @@ import {
   validateMeasurementBatch,
   type BuildBatchInput,
   type BuildResult,
+  type MeasurementRow,
+  type ReportBatch,
+  type SerializeResult,
 } from './measurement-batch.js';
 
 // Todos los datos de este archivo son SIMULADOS: no provienen de ninguna fuente
@@ -41,6 +44,11 @@ function input(overrides: Partial<BuildBatchInput> = {}): BuildBatchInput {
 function built(result: BuildResult) {
   if (!result.ok) throw new Error(`Se esperaba un lote válido: ${JSON.stringify(result.issues)}`);
   return result.batch;
+}
+
+function jsonOf(result: SerializeResult): string {
+  if (!result.ok) throw new Error(`Se esperaba un JSON: ${JSON.stringify(result.issues)}`);
+  return result.json;
 }
 
 function row(overrides: Record<string, unknown> = {}) {
@@ -100,7 +108,7 @@ describe('buildMeasurementBatch: cinco fuentes válidas', () => {
 
   it('el payload no incluye ningún campo que asigna el servidor ni prohibido', () => {
     const batch = built(buildMeasurementBatch(input()));
-    const payload = serializeBatchPayload(batch.rows);
+    const payload = jsonOf(serializeBatchPayload(batch.rows));
 
     for (const field of FORBIDDEN_FIELDS) {
       expect(payload).not.toContain(field);
@@ -169,7 +177,7 @@ describe('buildMeasurementBatch: fuente inválida se omite con motivo', () => {
 
     expect(batch.rows.map((r) => r.kpi_id)).not.toContain('health_up');
     expect(batch.omissions).toEqual([{ kpi_id: 'health_up', reason: 'invalid-value' }]);
-    expect(serializeBatchPayload(batch.rows)).not.toContain('null');
+    expect(jsonOf(serializeBatchPayload(batch.rows))).not.toContain('null');
   });
 
   it.each([
@@ -432,7 +440,7 @@ describe('serializeArchive: JSON y corte archivables', () => {
       ),
     );
 
-    const archived = JSON.parse(serializeArchive(batch));
+    const archived = JSON.parse(jsonOf(serializeArchive(batch)));
 
     expect(Object.keys(archived)).toEqual([
       'cutoff',
@@ -465,7 +473,7 @@ describe('serializeArchive: JSON y corte archivables', () => {
 
   it('el archivo solo contiene los campos del contrato en las filas y no lleva secretos', () => {
     const batch = built(buildMeasurementBatch(input()));
-    const text = serializeArchive(batch);
+    const text = jsonOf(serializeArchive(batch));
 
     for (const archivedRow of JSON.parse(text).rows) {
       expect(Object.keys(archivedRow)).toEqual(['kpi_id', 'date', 'env', 'value', 'run_id']);
@@ -481,8 +489,220 @@ describe('serializeArchive: JSON y corte archivables', () => {
   it('el payload a enviar sale del lote validado y es el mismo JSON que se archiva', () => {
     const batch = built(buildMeasurementBatch(input()));
 
-    expect(JSON.parse(serializeBatchPayload(batch.rows))).toEqual(
-      JSON.parse(serializeArchive(batch)).rows,
+    expect(JSON.parse(jsonOf(serializeBatchPayload(batch.rows)))).toEqual(
+      JSON.parse(jsonOf(serializeArchive(batch))).rows,
     );
+  });
+});
+
+describe('serializeBatchPayload: revalida siempre antes de serializar', () => {
+  it('serializa un lote válido con las cinco filas', () => {
+    const rows = built(buildMeasurementBatch(input())).rows;
+
+    expect(JSON.parse(jsonOf(serializeBatchPayload(rows)))).toHaveLength(5);
+  });
+
+  it.each<[string, unknown]>([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+    ['null', null],
+  ])(
+    'rechaza el lote completo si una fila tiene value %s (no lo convierte en null)',
+    (_l, value) => {
+      const rows = [
+        row({ kpi_id: 'health_up', value: 1 }),
+        row({ kpi_id: 'auth_guard_up', value }),
+      ];
+
+      const result = serializeBatchPayload(rows);
+
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty('json');
+      expect(!result.ok && result.issues).toEqual([{ row: 1, code: 'invalid-value' }]);
+    },
+  );
+
+  it.each(FORBIDDEN_FIELDS)('rechaza el lote completo si una fila trae %s', (field) => {
+    const rows = [
+      row({ kpi_id: 'health_up', value: 1 }),
+      row({ kpi_id: 'auth_guard_up', value: 1, [field]: 'x' }),
+    ];
+
+    const result = serializeBatchPayload(rows);
+
+    expect(result.ok).toBe(false);
+    expect(result).not.toHaveProperty('json');
+    expect(!result.ok && result.issues).toEqual([{ row: 1, code: 'forbidden-field', field }]);
+  });
+
+  it('rechaza lo que no es un lote válido, sea cual sea su origen', () => {
+    expect(serializeBatchPayload({}).ok).toBe(false);
+    expect(serializeBatchPayload([]).ok).toBe(false);
+    expect(serializeBatchPayload([null]).ok).toBe(false);
+    expect(serializeBatchPayload([row({ token: 'x' })]).ok).toBe(false);
+  });
+
+  it('las filas de un lote validado no se pueden modificar', () => {
+    const batch = built(buildMeasurementBatch(input()));
+    const first = batch.rows[0] as { value: number };
+
+    expect(Object.isFrozen(batch)).toBe(true);
+    expect(Object.isFrozen(batch.rows)).toBe(true);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(() => {
+      first.value = Number.NaN;
+    }).toThrow(TypeError);
+    expect(() => {
+      (batch.rows as MeasurementRow[]).push(row() as unknown as MeasurementRow);
+    }).toThrow(TypeError);
+    expect(JSON.parse(jsonOf(serializeBatchPayload(batch.rows)))[0].value).toBe(4210);
+  });
+
+  it('un lote validado devuelve copias: modificar la entrada después no lo cambia', () => {
+    const original = [row({ kpi_id: 'health_up', value: 1 })];
+    const validated = validateMeasurementBatch(original);
+
+    original[0]!.value = 0;
+    (original[0] as Record<string, unknown>).project_id = 'x';
+
+    expect(validated.ok && validated.rows[0]?.value).toBe(1);
+    expect(serializeBatchPayload(original).ok).toBe(false);
+  });
+
+  it('una copia alterada de las filas se rechaza al serializar', () => {
+    const rows = built(buildMeasurementBatch(input())).rows;
+    const tampered = rows.map((r) => ({ ...r }));
+
+    (tampered[2] as { value: number }).value = Number.NaN;
+    (tampered[3] as Record<string, unknown>).project_id = 'x';
+
+    const result = serializeBatchPayload(tampered);
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.issues).toEqual([
+      { row: 2, code: 'invalid-value' },
+      { row: 3, code: 'forbidden-field', field: 'project_id' },
+    ]);
+  });
+});
+
+describe('motivos de omisión: solo códigos conocidos, sin secretos', () => {
+  const SIMULATED_SECRET = 'SIMULATED_PASSWORD_123';
+  const LEAKY_REASONS = [
+    `connect failed: postgresql://watchparty_reporter:${SIMULATED_SECRET}@db.example.test:5432/postgres?sslmode=verify-full`,
+    `Error: password authentication failed for user "x" (${SIMULATED_SECRET})`,
+    `Bearer ${SIMULATED_SECRET}`,
+    '',
+    'cualquier texto libre',
+  ];
+
+  function withReason(reason: string) {
+    return buildMeasurementBatch(
+      input({
+        results: SIMULATED_RESULTS.filter((r) => r.kpi !== 'catalog_match_count'),
+        omissions: [{ kpi: 'catalog_match_count', reason }],
+      }),
+    );
+  }
+
+  it.each(LEAKY_REASONS)('un motivo desconocido (%#) se reemplaza por un código fijo', (reason) => {
+    const batch = built(withReason(reason));
+
+    expect(batch.omissions).toEqual([{ kpi_id: 'catalog_match_count', reason: 'unknown-reason' }]);
+  });
+
+  it('un error simulado con credenciales no aparece en el archivo ni en el payload', () => {
+    const batch = built(withReason(LEAKY_REASONS[0]!));
+    const archive = jsonOf(serializeArchive(batch));
+    const payload = jsonOf(serializeBatchPayload(batch.rows));
+
+    for (const text of [archive, payload, JSON.stringify(batch)]) {
+      expect(text).not.toContain(SIMULATED_SECRET);
+      expect(text).not.toContain('postgresql://');
+      expect(text).not.toContain('example.test');
+    }
+
+    expect(JSON.parse(archive).omissions).toEqual([
+      { kpi_id: 'catalog_match_count', reason: 'unknown-reason' },
+    ]);
+  });
+
+  it('un motivo que no es texto tampoco llega al archivo', () => {
+    const batch = built(
+      buildMeasurementBatch(
+        input({
+          results: SIMULATED_RESULTS.filter((r) => r.kpi !== 'health_up'),
+          omissions: [
+            { kpi: 'health_up', reason: { secret: SIMULATED_SECRET } as unknown as string },
+          ],
+        }),
+      ),
+    );
+
+    expect(jsonOf(serializeArchive(batch))).not.toContain(SIMULATED_SECRET);
+    expect(batch.omissions[0]?.reason).toBe('unknown-reason');
+  });
+
+  it.each([
+    'config-missing',
+    'config-invalid',
+    'connection-failed',
+    'permission-denied',
+    'query-failed',
+    'invalid-result',
+    'api-config-missing',
+    'api-config-invalid',
+    'timeout',
+    'network-error',
+    'not-200',
+    'unexpected-status',
+    'invalid-value',
+    'unexpected-error',
+  ])('el código conocido %s se conserva tal cual', (reason) => {
+    const batch = built(withReason(reason));
+
+    expect(batch.omissions).toEqual([{ kpi_id: 'catalog_match_count', reason }]);
+  });
+
+  it('un lote armado a mano o alterado no puede archivar texto libre', () => {
+    const batch = built(withReason('timeout'));
+    const forged = {
+      ...batch,
+      omissions: [{ kpi_id: 'catalog_match_count', reason: LEAKY_REASONS[0]! }],
+    } as unknown as ReportBatch;
+
+    const archive = jsonOf(serializeArchive(forged));
+
+    expect(archive).not.toContain(SIMULATED_SECRET);
+    expect(JSON.parse(archive).omissions[0].reason).toBe('unknown-reason');
+  });
+
+  it('el archivo se deriva de las filas validadas: no archiva campos sueltos del lote', () => {
+    const batch = built(buildMeasurementBatch(input()));
+    const forged = {
+      ...batch,
+      run_id: `postgresql://u:${SIMULATED_SECRET}@h/db`,
+      env: SIMULATED_SECRET,
+      date: SIMULATED_SECRET,
+    } as unknown as ReportBatch;
+
+    const archive = jsonOf(serializeArchive(forged));
+
+    expect(archive).not.toContain(SIMULATED_SECRET);
+    expect(JSON.parse(archive)).toMatchObject({
+      run_id: SIMULATED_RUN_ID,
+      env: 'dev',
+      date: '2026-10-14',
+    });
+  });
+
+  it('no archiva un lote con filas inválidas ni con un corte inválido', () => {
+    const batch = built(buildMeasurementBatch(input()));
+    const badRows = { ...batch, rows: [{ ...batch.rows[0]!, value: Number.NaN }] } as ReportBatch;
+    const badCutoff = { ...batch, cutoff: 'no es una fecha' } as ReportBatch;
+
+    expect(serializeArchive(badRows).ok).toBe(false);
+    expect(serializeArchive(badCutoff).ok).toBe(false);
   });
 });
