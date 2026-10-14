@@ -5,6 +5,7 @@ import type {
   SetRoomCommentReactionInput,
 } from '../domain/room-comment-reaction-store.js';
 import { RoomCommentPersistenceError } from './room-comment-persistence-error.js';
+import { GetRoomCommentReactionInput } from '../domain/room-comment-reaction-store.js';
 
 // invalid_text_representation: un id que no tiene forma de UUID. Se trata
 // como "comentario no encontrado" (mismo criterio que `roomExists` en
@@ -25,6 +26,42 @@ const POSTGRES_INVALID_TEXT_REPRESENTATION = '22P02';
  */
 export class SupabaseRoomCommentReactionStore implements RoomCommentReactionStore {
   constructor(private readonly client: SupabaseClient) {}
+
+  async getReaction({
+    roomId,
+    commentId,
+    userId,
+  }: GetRoomCommentReactionInput): Promise<RoomCommentReactionState | null> {
+    if (!(await this.commentBelongsToRoom(roomId, commentId))) return null;
+
+    const [count, ownCount] = await Promise.all([
+      this.countReactions(commentId),
+      this.countReactions(commentId, userId),
+    ]);
+
+    return { count, reacted: ownCount > 0 };
+  }
+
+  private async countReactions(commentId: string, userId?: string): Promise<number> {
+    let query = this.client
+      .from('room_comment_reactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('comment_id', commentId);
+
+    // Con userId cuenta solo la fila propia (0 o 1 por el UNIQUE).
+    if (userId !== undefined) query = query.eq('user_id', userId);
+
+    const { count, error } = await query;
+
+    if (error || count === null) {
+      throw new RoomCommentPersistenceError(
+        `No se pudo contar los Me gusta del comentario ${commentId}.`,
+        error ?? undefined,
+      );
+    }
+
+    return count;
+  }
 
   async setReaction({
     roomId,
@@ -99,21 +136,5 @@ export class SupabaseRoomCommentReactionStore implements RoomCommentReactionStor
         error,
       );
     }
-  }
-
-  private async countReactions(commentId: string): Promise<number> {
-    const { count, error } = await this.client
-      .from('room_comment_reactions')
-      .select('id', { count: 'exact', head: true })
-      .eq('comment_id', commentId);
-
-    if (error || count === null) {
-      throw new RoomCommentPersistenceError(
-        `No se pudo contar los Me gusta del comentario ${commentId}.`,
-        error ?? undefined,
-      );
-    }
-
-    return count;
   }
 }

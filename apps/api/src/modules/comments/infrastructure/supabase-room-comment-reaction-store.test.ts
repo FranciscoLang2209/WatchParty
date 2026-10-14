@@ -428,4 +428,152 @@ describe('SupabaseRoomCommentReactionStore.setReaction', () => {
       },
     );
   });
+  describe('SupabaseRoomCommentReactionStore.getReaction', () => {
+    function getInput(
+      overrides: Partial<{ roomId: string; commentId: string; userId: string }> = {},
+    ) {
+      return { roomId: ROOM_A, commentId: COMMENT_A1, userId: USER_1, ...overrides };
+    }
+
+    it('sin reacciones devuelve { count: 0, reacted: false }', async () => {
+      const { client } = makeFakeClient();
+      const store = new SupabaseRoomCommentReactionStore(client);
+
+      expect(await store.getReaction(getInput())).toEqual({ count: 0, reacted: false });
+    });
+
+    it('con reacción propia devuelve el conteo y reacted: true', async () => {
+      const { client } = makeFakeClient({ reactions: [reaction(COMMENT_A1, USER_1)] });
+      const store = new SupabaseRoomCommentReactionStore(client);
+
+      expect(await store.getReaction(getInput())).toEqual({ count: 1, reacted: true });
+    });
+
+    it('aislamiento: el conteo suma a todos pero reacted es solo del usuario que consulta', async () => {
+      const { client } = makeFakeClient({
+        reactions: [reaction(COMMENT_A1, USER_2)],
+      });
+      const store = new SupabaseRoomCommentReactionStore(client);
+
+      expect(await store.getReaction(getInput({ userId: USER_1 }))).toEqual({
+        count: 1,
+        reacted: false,
+      });
+      expect(await store.getReaction(getInput({ userId: USER_2 }))).toEqual({
+        count: 1,
+        reacted: true,
+      });
+    });
+
+    it('con dos usuarios reaccionando, ambos ven count: 2 y reacted: true', async () => {
+      const { client } = makeFakeClient({
+        reactions: [reaction(COMMENT_A1, USER_1), reaction(COMMENT_A1, USER_2)],
+      });
+      const store = new SupabaseRoomCommentReactionStore(client);
+
+      expect(await store.getReaction(getInput({ userId: USER_1 }))).toEqual({
+        count: 2,
+        reacted: true,
+      });
+      expect(await store.getReaction(getInput({ userId: USER_2 }))).toEqual({
+        count: 2,
+        reacted: true,
+      });
+    });
+
+    it('no cuenta ni atribuye reacciones de otros comentarios', async () => {
+      const { client } = makeFakeClient({
+        reactions: [reaction(COMMENT_A2, USER_1), reaction(COMMENT_A2, USER_2)],
+      });
+      const store = new SupabaseRoomCommentReactionStore(client);
+
+      expect(await store.getReaction(getInput({ commentId: COMMENT_A1 }))).toEqual({
+        count: 0,
+        reacted: false,
+      });
+    });
+
+    it('no muta datos', async () => {
+      const seed = [reaction(COMMENT_A1, USER_1), reaction(COMMENT_A1, USER_2)];
+      const { client, reactions } = makeFakeClient({ reactions: [...seed] });
+      const store = new SupabaseRoomCommentReactionStore(client);
+
+      await store.getReaction(getInput());
+      await store.getReaction(getInput({ userId: '00000000-0000-4000-8000-000000000003' }));
+
+      expect(reactions).toEqual(seed);
+    });
+
+    it('es consistente con setReaction: refleja lo último que se fijó', async () => {
+      const { client } = makeFakeClient();
+      const store = new SupabaseRoomCommentReactionStore(client);
+
+      await store.setReaction({ ...getInput(), reacted: true });
+      expect(await store.getReaction(getInput())).toEqual({ count: 1, reacted: true });
+
+      await store.setReaction({ ...getInput(), reacted: false });
+      expect(await store.getReaction(getInput())).toEqual({ count: 0, reacted: false });
+    });
+
+    describe('sala o comentario inválidos', () => {
+      it('devuelve null si el comentario es de otra sala', async () => {
+        const { client } = makeFakeClient({ reactions: [reaction(COMMENT_B1, USER_1)] });
+        const store = new SupabaseRoomCommentReactionStore(client);
+
+        // COMMENT_B1 existe, pero pertenece a ROOM_B, no a ROOM_A.
+        expect(await store.getReaction(getInput({ commentId: COMMENT_B1 }))).toBeNull();
+      });
+
+      it('devuelve null si el comentario no existe', async () => {
+        const { client } = makeFakeClient();
+        const store = new SupabaseRoomCommentReactionStore(client);
+
+        expect(await store.getReaction(getInput({ commentId: COMMENT_MISSING }))).toBeNull();
+      });
+
+      it('devuelve null si la sala no existe', async () => {
+        const { client } = makeFakeClient();
+        const store = new SupabaseRoomCommentReactionStore(client);
+
+        expect(await store.getReaction(getInput({ roomId: ROOM_MISSING }))).toBeNull();
+      });
+
+      it('trata un commentId con formato inválido como inexistente, sin lanzar', async () => {
+        const { client } = makeFakeClient();
+        const store = new SupabaseRoomCommentReactionStore(client);
+
+        expect(await store.getReaction(getInput({ commentId: 'no-es-un-uuid' }))).toBeNull();
+      });
+
+      it('trata un roomId con formato inválido como inexistente, sin lanzar', async () => {
+        const { client } = makeFakeClient();
+        const store = new SupabaseRoomCommentReactionStore(client);
+
+        expect(await store.getReaction(getInput({ roomId: 'no-es-un-uuid' }))).toBeNull();
+      });
+    });
+
+    describe('errores de base', () => {
+      const rawError: FakeError = { code: 'XX000', message: RAW_DB_MESSAGE };
+
+      const cases: [string, FakeClientOptions][] = [
+        ['verificar el comentario', { commentsSelectError: rawError }],
+        ['contar', { reactionsCountError: rawError }],
+      ];
+
+      it.each(cases)(
+        'al fallar %s lanza RoomCommentPersistenceError sin filtrar el error crudo',
+        async (_step, clientOptions) => {
+          const { client } = makeFakeClient(clientOptions);
+          const store = new SupabaseRoomCommentReactionStore(client);
+
+          const error = await captureError(store.getReaction(getInput()));
+
+          expect(error).toBeInstanceOf(RoomCommentPersistenceError);
+          expect((error as RoomCommentPersistenceError).message).not.toContain(RAW_DB_MESSAGE);
+          expect((error as Error).cause).toEqual(rawError);
+        },
+      );
+    });
+  });
 });

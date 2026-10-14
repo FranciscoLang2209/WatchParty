@@ -42,7 +42,13 @@ function buildTestApp(store: RoomCommentStore) {
   const app = express();
 
   app.use(express.json());
-  app.use('/rooms', createCommentsRouter(store, { setReaction: async () => null }));
+  app.use(
+    '/rooms',
+    createCommentsRouter(store, {
+      setReaction: async () => null,
+      getReaction: async () => null,
+    }),
+  );
   app.use(notFoundHandler);
   app.use(errorHandler);
 

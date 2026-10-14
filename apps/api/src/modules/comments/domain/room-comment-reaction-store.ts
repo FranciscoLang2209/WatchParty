@@ -10,6 +10,12 @@ export interface RoomCommentReactionState {
   reacted: boolean;
 }
 
+export interface GetRoomCommentReactionInput {
+  roomId: string;
+  commentId: string;
+  userId: string;
+}
+
 /**
  * Input de `setReaction`. `userId` NUNCA lo controla el cliente: viene
  * siempre del usuario autenticado, igual que `authorId` en
@@ -50,4 +56,14 @@ export interface RoomCommentReactionStore {
    * agrega el borrado de comentarios.
    */
   setReaction(input: SetRoomCommentReactionInput): Promise<RoomCommentReactionState | null>;
+
+  /**
+   * Lee el estado de reacción de `userId` sobre un comentario de `roomId`
+   * (WAT-206). No muta nada.
+   * - `reacted: false` solo si la lectura confirmó que no hay fila: un fallo
+   *   de persistencia se lanza, nunca se convierte en `false`.
+   * - `null` en los mismos casos que `setReaction` (sala/comentario inexistente,
+   *   comentario de otra sala, id con formato inválido).
+   */
+  getReaction(input: GetRoomCommentReactionInput): Promise<RoomCommentReactionState | null>;
 }

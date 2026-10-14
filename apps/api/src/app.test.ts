@@ -12,6 +12,7 @@ import type { WatchedMatchStore } from './modules/watched/domain/watched-match-s
 
 const noopReactionStore: RoomCommentReactionStore = {
   setReaction: async () => null,
+  getReaction: async () => null,
 };
 
 const noopWatchedStore: WatchedMatchStore = {
