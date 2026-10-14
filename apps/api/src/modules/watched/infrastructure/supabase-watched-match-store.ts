@@ -65,4 +65,23 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
 
     return { matchId, watched };
   }
+
+  async getWatched(userId: string, matchId: string): Promise<WatchedMatchResult | null> {
+    const match = await this.matchCatalog.findById(matchId);
+    if (!match) return null;
+
+    // La PK compuesta (user_id, match_id) garantiza a lo sumo una fila.
+    const { data, error } = await this.client
+      .from('watched_matches')
+      .select('match_id')
+      .eq('user_id', userId)
+      .eq('match_id', matchId)
+      .maybeSingle();
+
+    if (error) {
+      throw new WatchedMatchPersistenceError(`No se pudo leer el partido visto ${matchId}.`, error);
+    }
+
+    return { matchId, watched: data !== null };
+  }
 }

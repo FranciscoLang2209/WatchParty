@@ -37,8 +37,10 @@ type SetWatched = (
   watched: boolean,
 ) => Promise<WatchedMatchResult | null>;
 
-function buildTestApp(setWatched: SetWatched): Express {
-  const store: WatchedMatchStore = { setWatched };
+type GetWatched = (userId: string, matchId: string) => Promise<WatchedMatchResult | null>;
+
+function buildTestApp(setWatched: SetWatched, getWatched: GetWatched = vi.fn()): Express {
+  const store: WatchedMatchStore = { setWatched, getWatched };
   const app = express();
 
   app.use(express.json());
@@ -180,6 +182,117 @@ describe.each(VERBS)('%s /matches/:matchId/watched', (_label, verb, watched) => 
   });
 });
 
+describe('GET /matches/:matchId/watched', () => {
+  beforeEach(() => {
+    vi.mocked(supabaseAuthClient.auth.getUser).mockReset();
+  });
+
+  function buildReadApp(getWatched: GetWatched): Express {
+    return buildTestApp(vi.fn<SetWatched>(), getWatched);
+  }
+
+  it.each([true, false])(
+    'con token válido responde 200 con { watched: %s } leído del store',
+    async (watched) => {
+      mockAuthenticated();
+      const getWatched = vi.fn<GetWatched>(async (_userId, matchId) => ({ matchId, watched }));
+      const app = buildReadApp(getWatched);
+
+      const response = await request(app).get(URL).set('Authorization', 'Bearer good-token');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ watched });
+      expect(getWatched).toHaveBeenCalledWith('user-123', MATCH_ID);
+    },
+  );
+
+  it('ignora un userId enviado en la query: lee solo el estado del bearer', async () => {
+    mockAuthenticated('user-123');
+    const getWatched = vi.fn<GetWatched>(async (_userId, matchId) => ({ matchId, watched: true }));
+    const app = buildReadApp(getWatched);
+
+    const response = await request(app)
+      .get(`${URL}?userId=otro-usuario`)
+      .set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(200);
+    expect(getWatched).toHaveBeenCalledWith('user-123', MATCH_ID);
+  });
+
+  it('sin token responde 401 UNAUTHORIZED y no invoca el store', async () => {
+    const getWatched = vi.fn<GetWatched>();
+    const app = buildReadApp(getWatched);
+
+    const response = await request(app).get(URL);
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      error: { code: 'UNAUTHORIZED', message: expect.any(String) },
+    });
+    expect(getWatched).not.toHaveBeenCalled();
+  });
+
+  it('con token inválido responde 401 y no invoca el store', async () => {
+    mockInvalidToken();
+    const getWatched = vi.fn<GetWatched>();
+    const app = buildReadApp(getWatched);
+
+    const response = await request(app).get(URL).set('Authorization', 'Bearer bad-token');
+
+    expect(response.status).toBe(401);
+    expect(response.body.error.code).toBe('UNAUTHORIZED');
+    expect(getWatched).not.toHaveBeenCalled();
+  });
+
+  it('con matchId inválido responde 400 VALIDATION_ERROR y no invoca el store', async () => {
+    mockAuthenticated();
+    const getWatched = vi.fn<GetWatched>();
+    const app = buildReadApp(getWatched);
+
+    const response = await request(app)
+      .get('/matches/no-es-uuid/watched')
+      .set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: { code: 'VALIDATION_ERROR', message: expect.any(String) },
+    });
+    expect(getWatched).not.toHaveBeenCalled();
+  });
+
+  it('responde 404 NOT_FOUND si el store devuelve null (partido inexistente)', async () => {
+    mockAuthenticated();
+    const app = buildReadApp(async () => null);
+
+    const response = await request(app).get(URL).set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({
+      error: { code: 'NOT_FOUND', message: expect.any(String) },
+    });
+  });
+
+  it('un error de persistencia responde 500 genérico, no { watched: false }, sin filtrar detalles', async () => {
+    mockAuthenticated();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const app = buildReadApp(async () => {
+      throw new WatchedMatchPersistenceError('No se pudo leer el partido visto.', {
+        message: 'detalle interno de postgres',
+      });
+    });
+
+    const response = await request(app).get(URL).set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(500);
+    expect(response.body.error.code).toBe('INTERNAL_ERROR');
+    expect(response.body).not.toHaveProperty('watched');
+    expect(response.text).not.toContain('detalle interno');
+    expect(response.text).not.toContain('No se pudo leer');
+
+    consoleError.mockRestore();
+  });
+});
+
 describe('partido visto de dos usuarios sobre el mismo partido', () => {
   beforeEach(() => {
     vi.mocked(supabaseAuthClient.auth.getUser).mockReset();
@@ -198,8 +311,32 @@ describe('partido visto de dos usuarios sobre el mismo partido', () => {
 
         return { matchId, watched };
       }) as SetWatched,
+      getWatched: (async (userId, matchId) => ({
+        matchId,
+        watched: watchedBy.has(userId),
+      })) as GetWatched,
     };
   }
+
+  it('GET devuelve a cada bearer solo su propio estado tras marcar y deshacer', async () => {
+    const { setWatched, getWatched } = buildStatefulStore();
+    const app = buildTestApp(setWatched, getWatched);
+    const read = async (user: string) => {
+      mockAuthenticated(user);
+      return (await request(app).get(URL).set('Authorization', `Bearer token-${user}`)).body;
+    };
+
+    mockAuthenticated('user-a');
+    await request(app).put(URL).set('Authorization', 'Bearer token-a');
+
+    expect(await read('user-a')).toEqual({ watched: true });
+    expect(await read('user-b')).toEqual({ watched: false });
+
+    mockAuthenticated('user-a');
+    await request(app).delete(URL).set('Authorization', 'Bearer token-a');
+
+    expect(await read('user-a')).toEqual({ watched: false });
+  });
 
   it('cada bearer mueve solo su propia relación', async () => {
     const { setWatched, watchedBy } = buildStatefulStore();

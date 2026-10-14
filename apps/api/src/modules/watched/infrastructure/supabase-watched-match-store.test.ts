@@ -16,12 +16,13 @@ interface FakeWatchedMatchesOptions {
   rows?: WatchedMatchRow[];
   upsertError?: FakeError;
   deleteError?: FakeError;
+  selectError?: FakeError;
 }
 
 /**
  * Doble de Supabase con `watched_matches` en memoria: upsert respeta la PK
- * compuesta (ignora duplicados, no la pisa) y delete filtra por ambas
- * columnas, igual que hace la base real.
+ * compuesta (ignora duplicados, no la pisa), y delete y select filtran por
+ * ambas columnas, igual que hace la base real.
  */
 function makeFakeClient(options: FakeWatchedMatchesOptions = {}) {
   const rows = [...(options.rows ?? [])];
@@ -32,6 +33,10 @@ function makeFakeClient(options: FakeWatchedMatchesOptions = {}) {
     }
 
     const filters: Record<string, string> = {};
+    const matchesFilters = (row: WatchedMatchRow) =>
+      Object.entries(filters).every(
+        ([column, value]) => row[column as keyof WatchedMatchRow] === value,
+      );
 
     const builder = {
       upsert: vi.fn(async (row: WatchedMatchRow) => {
@@ -45,6 +50,12 @@ function makeFakeClient(options: FakeWatchedMatchesOptions = {}) {
         return { data: null, error: null };
       }),
       delete: vi.fn(() => builder),
+      select: vi.fn(() => builder),
+      maybeSingle: vi.fn(async () => {
+        if (options.selectError) return { data: null, error: options.selectError };
+
+        return { data: rows.find(matchesFilters) ?? null, error: null };
+      }),
       eq: vi.fn((column: string, value: string) => {
         filters[column] = value;
         return builder;
@@ -54,11 +65,7 @@ function makeFakeClient(options: FakeWatchedMatchesOptions = {}) {
 
         for (let i = rows.length - 1; i >= 0; i -= 1) {
           const row = rows[i];
-          if (!row) continue;
-          const matches = Object.entries(filters).every(
-            ([column, value]) => row[column as keyof WatchedMatchRow] === value,
-          );
-          if (matches) rows.splice(i, 1);
+          if (row && matchesFilters(row)) rows.splice(i, 1);
         }
 
         return resolve({ data: null, error: null });
@@ -191,5 +198,64 @@ describe('SupabaseWatchedMatchStore.setWatched()', () => {
     await expect(store.setWatched(USER_ID, MATCH_ID, false)).rejects.toThrow(
       WatchedMatchPersistenceError,
     );
+  });
+});
+
+describe('SupabaseWatchedMatchStore.getWatched()', () => {
+  it('devuelve watched: true si el usuario marcó el partido', async () => {
+    const client = makeFakeClient({ rows: [{ user_id: USER_ID, match_id: MATCH_ID }] });
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), makeCatalog());
+
+    const result = await store.getWatched(USER_ID, MATCH_ID);
+
+    expect(result).toEqual({ matchId: MATCH_ID, watched: true });
+  });
+
+  it('devuelve watched: false si la lectura confirma que no hay marca', async () => {
+    const client = makeFakeClient();
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), makeCatalog());
+
+    const result = await store.getWatched(USER_ID, MATCH_ID);
+
+    expect(result).toEqual({ matchId: MATCH_ID, watched: false });
+  });
+
+  it('la marca de otro usuario no cuenta como propia', async () => {
+    const client = makeFakeClient({ rows: [{ user_id: OTHER_USER_ID, match_id: MATCH_ID }] });
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), makeCatalog());
+
+    const result = await store.getWatched(USER_ID, MATCH_ID);
+
+    expect(result).toEqual({ matchId: MATCH_ID, watched: false });
+  });
+
+  it('refleja el estado que dejan marcar y deshacer', async () => {
+    const client = makeFakeClient();
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), makeCatalog());
+
+    await store.setWatched(USER_ID, MATCH_ID, true);
+    const afterMark = await store.getWatched(USER_ID, MATCH_ID);
+    await store.setWatched(USER_ID, MATCH_ID, false);
+    const afterUnmark = await store.getWatched(USER_ID, MATCH_ID);
+
+    expect(afterMark?.watched).toBe(true);
+    expect(afterUnmark?.watched).toBe(false);
+  });
+
+  it('un matchId inexistente se informa como ausencia de dominio, sin consultar la tabla', async () => {
+    const client = makeFakeClient();
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), makeCatalog());
+
+    const result = await store.getWatched(USER_ID, UNKNOWN_MATCH_ID);
+
+    expect(result).toBeNull();
+    expect(client.from).not.toHaveBeenCalled();
+  });
+
+  it('un error de Supabase al leer se propaga como WatchedMatchPersistenceError, no como false', async () => {
+    const client = makeFakeClient({ selectError: { message: 'fallo simulado' } });
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), makeCatalog());
+
+    await expect(store.getWatched(USER_ID, MATCH_ID)).rejects.toThrow(WatchedMatchPersistenceError);
   });
 });
