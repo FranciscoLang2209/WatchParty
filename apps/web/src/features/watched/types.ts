@@ -1,7 +1,7 @@
 /**
  * Espejo del contrato público del partido visto propio de la Node API
- * (`PUT`/`DELETE /matches/:matchId/watched`, WAT-178), que responde con el
- * estado final: `{ watched }`.
+ * (`GET`, WAT-197, y `PUT`/`DELETE /matches/:matchId/watched`, WAT-178), que
+ * responde siempre con el estado: `{ watched }`.
  *
  * La web no comparte DTO ni importa runtime del servidor: replica los tipos y
  * las pruebas protegen que no se desvíen, igual que en `features/rooms`.

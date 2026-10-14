@@ -45,9 +45,19 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-/** Cada llamada devuelve una `Response` nueva: el cuerpo se consume una sola vez. */
+/** La lectura de «visto» (WAT-179) corre aparte del detalle y la sala. */
+function esVisto(url: RequestInfo | URL): boolean {
+  return String(url).endsWith('/watched');
+}
+
+/**
+ * Cada llamada devuelve una `Response` nueva: el cuerpo se consume una sola vez.
+ * La lectura de «visto» confirma que no hay marca, salvo que la prueba la redefina.
+ */
 function responderCon(body: unknown, status = 200) {
-  fetchSpy.mockImplementation(() => Promise.resolve(jsonResponse(body, status)));
+  fetchSpy.mockImplementation((url: RequestInfo | URL) =>
+    Promise.resolve(esVisto(url) ? jsonResponse({ watched: false }) : jsonResponse(body, status)),
+  );
 }
 
 function renderAt(path: string) {
@@ -68,14 +78,17 @@ async function detalle() {
   return within(await screen.findByRole('main'));
 }
 
+/** Pedidos del detalle y la sala, sin las lecturas de «visto». */
+function llamadasSinVisto(): [string, RequestInit][] {
+  return (fetchSpy.mock.calls as [string, RequestInit][]).filter(([url]) => !esVisto(url));
+}
+
 function ultimaUrl(): string {
-  const calls = fetchSpy.mock.calls;
-  return String((calls[calls.length - 1] as [string, RequestInit])[0]);
+  return String(llamadasSinVisto().at(-1)![0]);
 }
 
 function ultimoInit(): RequestInit {
-  const calls = fetchSpy.mock.calls;
-  return (calls[calls.length - 1] as [string, RequestInit])[1];
+  return llamadasSinVisto().at(-1)![1];
 }
 
 beforeEach(() => {
@@ -208,7 +221,7 @@ describe('Detalle del partido: estados alternativos', () => {
       await m.findByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' }),
     ).toBeInTheDocument();
     expect(m.queryByRole('alert')).not.toBeInTheDocument();
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(llamadasSinVisto()).toHaveLength(2);
   });
 
   it('ante un 401 ofrece reingresar con el flujo de Auth existente', async () => {
@@ -235,9 +248,12 @@ describe('Entrar a la sala', () => {
 
   /** El detalle se carga siempre bien; la respuesta de la sala la decide cada prueba. */
   function responderSala(respuesta: () => Promise<Response>) {
-    fetchSpy.mockImplementation((url: RequestInfo | URL) =>
-      String(url) === URL_SALA ? respuesta() : Promise.resolve(jsonResponse({ match: partido })),
-    );
+    fetchSpy.mockImplementation((url: RequestInfo | URL) => {
+      if (String(url) === URL_SALA) return respuesta();
+      if (esVisto(url)) return Promise.resolve(jsonResponse({ watched: false }));
+
+      return Promise.resolve(jsonResponse({ match: partido }));
+    });
   }
 
   /**
@@ -290,7 +306,7 @@ describe('Entrar a la sala', () => {
     await user.click(boton);
 
     expect(boton).toBeDisabled();
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(llamadasSinVisto()).toHaveLength(2);
   });
 
   it.each([
@@ -354,24 +370,49 @@ describe('Retorno a Home', () => {
 describe('Marcar como visto', () => {
   const URL_VISTO = `${API_BASE}/matches/match-001/watched`;
 
-  /** El detalle se carga siempre bien; la respuesta de «visto» la decide cada prueba. */
-  function responderVisto(respuesta: (metodo: string) => Promise<Response>) {
-    fetchSpy.mockImplementation((url: RequestInfo | URL, init?: RequestInit) =>
-      String(url) === URL_VISTO
-        ? respuesta(init?.method ?? 'GET')
-        : Promise.resolve(jsonResponse({ match: partido })),
+  /**
+   * El detalle se carga siempre bien. `respuesta` decide PUT/DELETE y
+   * `lectura` el GET inicial, que por defecto confirma que no hay marca.
+   */
+  function responderVisto(
+    respuesta: (metodo: string) => Promise<Response>,
+    lectura: (init?: RequestInit) => Promise<Response> = () =>
+      Promise.resolve(jsonResponse({ watched: false })),
+  ) {
+    fetchSpy.mockImplementation((url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) !== URL_VISTO) return Promise.resolve(jsonResponse({ match: partido }));
+
+      const metodo = init?.method ?? 'GET';
+      return metodo === 'GET' ? lectura(init) : respuesta(metodo);
+    });
+  }
+
+  /** Persiste como el servidor real: PUT marca, DELETE deshace y GET lee lo guardado. */
+  function servidorQueConfirma(inicial = false) {
+    let persistido = inicial;
+
+    responderVisto(
+      (metodo) => {
+        persistido = metodo === 'PUT';
+        return Promise.resolve(jsonResponse({ watched: persistido }));
+      },
+      () => Promise.resolve(jsonResponse({ watched: persistido })),
     );
   }
 
-  /** Confirma el estado que se pidió: PUT marca y DELETE deshace. */
-  function servidorQueConfirma() {
-    responderVisto((metodo) => Promise.resolve(jsonResponse({ watched: metodo === 'PUT' })));
-  }
-
-  function llamadasVisto(): [string, RequestInit][] {
+  function pedidosVisto(): [string, RequestInit][] {
     return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
       ([url]) => String(url) === URL_VISTO,
     );
+  }
+
+  /** Solo las operaciones de marcar y deshacer, sin las lecturas. */
+  function llamadasVisto(): [string, RequestInit][] {
+    return pedidosVisto().filter(([, init]) => init.method !== 'GET');
+  }
+
+  function lecturasVisto(): [string, RequestInit][] {
+    return pedidosVisto().filter(([, init]) => init.method === 'GET');
   }
 
   async function abrirDetalle() {
@@ -379,12 +420,131 @@ describe('Marcar como visto', () => {
     return detalle();
   }
 
-  it('muestra «Marcar como visto» al abrir, con un nombre inequívoco, sin consultar nada', async () => {
+  it('al abrir lee el estado con GET y bearer; sin marca muestra «Marcar como visto»', async () => {
+    servidorQueConfirma();
+
     const m = await abrirDetalle();
 
     expect(await m.findByRole('button', { name: 'Marcar como visto' })).toBeEnabled();
     expect(m.getAllByRole('button', { name: /visto/i })).toHaveLength(1);
     expect(llamadasVisto()).toHaveLength(0);
+    expect(lecturasVisto()).toHaveLength(1);
+    expect(new Headers(lecturasVisto()[0]![1].headers).get('Authorization')).toBe(
+      `Bearer ${session.access_token}`,
+    );
+  });
+
+  it('si el partido ya estaba marcado muestra «Deshacer visto» al abrir', async () => {
+    servidorQueConfirma(true);
+
+    const m = await abrirDetalle();
+
+    expect(await m.findByRole('button', { name: 'Deshacer visto' })).toBeEnabled();
+    expect(m.queryByRole('button', { name: 'Marcar como visto' })).not.toBeInTheDocument();
+  });
+
+  it('marcar, recargar y desmarcar reflejan el estado persistido', async () => {
+    const user = userEvent.setup();
+    servidorQueConfirma();
+
+    const primeraCarga = renderAt('/matches/match-001');
+    await user.click(await screen.findByRole('button', { name: 'Marcar como visto' }));
+    await screen.findByRole('button', { name: 'Deshacer visto' });
+    primeraCarga.unmount();
+
+    const m = await abrirDetalle();
+    await user.click(await m.findByRole('button', { name: 'Deshacer visto' }));
+
+    expect(await m.findByRole('button', { name: 'Marcar como visto' })).toBeEnabled();
+    expect(llamadasVisto().map(([, init]) => init.method)).toEqual(['PUT', 'DELETE']);
+  });
+
+  it('mientras lee no ofrece ninguna acción ni lo presenta como no visto', async () => {
+    responderVisto(
+      () => Promise.resolve(jsonResponse({ watched: true })),
+      () => new Promise<Response>(() => {}),
+    );
+
+    const m = await abrirDetalle();
+    await m.findByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' });
+
+    expect(await m.findByRole('status')).toHaveTextContent('Consultando si ya viste este partido…');
+    expect(m.queryByRole('button', { name: /visto/i })).not.toBeInTheDocument();
+  });
+
+  it('un error al leer avisa, no lo presenta como no visto y deja reintentar la lectura', async () => {
+    const user = userEvent.setup();
+    let fallar = true;
+    responderVisto(
+      () => Promise.resolve(jsonResponse({ watched: false })),
+      () =>
+        Promise.resolve(
+          fallar
+            ? jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)
+            : jsonResponse({ watched: true }),
+        ),
+    );
+
+    const m = await abrirDetalle();
+
+    expect(await m.findByRole('alert')).toHaveTextContent(
+      'No pudimos saber si ya viste este partido. Intentá de nuevo.',
+    );
+    expect(m.queryByRole('button', { name: /visto/i })).not.toBeInTheDocument();
+
+    fallar = false;
+    await user.click(m.getByRole('button', { name: 'Reintentar' }));
+
+    expect(await m.findByRole('button', { name: 'Deshacer visto' })).toBeEnabled();
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
+    expect(lecturasVisto()).toHaveLength(2);
+  });
+
+  it('una lectura con 401 ofrece reingresar con el flujo de Auth existente', async () => {
+    const user = userEvent.setup();
+    responderVisto(
+      () => Promise.resolve(jsonResponse({ watched: true })),
+      () => Promise.resolve(jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401)),
+    );
+
+    const m = await abrirDetalle();
+
+    expect(await m.findByRole('alert')).toHaveTextContent(
+      'La sesión venció. Iniciá sesión nuevamente.',
+    );
+    expect(m.queryByRole('button', { name: /visto/i })).not.toBeInTheDocument();
+
+    await user.click(m.getByRole('button', { name: 'Iniciar sesión nuevamente' }));
+
+    expect(authMock.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('al cambiar de usuario vuelve a leer con su bearer y no conserva el estado del anterior', async () => {
+    const otraSesion = {
+      access_token: 'token-otro',
+      user: { id: 'user-2', email: 'c@d.com' },
+    } as Session;
+    responderVisto(
+      () => Promise.resolve(jsonResponse({ watched: true })),
+      (init) =>
+        Promise.resolve(
+          jsonResponse({
+            watched: new Headers(init?.headers).get('Authorization') === 'Bearer token-123',
+          }),
+        ),
+    );
+
+    const m = await abrirDetalle();
+    await m.findByRole('button', { name: 'Deshacer visto' });
+
+    const [[alCambiarSesion]] = authMock.onAuthStateChange.mock.calls as [
+      [(evento: string, sesion: Session | null) => void],
+    ];
+    act(() => alCambiarSesion('SIGNED_IN', otraSesion));
+
+    expect(await m.findByRole('button', { name: 'Marcar como visto' })).toBeEnabled();
+    const ultimaLectura = lecturasVisto().at(-1)!;
+    expect(new Headers(ultimaLectura[1].headers).get('Authorization')).toBe('Bearer token-otro');
   });
 
   it('marca con PUT y bearer, y el texto pasa a «Deshacer visto»', async () => {
@@ -690,6 +850,39 @@ describe('Cambio de partido (WAT-205)', () => {
       'No pudimos abrir la sala. Intentá de nuevo.',
     );
     expect(screen.getByRole('button', { name: 'Entrar a la sala' })).toBeEnabled();
+  });
+
+  it('la lectura tardía del visto de A no pisa el estado de B (WAT-179)', async () => {
+    const user = userEvent.setup();
+    await abrirA();
+    await waitFor(() => expect(pendientes.get(`${URL_A}/watched`)).toHaveLength(1));
+
+    await user.click(screen.getByRole('link', { name: 'Ir al partido B' }));
+    await responder(URL_B, { match: partidoB });
+    await responder(`${URL_B}/watched`, { watched: false });
+    await screen.findByRole('button', { name: 'Marcar como visto' });
+
+    await responder(`${URL_A}/watched`, { watched: true });
+
+    expect(screen.getByRole('button', { name: 'Marcar como visto' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Deshacer visto' })).not.toBeInTheDocument();
+  });
+
+  it('la respuesta tardía de marcar A no cambia ni bloquea el visto de B (WAT-179)', async () => {
+    const user = userEvent.setup();
+    await abrirA();
+    await responder(`${URL_A}/watched`, { watched: false });
+    await user.click(await screen.findByRole('button', { name: 'Marcar como visto' }));
+
+    await user.click(screen.getByRole('link', { name: 'Ir al partido B' }));
+    await responder(URL_B, { match: partidoB });
+    await responder(`${URL_B}/watched`, { watched: false });
+    const marcarB = await screen.findByRole('button', { name: 'Marcar como visto' });
+
+    await responder(`${URL_A}/watched`, { watched: true });
+
+    expect(marcarB).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Deshacer visto' })).not.toBeInTheDocument();
   });
 
   it('al desmontar con el detalle y la sala pendientes descarta ambas respuestas', async () => {
