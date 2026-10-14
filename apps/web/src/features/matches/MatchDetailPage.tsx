@@ -143,9 +143,20 @@ function MarcarVisto({ matchId, accessToken, onSessionExpired }: MarcarVistoProp
  *
  * El `matchId` de la URL se pasa al cliente sin interpretarlo: es opaco. Carga,
  * no encontrado, error recuperable y sesión vencida son estados distintos.
+ *
+ * Se remonta con `key` por cada `matchId`, igual que `RoomPage` (WAT-205): al
+ * pasar de un partido a otro el estado arranca de nuevo en carga y nunca
+ * quedan título, acciones, errores ni pedidos pendientes del anterior.
  */
 export function MatchDetailPage() {
   const { matchId } = useParams<{ matchId: string }>();
+
+  if (matchId === undefined) return null;
+
+  return <DetallePartido key={matchId} matchId={matchId} />;
+}
+
+function DetallePartido({ matchId }: { matchId: string }) {
   const { session, signOut } = useAuth();
   const accessToken = session?.access_token ?? null;
 
@@ -157,12 +168,12 @@ export function MatchDetailPage() {
   const [errorSala, setErrorSala] = useState<ErrorSala | null>(null);
   const salaController = useRef<AbortController | null>(null);
 
-  // Si la pantalla se desmonta mientras espera la sala, la respuesta se descarta.
+  // Al desmontar (salir o cambiar de partido) se cancela el pedido de la sala.
   useEffect(() => () => salaController.current?.abort(), []);
 
   useEffect(() => {
     // Sin token no hay nada que pedir: el guard de rutas privadas se encarga.
-    if (accessToken === null || matchId === undefined) return;
+    if (accessToken === null) return;
 
     const controller = new AbortController();
     let vigente = true;
@@ -198,12 +209,17 @@ export function MatchDetailPage() {
       setEntrando(true);
       setErrorSala(null);
 
+      // Se mira la señal además del error de cancelación: si el pedido ya se
+      // abortó, una respuesta que igual llegue no navega a la sala de otro
+      // partido ni toca el estado de una pantalla desmontada.
       enterRoom(partidoId, accessToken, controller.signal)
         .then((sala) => {
+          if (controller.signal.aborted) return;
+
           navigate(`/rooms/${encodeURIComponent(sala.id)}`);
         })
         .catch((error: unknown) => {
-          if (isRoomCancelled(error)) return;
+          if (controller.signal.aborted || isRoomCancelled(error)) return;
 
           setErrorSala(toErrorSala(error));
           setEntrando(false);
