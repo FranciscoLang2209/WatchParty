@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { setWatched } from './api';
+import { getWatched, setWatched } from './api';
 import { WatchedApiError, isCancelled } from './types';
 
 const API_BASE = 'https://api.watchparty.test';
@@ -165,6 +165,71 @@ describe('setWatched', () => {
     fetchMock.mockRejectedValue(abortError());
 
     const error = await failureOf(setWatched(MATCH_ID, true, TOKEN));
+
+    expect(isCancelled(error)).toBe(true);
+  });
+});
+
+describe('getWatched', () => {
+  it('manda GET /matches/:matchId/watched con bearer y sin cuerpo', async () => {
+    respondWith({ watched: true });
+
+    await getWatched(MATCH_ID, TOKEN);
+
+    expect(requestUrl()).toBe(`${API_BASE}/matches/${MATCH_ID}/watched`);
+    expect(requestInit().method).toBe('GET');
+    expect(requestInit().body).toBeUndefined();
+    expect(new Headers(requestInit().headers).get('Authorization')).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it.each([true, false])('devuelve el estado persistido: %s', async (watched) => {
+    respondWith({ watched });
+
+    await expect(getWatched(MATCH_ID, TOKEN)).resolves.toBe(watched);
+  });
+
+  it('pasa la señal de cancelación al fetch', async () => {
+    respondWith({ watched: true });
+    const controller = new AbortController();
+
+    await getWatched(MATCH_ID, TOKEN, controller.signal);
+
+    expect(requestInit().signal).toBe(controller.signal);
+  });
+
+  it.each([
+    [401, 'unauthorized'],
+    [404, 'not-found'],
+    [500, 'server'],
+  ])('un %i se traduce a %s, nunca a false', async (status, kind) => {
+    respondWith({}, { status });
+
+    const error = await failureOf(getWatched(MATCH_ID, TOKEN));
+
+    expect(error).toBeInstanceOf(WatchedApiError);
+    expect(error.kind).toBe(kind);
+  });
+
+  it('un cuerpo sin watched booleano es un error de servidor, no false', async () => {
+    respondWith({});
+
+    const error = await failureOf(getWatched(MATCH_ID, TOKEN));
+
+    expect(error.kind).toBe('server');
+  });
+
+  it('una caída de red se traduce a network', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    const error = await failureOf(getWatched(MATCH_ID, TOKEN));
+
+    expect(error.kind).toBe('network');
+  });
+
+  it('una lectura abortada es cancelled', async () => {
+    fetchMock.mockRejectedValue(abortError());
+
+    const error = await failureOf(getWatched(MATCH_ID, TOKEN));
 
     expect(isCancelled(error)).toBe(true);
   });

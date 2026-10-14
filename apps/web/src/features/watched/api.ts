@@ -74,16 +74,13 @@ function toWatched(body: unknown): boolean {
 }
 
 /**
- * Marca (`watched: true`, `PUT`) o deshace (`watched: false`, `DELETE`) el
- * partido visto de la persona autenticada. No se manda cuerpo: la persona sale
- * del bearer, nunca de un `userId` del cliente.
- *
- * Devuelve el estado que confirma el servidor, que es el único que la pantalla
- * debe mostrar: no el que se pidió.
+ * Pide `method` sobre el partido visto propio y devuelve el `{ watched }` que
+ * confirma el servidor. No se manda cuerpo: la persona sale del bearer, nunca
+ * de un `userId` del cliente.
  */
-export async function setWatched(
+async function request(
   matchId: string,
-  watched: boolean,
+  method: 'GET' | 'PUT' | 'DELETE',
   accessToken: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
@@ -91,7 +88,7 @@ export async function setWatched(
 
   try {
     response = await fetch(watchedUrl(matchId), {
-      method: watched ? 'PUT' : 'DELETE',
+      method,
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${accessToken}`,
@@ -112,4 +109,32 @@ export async function setWatched(
 
     throw isAbortError(error) ? fail('cancelled') : fail('server');
   }
+}
+
+/**
+ * Lee si la persona autenticada marcó el partido como visto (WAT-197). Un
+ * fallo de lectura siempre se lanza: nunca se resuelve como `false`.
+ */
+export function getWatched(
+  matchId: string,
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  return request(matchId, 'GET', accessToken, signal);
+}
+
+/**
+ * Marca (`watched: true`, `PUT`) o deshace (`watched: false`, `DELETE`) el
+ * partido visto de la persona autenticada.
+ *
+ * Devuelve el estado que confirma el servidor, que es el único que la pantalla
+ * debe mostrar: no el que se pidió.
+ */
+export function setWatched(
+  matchId: string,
+  watched: boolean,
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  return request(matchId, watched ? 'PUT' : 'DELETE', accessToken, signal);
 }

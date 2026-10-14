@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { enterRoom } from '@/features/rooms/api';
 import { RoomsApiError, isCancelled as isRoomCancelled } from '@/features/rooms/types';
-import { setWatched } from '@/features/watched/api';
+import { getWatched, setWatched } from '@/features/watched/api';
 import { WatchedApiError, isCancelled as isWatchedCancelled } from '@/features/watched/types';
 import { formatKickoff, matchStatusLabel } from './format';
 import { getMatch } from './api';
@@ -24,6 +24,7 @@ const TITULO_NEUTRO = 'Detalle del partido';
 const MENSAJE_INESPERADO = 'No pudimos cargar el partido. Intentá de nuevo.';
 const MENSAJE_INESPERADO_SALA = 'No pudimos abrir la sala. Intentá de nuevo.';
 const MENSAJE_INESPERADO_VISTO = 'No pudimos actualizar el partido visto. Intentá de nuevo.';
+const MENSAJE_LECTURA_VISTO = 'No pudimos saber si ya viste este partido. Intentá de nuevo.';
 
 function toEstadoError(error: unknown): Estado {
   if (error instanceof MatchesApiError) {
@@ -70,27 +71,73 @@ interface MarcarVistoProps {
   onSessionExpired: () => void;
 }
 
+type LecturaVisto =
+  | { status: 'loading' }
+  | { status: 'ready'; visto: boolean }
+  | { status: 'error'; expired: boolean };
+
 /**
  * Control de «visto» del partido mostrado (WAT-179).
  *
- * El estado local arranca en falso: no hay consulta del estado actual (el
- * listado de vistos queda fuera de alcance). SOLO cambia con la respuesta
+ * Al montarse lee el estado persistido (WAT-197). Mientras lee, o si la
+ * lectura falla, no ofrece ninguna acción: un estado desconocido nunca se
+ * muestra como «no visto». Una vez leído, SOLO cambia con la respuesta
  * exitosa del servidor: mientras la petición está en curso la acción queda
  * deshabilitada, y un fallo conserva el último estado confirmado y deja
- * reintentar con el mismo botón. Se monta con `key` por partido, así al
- * cambiar de partido el estado arranca de cero.
+ * reintentar con el mismo botón.
+ *
+ * Se monta con `key` por partido y por usuario, así un cambio de cualquiera
+ * de los dos arranca de cero; al desmontar se cancelan los pedidos y una
+ * respuesta que igual llegue se descarta.
  */
 function MarcarVisto({ matchId, accessToken, onSessionExpired }: MarcarVistoProps) {
-  const [visto, setVisto] = useState(false);
+  const [lectura, setLectura] = useState<LecturaVisto>({ status: 'loading' });
+  const [intentoLectura, setIntentoLectura] = useState(0);
   const [actualizando, setActualizando] = useState(false);
   const [error, setError] = useState<ErrorVisto | null>(null);
   const controller = useRef<AbortController | null>(null);
+  // El token se renueva solo cada tanto: una renovación no vuelve a leer, por
+  // eso la lectura toma el último token sin depender de él.
+  const token = useRef(accessToken);
+
+  useEffect(() => {
+    token.current = accessToken;
+  }, [accessToken]);
 
   // Si la pantalla se desmonta mientras espera, la respuesta se descarta.
   useEffect(() => () => controller.current?.abort(), []);
 
+  useEffect(() => {
+    const accessTokenActual = token.current;
+    if (accessTokenActual === null) return;
+
+    const lecturaController = new AbortController();
+
+    getWatched(matchId, accessTokenActual, lecturaController.signal)
+      .then((visto) => {
+        if (!lecturaController.signal.aborted) setLectura({ status: 'ready', visto });
+      })
+      .catch((caught: unknown) => {
+        if (lecturaController.signal.aborted || isWatchedCancelled(caught)) return;
+
+        setLectura({
+          status: 'error',
+          expired: caught instanceof WatchedApiError && caught.kind === 'unauthorized',
+        });
+      });
+
+    return () => lecturaController.abort();
+  }, [matchId, intentoLectura]);
+
+  const reintentarLectura = useCallback(() => {
+    setLectura({ status: 'loading' });
+    setIntentoLectura((valor) => valor + 1);
+  }, []);
+
+  const visto = lectura.status === 'ready' ? lectura.visto : null;
+
   const alternar = useCallback(() => {
-    if (accessToken === null || actualizando) return;
+    if (accessToken === null || actualizando || visto === null) return;
 
     const abortController = new AbortController();
     controller.current = abortController;
@@ -99,16 +146,46 @@ function MarcarVisto({ matchId, accessToken, onSessionExpired }: MarcarVistoProp
 
     setWatched(matchId, !visto, accessToken, abortController.signal)
       .then((confirmado) => {
-        setVisto(confirmado);
+        if (abortController.signal.aborted) return;
+
+        setLectura({ status: 'ready', visto: confirmado });
         setActualizando(false);
       })
       .catch((caught: unknown) => {
-        if (isWatchedCancelled(caught)) return;
+        if (abortController.signal.aborted || isWatchedCancelled(caught)) return;
 
         setError(toErrorVisto(caught));
         setActualizando(false);
       });
   }, [accessToken, actualizando, matchId, visto]);
+
+  if (lectura.status === 'loading') {
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        Consultando si ya viste este partido…
+      </p>
+    );
+  }
+
+  if (lectura.status === 'error') {
+    return (
+      <div role="alert" className="flex flex-col items-start gap-3">
+        <p className="text-sm text-destructive">
+          {lectura.expired ? 'La sesión venció. Iniciá sesión nuevamente.' : MENSAJE_LECTURA_VISTO}
+        </p>
+
+        {lectura.expired ? (
+          <Button type="button" onClick={onSessionExpired}>
+            Iniciar sesión nuevamente
+          </Button>
+        ) : (
+          <Button type="button" variant="outline" onClick={reintentarLectura}>
+            Reintentar
+          </Button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -159,6 +236,7 @@ export function MatchDetailPage() {
 function DetallePartido({ matchId }: { matchId: string }) {
   const { session, signOut } = useAuth();
   const accessToken = session?.access_token ?? null;
+  const userId = session?.user.id ?? null;
 
   const navigate = useNavigate();
 
@@ -278,7 +356,7 @@ function DetallePartido({ matchId }: { matchId: string }) {
             ) : null}
 
             <MarcarVisto
-              key={estado.match.id}
+              key={`${estado.match.id}:${userId}`}
               matchId={estado.match.id}
               accessToken={accessToken}
               onSessionExpired={() => void signOut()}
