@@ -1,6 +1,6 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@supabase/supabase-js';
 
@@ -532,5 +532,182 @@ describe('Marcar como visto', () => {
 
     expect(await m.findByRole('button', { name: 'Marcar como visto' })).toBeEnabled();
     expect(llamadasVisto().map(([, init]) => init.method)).toEqual(['PUT', 'DELETE']);
+  });
+});
+
+describe('Cambio de partido (WAT-205)', () => {
+  const partidoB = {
+    ...partido,
+    id: 'match-002',
+    homeTeam: 'Racing Club',
+    homeTeamId: 'team-racing-club',
+    awayTeam: 'Independiente',
+    awayTeamId: 'team-independiente',
+  };
+  const URL_A = `${API_BASE}/matches/match-001`;
+  const URL_B = `${API_BASE}/matches/match-002`;
+  const URL_SALA_A = `${URL_A}/room`;
+  const URL_SALA_B = `${URL_B}/room`;
+  const TITULO_A = 'River Plate vs. Boca Juniors';
+  const TITULO_B = 'Racing Club vs. Independiente';
+
+  type Pendiente = (respuesta: Response) => void;
+  let pendientes: Map<string, Pendiente[]>;
+
+  /**
+   * Cada pedido queda pendiente hasta que la prueba lo resuelve. El doble
+   * ignora la señal de abort a propósito: la pantalla tiene que descartar
+   * las respuestas tardías por su cuenta.
+   */
+  beforeEach(() => {
+    pendientes = new Map();
+    fetchSpy.mockImplementation(
+      (url: RequestInfo | URL) =>
+        new Promise<Response>((resolve) => {
+          const clave = String(url);
+          pendientes.set(clave, [...(pendientes.get(clave) ?? []), resolve]);
+        }),
+    );
+  });
+
+  async function responder(url: string, body: unknown, status = 200) {
+    await waitFor(() => expect(pendientes.get(url)?.length).toBeGreaterThan(0));
+    const [primero, ...resto] = pendientes.get(url)!;
+    pendientes.set(url, resto);
+
+    await act(async () => {
+      primero!(jsonResponse(body, status));
+    });
+  }
+
+  function SondaSala() {
+    const { roomId } = useParams<{ roomId: string }>();
+    return <h1>Sala {roomId}</h1>;
+  }
+
+  function renderConNavegacion() {
+    return render(
+      <AuthProvider>
+        <MemoryRouter initialEntries={['/matches/match-001']}>
+          <nav>
+            <Link to="/matches/match-002">Ir al partido B</Link>
+            <Link to="/fuera">Salir del detalle</Link>
+          </nav>
+          <Routes>
+            <Route path="/matches/:matchId" element={<MatchDetailPage />} />
+            <Route path="/rooms/:roomId" element={<SondaSala />} />
+            <Route path="/fuera" element={<h1>Fuera del detalle</h1>} />
+          </Routes>
+        </MemoryRouter>
+      </AuthProvider>,
+    );
+  }
+
+  async function abrirA() {
+    renderConNavegacion();
+    await responder(URL_A, { match: partido });
+    await screen.findByRole('heading', { level: 1, name: TITULO_A });
+  }
+
+  it('al pasar de A a B muestra la carga y nada de A hasta que llega B', async () => {
+    const user = userEvent.setup();
+    await abrirA();
+
+    await user.click(screen.getByRole('link', { name: 'Ir al partido B' }));
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Detalle del partido');
+    expect(screen.getByRole('status')).toHaveTextContent('Cargando el partido…');
+    expect(screen.queryByText(TITULO_A)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Entrar a la sala' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Marcar como visto' })).not.toBeInTheDocument();
+
+    await responder(URL_B, { match: partidoB });
+
+    expect(await screen.findByRole('heading', { level: 1, name: TITULO_B })).toBeInTheDocument();
+  });
+
+  it('una respuesta tardía del detalle de A no pisa a B', async () => {
+    const user = userEvent.setup();
+    renderConNavegacion();
+    await waitFor(() => expect(pendientes.get(URL_A)).toHaveLength(1));
+
+    await user.click(screen.getByRole('link', { name: 'Ir al partido B' }));
+    await responder(URL_B, { match: partidoB });
+    await screen.findByRole('heading', { level: 1, name: TITULO_B });
+
+    await responder(URL_A, { match: partido });
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(TITULO_B);
+    expect(screen.queryByText(TITULO_A)).not.toBeInTheDocument();
+  });
+
+  it('la respuesta tardía de entrar a la sala de A no navega ni deja B en espera', async () => {
+    const user = userEvent.setup();
+    await abrirA();
+    await user.click(screen.getByRole('button', { name: 'Entrar a la sala' }));
+
+    await user.click(screen.getByRole('link', { name: 'Ir al partido B' }));
+    await responder(URL_B, { match: partidoB });
+
+    const entrarB = await screen.findByRole('button', { name: 'Entrar a la sala' });
+    expect(entrarB).toBeEnabled();
+    expect(entrarB).not.toHaveAttribute('aria-busy', 'true');
+
+    await responder(URL_SALA_A, {
+      room: { id: 'room-a', matchId: 'match-001', createdAt: '2026-09-18T21:00:00.000Z' },
+    });
+
+    expect(screen.queryByRole('heading', { name: /^Sala / })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(TITULO_B);
+  });
+
+  it('el error de sala de A no se muestra en B', async () => {
+    const user = userEvent.setup();
+    await abrirA();
+    await user.click(screen.getByRole('button', { name: 'Entrar a la sala' }));
+    await responder(URL_SALA_A, { error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500);
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('link', { name: 'Ir al partido B' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    await responder(URL_B, { match: partidoB });
+    await screen.findByRole('heading', { level: 1, name: TITULO_B });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('un error vigente al entrar a la sala de B se sigue avisando', async () => {
+    const user = userEvent.setup();
+    await abrirA();
+    await user.click(screen.getByRole('link', { name: 'Ir al partido B' }));
+    await responder(URL_B, { match: partidoB });
+
+    await user.click(await screen.findByRole('button', { name: 'Entrar a la sala' }));
+    await responder(URL_SALA_B, { error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'No pudimos abrir la sala. Intentá de nuevo.',
+    );
+    expect(screen.getByRole('button', { name: 'Entrar a la sala' })).toBeEnabled();
+  });
+
+  it('al desmontar con el detalle y la sala pendientes descarta ambas respuestas', async () => {
+    const user = userEvent.setup();
+    await abrirA();
+    await user.click(screen.getByRole('button', { name: 'Entrar a la sala' }));
+    // Reintento de detalle en curso: no hay forma de dejarlo pendiente desde
+    // la UI con el detalle ya cargado, así que se cubre con B sin responder.
+    await user.click(screen.getByRole('link', { name: 'Ir al partido B' }));
+    await waitFor(() => expect(pendientes.get(URL_B)).toHaveLength(1));
+
+    await user.click(screen.getByRole('link', { name: 'Salir del detalle' }));
+    await responder(URL_B, { match: partidoB });
+    await responder(URL_SALA_A, {
+      room: { id: 'room-a', matchId: 'match-001', createdAt: '2026-09-18T21:00:00.000Z' },
+    });
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Fuera del detalle');
+    expect(screen.queryByRole('heading', { name: /^Sala / })).not.toBeInTheDocument();
   });
 });
