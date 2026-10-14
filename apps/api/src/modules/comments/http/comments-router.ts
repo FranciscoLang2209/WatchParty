@@ -5,6 +5,7 @@ import { requireAuthenticatedUser } from '../../../middleware/require-authentica
 import { createListRoomCommentsHandler } from './list-room-comments-handler.js';
 import { createCreateRoomCommentHandler } from './create-room-comment-handler.js';
 import { createSetRoomCommentReactionHandler } from './set-room-comment-reaction-handler.js';
+import { createGetRoomCommentReactionHandler } from './get-room-comment-reaction-handler.js';
 
 /**
  * Se monta bajo el prefijo `/rooms` en app.ts (mismo criterio que
@@ -24,6 +25,11 @@ export function createCommentsRouter(
   router.get('/:roomId/comments', requireAuthenticatedUser, createListRoomCommentsHandler(store));
   router.post('/:roomId/comments', requireAuthenticatedUser, createCreateRoomCommentHandler(store));
 
+  router.get(
+    '/:roomId/comments/:commentId/reaction',
+    requireAuthenticatedUser,
+    createGetRoomCommentReactionHandler(reactionStore),
+  );
   router.put(
     '/:roomId/comments/:commentId/reaction',
     requireAuthenticatedUser,

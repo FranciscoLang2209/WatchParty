@@ -36,9 +36,13 @@ function mockInvalidToken(): void {
 }
 
 type SetReaction = (input: SetRoomCommentReactionInput) => Promise<RoomCommentReactionState | null>;
+type GetReaction = RoomCommentReactionStore['getReaction'];
 
-function buildStore(setReaction: SetReaction): RoomCommentReactionStore {
-  return { setReaction };
+function buildStore(
+  setReaction: SetReaction,
+  getReaction: GetReaction = async () => null,
+): RoomCommentReactionStore {
+  return { setReaction, getReaction };
 }
 
 function buildTestApp(reactionStore: RoomCommentReactionStore) {
@@ -212,6 +216,170 @@ describe.each(VERBS)('%s /rooms/:roomId/comments/:commentId/reaction', (_label, 
   });
 });
 
+describe('GET /rooms/:roomId/comments/:commentId/reaction', () => {
+  beforeEach(() => {
+    vi.mocked(supabaseAuthClient.auth.getUser).mockReset();
+  });
+
+  it('con token válido responde 200 con { reaction } y consulta con la identidad del token', async () => {
+    mockAuthenticated('user-123');
+    const getReaction = vi.fn<GetReaction>(async () => ({ count: 3, reacted: true }));
+    const app = buildTestApp(buildStore(async () => null, getReaction));
+
+    const response = await request(app).get(URL).set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ reaction: { count: 3, reacted: true } });
+    expect(Object.keys(response.body.reaction).sort()).toEqual(['count', 'reacted']);
+    expect(getReaction).toHaveBeenCalledWith({
+      roomId: ROOM_ID,
+      commentId: COMMENT_ID,
+      userId: 'user-123',
+    });
+  });
+
+  it('sin reacción propia devuelve el conteo persistido con reacted: false', async () => {
+    mockAuthenticated();
+    const app = buildTestApp(
+      buildStore(
+        async () => null,
+        async () => ({ count: 5, reacted: false }),
+      ),
+    );
+
+    const response = await request(app).get(URL).set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ reaction: { count: 5, reacted: false } });
+  });
+
+  it('ignora un userId enviado en la query o en el body', async () => {
+    mockAuthenticated('user-123');
+    const getReaction = vi.fn<GetReaction>(async () => ({ count: 0, reacted: false }));
+    const app = buildTestApp(buildStore(async () => null, getReaction));
+
+    const response = await request(app)
+      .get(`${URL}?userId=otro-usuario`)
+      .set('Authorization', 'Bearer good-token')
+      .send({ userId: 'otro-usuario' });
+
+    expect(response.status).toBe(200);
+    expect(getReaction).toHaveBeenCalledWith({
+      roomId: ROOM_ID,
+      commentId: COMMENT_ID,
+      userId: 'user-123',
+    });
+  });
+
+  it('no invoca setReaction: leer no muta', async () => {
+    mockAuthenticated();
+    const setReaction = vi.fn<SetReaction>();
+    const app = buildTestApp(buildStore(setReaction, async () => ({ count: 1, reacted: true })));
+
+    await request(app).get(URL).set('Authorization', 'Bearer good-token');
+
+    expect(setReaction).not.toHaveBeenCalled();
+  });
+
+  it('sin token responde 401 UNAUTHORIZED y no invoca el store', async () => {
+    const getReaction = vi.fn<GetReaction>();
+    const app = buildTestApp(buildStore(async () => null, getReaction));
+
+    const response = await request(app).get(URL);
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      error: { code: 'UNAUTHORIZED', message: expect.any(String) },
+    });
+    expect(getReaction).not.toHaveBeenCalled();
+  });
+
+  it('con token inválido responde 401 y no invoca el store', async () => {
+    mockInvalidToken();
+    const getReaction = vi.fn<GetReaction>();
+    const app = buildTestApp(buildStore(async () => null, getReaction));
+
+    const response = await request(app).get(URL).set('Authorization', 'Bearer bad-token');
+
+    expect(response.status).toBe(401);
+    expect(response.body.error.code).toBe('UNAUTHORIZED');
+    expect(getReaction).not.toHaveBeenCalled();
+  });
+
+  it('sin token y con ids inválidos responde 401, no 400: la autenticación va primero', async () => {
+    const getReaction = vi.fn<GetReaction>();
+    const app = buildTestApp(buildStore(async () => null, getReaction));
+
+    const response = await request(app).get('/rooms/no-uuid/comments/no-uuid/reaction');
+
+    expect(response.status).toBe(401);
+    expect(getReaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['roomId', `/rooms/no-es-uuid/comments/${COMMENT_ID}/reaction`],
+    ['commentId', `/rooms/${ROOM_ID}/comments/no-es-uuid/reaction`],
+  ])(
+    'con %s inválido responde 400 VALIDATION_ERROR y no invoca el store',
+    async (_field, invalidUrl) => {
+      mockAuthenticated();
+      const getReaction = vi.fn<GetReaction>();
+      const app = buildTestApp(buildStore(async () => null, getReaction));
+
+      const response = await request(app).get(invalidUrl).set('Authorization', 'Bearer good-token');
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({
+        error: { code: 'VALIDATION_ERROR', message: expect.any(String) },
+      });
+      expect(getReaction).not.toHaveBeenCalled();
+    },
+  );
+
+  it('responde 404 NOT_FOUND si el store devuelve null (sala o comentario inexistente, o de otra sala)', async () => {
+    mockAuthenticated();
+    const app = buildTestApp(
+      buildStore(
+        async () => null,
+        async () => null,
+      ),
+    );
+
+    const response = await request(app).get(URL).set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({
+      error: { code: 'NOT_FOUND', message: expect.any(String) },
+    });
+  });
+
+  it('un error de persistencia responde 500 genérico sin filtrar detalles internos', async () => {
+    mockAuthenticated();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const app = buildTestApp(
+      buildStore(
+        async () => null,
+        async () => {
+          throw new RoomCommentPersistenceError('No se pudo contar los Me gusta.', {
+            message: 'detalle interno de postgres',
+          });
+        },
+      ),
+    );
+
+    const response = await request(app).get(URL).set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(500);
+    expect(response.body.error.code).toBe('INTERNAL_ERROR');
+    expect(response.text).not.toContain('detalle interno');
+    expect(response.text).not.toContain('No se pudo contar');
+    // Un fallo nunca se disfraza de "sin reacciones".
+    expect(response.body.reaction).toBeUndefined();
+
+    consoleError.mockRestore();
+  });
+});
+
 describe('reacciones de dos usuarios sobre el mismo comentario', () => {
   beforeEach(() => {
     vi.mocked(supabaseAuthClient.auth.getUser).mockReset();
@@ -224,12 +392,18 @@ describe('reacciones de dos usuarios sobre el mismo comentario', () => {
 
     return {
       reactedUsers,
-      store: buildStore(async ({ userId, reacted }) => {
-        if (reacted) reactedUsers.add(userId);
-        else reactedUsers.delete(userId);
+      store: buildStore(
+        async ({ userId, reacted }) => {
+          if (reacted) reactedUsers.add(userId);
+          else reactedUsers.delete(userId);
 
-        return { count: reactedUsers.size, reacted };
-      }),
+          return { count: reactedUsers.size, reacted };
+        },
+        async ({ userId }) => ({
+          count: reactedUsers.size,
+          reacted: reactedUsers.has(userId),
+        }),
+      ),
     };
   }
 
@@ -270,5 +444,40 @@ describe('reacciones de dos usuarios sobre el mismo comentario', () => {
 
     expect(secondPut.body).toEqual({ reaction: { count: 1, reacted: true } });
     expect(secondDelete.body).toEqual({ reaction: { count: 0, reacted: false } });
+  });
+
+  it('GET: mismo comentario, mismo conteo, pero reacted distinto para cada usuario', async () => {
+    const { store } = buildStatefulStore();
+    const app = buildTestApp(store);
+
+    mockAuthenticated('user-a');
+    await request(app).put(URL).set('Authorization', 'Bearer token-a');
+
+    mockAuthenticated('user-a');
+    const readByA = await request(app).get(URL).set('Authorization', 'Bearer token-a');
+
+    mockAuthenticated('user-b');
+    const readByB = await request(app).get(URL).set('Authorization', 'Bearer token-b');
+
+    expect(readByA.body).toEqual({ reaction: { count: 1, reacted: true } });
+    expect(readByB.body).toEqual({ reaction: { count: 1, reacted: false } });
+  });
+
+  it('GET refleja el estado persistido tras PUT y DELETE (recarga)', async () => {
+    const { store } = buildStatefulStore();
+    const app = buildTestApp(store);
+
+    mockAuthenticated('user-a');
+    await request(app).put(URL).set('Authorization', 'Bearer token-a');
+    mockAuthenticated('user-a');
+    const afterPut = await request(app).get(URL).set('Authorization', 'Bearer token-a');
+
+    mockAuthenticated('user-a');
+    await request(app).delete(URL).set('Authorization', 'Bearer token-a');
+    mockAuthenticated('user-a');
+    const afterDelete = await request(app).get(URL).set('Authorization', 'Bearer token-a');
+
+    expect(afterPut.body).toEqual({ reaction: { count: 1, reacted: true } });
+    expect(afterDelete.body).toEqual({ reaction: { count: 0, reacted: false } });
   });
 });
