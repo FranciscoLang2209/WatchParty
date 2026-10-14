@@ -706,3 +706,56 @@ describe('motivos de omisión: solo códigos conocidos, sin secretos', () => {
     expect(serializeArchive(badCutoff).ok).toBe(false);
   });
 });
+
+describe('arrays con posiciones vacías (huecos)', () => {
+  // `new Array(n)` y `[a, , b]` son arrays válidos para `Array.isArray` pero con
+  // posiciones sin valor: `forEach` las omite y `map` las conserva.
+  const withHoleInTheMiddle = () => {
+    const rows: unknown[] = [row({ kpi_id: 'health_up', value: 1 })];
+
+    rows.length = 3; // posición 1 vacía
+    rows[2] = row({ kpi_id: 'auth_guard_up', value: 1 });
+
+    return rows;
+  };
+
+  it('un array de una posición vacía no es un lote válido', () => {
+    const result = validateMeasurementBatch(new Array(1));
+
+    expect(result.ok).toBe(false);
+    expect(result).not.toHaveProperty('rows');
+    expect(!result.ok && result.issues).toEqual([{ row: 0, code: 'not-an-object' }]);
+  });
+
+  it('un hueco entre filas válidas invalida todo el lote y se informa en su posición', () => {
+    const result = validateMeasurementBatch(withHoleInTheMiddle());
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.issues).toEqual([{ row: 1, code: 'not-an-object' }]);
+  });
+
+  it('un hueco al final también se rechaza', () => {
+    const rows: unknown[] = [row({ kpi_id: 'health_up', value: 1 })];
+
+    rows.length = 2;
+
+    expect(validateMeasurementBatch(rows).ok).toBe(false);
+  });
+
+  it('serializeBatchPayload rechaza el lote y no genera un JSON con null', () => {
+    for (const rows of [new Array(1), withHoleInTheMiddle()]) {
+      const result = serializeBatchPayload(rows);
+
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty('json');
+    }
+  });
+
+  it('serializeArchive no lanza: rechaza el lote con huecos', () => {
+    const batch = built(buildMeasurementBatch(input()));
+    const sparse = { ...batch, rows: new Array(1) } as unknown as ReportBatch;
+
+    expect(() => serializeArchive(sparse)).not.toThrow();
+    expect(serializeArchive(sparse).ok).toBe(false);
+  });
+});

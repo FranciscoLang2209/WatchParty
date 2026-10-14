@@ -174,10 +174,13 @@ export function validateMeasurementBatch(input: unknown): ValidationResult {
   const envs = new Set<unknown>();
   const dates = new Set<unknown>();
 
-  input.forEach((candidate: unknown, row) => {
+  // `entries()` recorre TODAS las posiciones: una vacía (`new Array(1)`) llega
+  // como `undefined` y se rechaza. `forEach` la omitiría y el `map` de más abajo
+  // la conservaría, y saldría como `null` en el JSON.
+  for (const [row, candidate] of input.entries()) {
     if (!isPlainObject(candidate)) {
       issues.push({ row, code: 'not-an-object' });
-      return;
+      continue;
     }
 
     for (const key of Object.keys(candidate)) {
@@ -232,7 +235,7 @@ export function validateMeasurementBatch(input: unknown): ValidationResult {
     runIds.add(runId);
     envs.add(env);
     dates.add(date);
-  });
+  }
 
   if (runIds.size > 1) issues.push({ row: null, code: 'run-id-mismatch' });
   if (envs.size > 1) issues.push({ row: null, code: 'env-mismatch' });
