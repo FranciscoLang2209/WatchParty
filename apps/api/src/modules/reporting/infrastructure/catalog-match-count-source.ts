@@ -156,6 +156,13 @@ export function createPgClient(config: CatalogSourceConfig): CatalogSqlClient {
     query_timeout: TIMEOUT_MS,
   });
 
+  // Una conexión perdida (caída de red, reinicio del pooler) además de rechazar
+  // la promesa en curso emite `error` en el cliente; sin listener, Node lo trata
+  // como excepción no capturada y termina todo el proceso. El fallo ya se propaga
+  // por la promesa de `connect`/`query`, que es lo que clasifica `classify`. Acá
+  // no se registra nada: el mensaje del driver puede traer host o usuario.
+  client.on('error', () => {});
+
   return {
     connect: () => client.connect(),
     query: (text, values) => client.query(text, values),

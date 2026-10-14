@@ -1,3 +1,4 @@
+import net from 'node:net';
 import pg from 'pg';
 import { describe, it, expect, vi } from 'vitest';
 import {
@@ -390,37 +391,157 @@ describe('readCatalogSourceConfig', () => {
   });
 });
 
+/**
+ * Reemplaza `pg.Client` por una función que arma un cliente REAL (sin conectar)
+ * y guarda la configuración y la instancia. `override` permite apuntarlo a otro
+ * destino. Siempre hay que llamar a `restore`.
+ */
+function spyOnPgClient(override?: (config: pg.ClientConfig) => pg.ClientConfig) {
+  const RealClient = pg.Client;
+  const configs: pg.ClientConfig[] = [];
+  const clients: pg.Client[] = [];
+
+  const spy = vi.spyOn(pg, 'Client').mockImplementation(function (config: pg.ClientConfig) {
+    configs.push(config);
+
+    const client = new RealClient(override ? override(config) : config);
+
+    clients.push(client);
+
+    return client;
+  } as never);
+
+  return { configs, clients, restore: () => spy.mockRestore() };
+}
+
 describe('createPgClient', () => {
   it('exige TLS con verificación del servidor y no conecta al crearse', () => {
     const config = readCatalogSourceConfig({ ...VALID_ENV, REPORTER_DATABASE_CA_CERT: CA_PEM });
-    const created = vi.spyOn(pg, 'Client');
+    const spied = spyOnPgClient();
 
-    const client = createPgClient(config);
+    try {
+      const client = createPgClient(config);
 
-    expect(created).toHaveBeenCalledTimes(1);
-    expect(created.mock.calls[0]![0]).toMatchObject({
-      host: 'db.example.test',
-      port: 6543,
-      user: 'watchparty_reporter.abcdefgh',
-      database: 'postgres',
-      ssl: { rejectUnauthorized: true, ca: CA_PEM },
-    });
-    expect(client).toEqual({
-      connect: expect.any(Function),
-      query: expect.any(Function),
-      end: expect.any(Function),
-    });
-
-    created.mockRestore();
+      expect(spied.configs).toHaveLength(1);
+      expect(spied.configs[0]).toMatchObject({
+        host: 'db.example.test',
+        port: 6543,
+        user: 'watchparty_reporter.abcdefgh',
+        database: 'postgres',
+        ssl: { rejectUnauthorized: true, ca: CA_PEM },
+      });
+      expect(client).toEqual({
+        connect: expect.any(Function),
+        query: expect.any(Function),
+        end: expect.any(Function),
+      });
+    } finally {
+      spied.restore();
+    }
   });
 
   it('sin CA propia verifica igual contra el almacén de confianza del sistema', () => {
-    const created = vi.spyOn(pg, 'Client');
+    const spied = spyOnPgClient();
 
-    createPgClient(readCatalogSourceConfig(VALID_ENV));
+    try {
+      createPgClient(readCatalogSourceConfig(VALID_ENV));
 
-    expect(created.mock.calls[0]![0]).toMatchObject({ ssl: { rejectUnauthorized: true } });
+      expect(spied.configs[0]).toMatchObject({ ssl: { rejectUnauthorized: true } });
+    } finally {
+      spied.restore();
+    }
+  });
+});
 
-    created.mockRestore();
+// Desconexión con el driver `pg` real. Servidor mínimo del protocolo de Postgres
+// que completa el arranque y corta la conexión cuando llega la consulta, como lo
+// haría una caída de red o el reinicio de un pooler. La conexión es local y sin
+// TLS solo en este test: el TLS verificado ya lo prueba `createPgClient` arriba.
+describe('createPgClient: desconexión con el driver real', () => {
+  const AUTHENTICATION_OK_AND_READY = Buffer.from([
+    0x52,
+    0,
+    0,
+    0,
+    8,
+    0,
+    0,
+    0,
+    0, // AuthenticationOk
+    0x5a,
+    0,
+    0,
+    0,
+    5,
+    0x49, // ReadyForQuery
+  ]);
+
+  async function startServerThatDropsOnQuery() {
+    const server = net.createServer((socket) => {
+      let started = false;
+
+      socket.on('error', () => {});
+      socket.on('data', () => {
+        if (!started) {
+          started = true;
+          socket.write(AUTHENTICATION_OK_AND_READY);
+          return;
+        }
+
+        socket.destroy();
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+    return {
+      port: (server.address() as net.AddressInfo).port,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  const toLocalServer = (port: number) => (config: pg.ClientConfig) => ({
+    ...config,
+    host: '127.0.0.1',
+    port,
+    ssl: false,
+  });
+
+  it('una conexión que se corta durante la consulta se omite con motivo y no tira el proceso', async () => {
+    const server = await startServerThatDropsOnQuery();
+    const spied = spyOnPgClient(toLocalServer(server.port));
+
+    try {
+      const error = await failureOf(
+        readCatalogMatchCount(CUTOFF, { env: VALID_ENV, now: () => NOW }),
+      );
+
+      // El fallo sigue propagándose por la promesa, con un motivo controlado.
+      expect(error.reason).toBe('query-failed');
+      expect(spied.clients).toHaveLength(1);
+      // El driver emitió su evento `error`: sin listener habría terminado el proceso.
+      expect(spied.clients[0]!.listenerCount('error')).toBeGreaterThan(0);
+    } finally {
+      spied.restore();
+      await server.close();
+    }
+  });
+
+  it('registra el listener de error al crear el cliente, antes de conectar', () => {
+    const spied = spyOnPgClient();
+
+    try {
+      createPgClient(readCatalogSourceConfig(VALID_ENV));
+
+      const client = spied.clients[0]!;
+
+      expect(client.listenerCount('error')).toBeGreaterThan(0);
+      // Un evento `error` suelto (conexión ociosa que se pierde) ya no tira el proceso.
+      expect(() =>
+        client.emit('error', new Error('Connection terminated unexpectedly')),
+      ).not.toThrow();
+    } finally {
+      spied.restore();
+    }
   });
 });
