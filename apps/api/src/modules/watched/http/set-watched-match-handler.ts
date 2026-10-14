@@ -1,10 +1,7 @@
 import type { RequestHandler } from 'express';
 import type { WatchedMatchStore } from '../domain/watched-match-store.js';
 import { NotFoundError, ValidationError } from '../../../errors/http-error.js';
-
-// Mismo patrón que UUID_PATTERN en modules/comments/domain/room-comment-store.ts.
-// Se define acá para no acoplar `watched` al dominio de otro módulo.
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { UUID_PATTERN } from './match-id-pattern.js';
 
 /**
  * Handler compartido por `PUT` (marcar, `watched: true`) y `DELETE` (deshacer,

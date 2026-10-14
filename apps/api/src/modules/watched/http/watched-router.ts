@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import type { WatchedMatchStore } from '../domain/watched-match-store.js';
 import { requireAuthenticatedUser } from '../../../middleware/require-authenticated-user.js';
+import { createGetWatchedMatchHandler } from './get-watched-match-handler.js';
 import { createSetWatchedMatchHandler } from './set-watched-match-handler.js';
 
 /**
  * Se monta bajo el prefijo `/matches` en app.ts, así que las rutas acá son
- * relativas: `PUT/DELETE /matches/:matchId/watched` (WAT-178).
+ * relativas: `GET /matches/:matchId/watched` (leer, WAT-197) y
+ * `PUT/DELETE /matches/:matchId/watched` (marcar/deshacer, WAT-178).
  *
  * `watched` va en singular: es el estado de visto PROPIO del usuario
  * autenticado sobre ese partido, no una colección.
@@ -13,6 +15,7 @@ import { createSetWatchedMatchHandler } from './set-watched-match-handler.js';
 export function createWatchedRouter(store: WatchedMatchStore): Router {
   const router = Router();
 
+  router.get('/:matchId/watched', requireAuthenticatedUser, createGetWatchedMatchHandler(store));
   router.put(
     '/:matchId/watched',
     requireAuthenticatedUser,
