@@ -1,7 +1,8 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Session } from '@supabase/supabase-js';
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 
 const { authMock } = vi.hoisted(() => ({
   authMock: {
@@ -109,10 +110,92 @@ describe('AppRoutes', () => {
     expect(await screen.findByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
   });
 
-  it('redirige Home a /login sin sesión', async () => {
+  it('muestra la landing en / sin sesión, sin redirigir a /login', async () => {
     renderAt('/');
 
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Mirá el partido con tu tribuna' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Entrá a la tribuna' })).not.toBeInTheDocument();
+    // La landing no monta el layout privado.
+    expect(
+      screen.queryByRole('navigation', { name: 'Navegación principal' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('el CTA de registro de la landing lleva a /register', async () => {
+    const user = userEvent.setup();
+    renderAt('/');
+
+    await user.click(
+      (await screen.findAllByRole('link', { name: 'Crear cuenta' }))[0] as HTMLElement,
+    );
+    expect(await screen.findByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
+  });
+
+  it('el CTA de ingreso de la landing lleva a /login', async () => {
+    const user = userEvent.setup();
+    renderAt('/');
+
+    await user.click(await screen.findByRole('link', { name: 'Ya tengo cuenta' }));
     expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
+  });
+
+  it('las rutas desconocidas sin sesión terminan en la landing', async () => {
+    renderAt('/no-existe');
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Mirá el partido con tu tribuna' }),
+    ).toBeInTheDocument();
+  });
+
+  it('mientras se restaura la sesión en / no muestra la landing ni redirige', async () => {
+    let resolveSession: (value: {
+      data: { session: Session | null };
+      error: null;
+    }) => void = () => {};
+    authMock.getSession.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSession = resolve;
+      }),
+    );
+
+    renderAt('/');
+
+    expect(screen.getByRole('status')).toHaveTextContent('Cargando sesión…');
+    expect(
+      screen.queryByRole('heading', { name: 'Mirá el partido con tu tribuna' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Entrá a la tribuna' })).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveSession({ data: { session }, error: null });
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Mirá el partido con tu tribuna' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('al cerrar sesión en / pasa de Home a la landing', async () => {
+    let emit: (event: AuthChangeEvent, next: Session | null) => void = () => {};
+    authMock.onAuthStateChange.mockImplementation((callback) => {
+      emit = callback;
+      return { data: { subscription: { unsubscribe: vi.fn() } } };
+    });
+    authMock.getSession.mockResolvedValue({ data: { session }, error: null });
+
+    renderAt('/');
+    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
+
+    act(() => {
+      emit('SIGNED_OUT', null);
+    });
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Mirá el partido con tu tribuna' }),
+    ).toBeInTheDocument();
   });
 
   it('redirige /profile a /login sin sesión', async () => {

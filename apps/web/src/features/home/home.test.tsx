@@ -165,10 +165,12 @@ describe('Sesión y encabezado de la Home', () => {
     expect(headings[0]).toHaveClass('sr-only');
   });
 
-  it('redirige a /login a una persona sin sesión', async () => {
+  it('muestra la landing a una persona sin sesión', async () => {
     renderAt('/');
 
-    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Mirá el partido con tu tribuna' }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Inicio' })).not.toBeInTheDocument();
   });
 
