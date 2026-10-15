@@ -616,7 +616,9 @@ describe('Sala: encabezado del partido', () => {
           ? jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)
           : esComentarios(input)
             ? jsonResponse({ comments: [] })
-            : jsonResponse({ room: sala }),
+            : esReaccion(input)
+              ? jsonResponse({ reaction: { count: 0, reacted: false } })
+              : jsonResponse({ room: sala }),
       ),
     );
   }

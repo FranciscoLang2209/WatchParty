@@ -133,7 +133,7 @@ export function CommentReaction({
   if (lectura.status === 'error') {
     return (
       <div className="flex flex-wrap items-center gap-2">
-        <p className="text-xs text-destructive">
+        <p role="alert" className="text-xs text-destructive">
           {lectura.expired ? MENSAJE_SESION : MENSAJE_LECTURA}
         </p>
 

@@ -123,7 +123,8 @@ describe('CommentReaction: lectura', () => {
 
     const { user } = renderReaction();
 
-    expect(await screen.findByText(/No pudimos cargar las reacciones/)).toBeInTheDocument();
+    // El fallo se anuncia a lectores de pantalla, no solo se muestra.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/No pudimos cargar las reacciones/);
     expect(screen.queryByText(/me gusta/i)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Reintentar' }));
@@ -137,6 +138,8 @@ describe('CommentReaction: lectura', () => {
     getReactionMock.mockRejectedValue(new ReactionsApiError('unauthorized', 'vencida'));
 
     const { user, onSessionExpired } = renderReaction();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('La sesión venció.');
 
     await user.click(await screen.findByRole('button', { name: 'Iniciar sesión nuevamente' }));
 
