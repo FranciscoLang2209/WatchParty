@@ -1,0 +1,81 @@
+name: Reporter collect
+
+# Colección diaria de los cinco KPIs del reporter externo (ADR-05 rev. 2.0).
+# SOLO recolecta y conserva evidencias: NO publica en la plataforma central. La
+# publicación sigue deshabilitada hasta que se verifiquen las credenciales
+# centrales (WAT-194) y se active (WAT-209); por eso este workflow no recibe
+# ninguna clave central. Ver docs/runbooks/reporter-collector.md.
+on:
+  schedule:
+    # 04:00 UTC = 01:00 Argentina (UTC-3). GitHub no garantiza puntualidad exacta:
+    # una corrida programada puede demorarse en picos de carga.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Ambiente del reporter
+        type: choice
+        options:
+          - dev
+          - prod
+        default: dev
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    # La corrida manual siempre está disponible. La programada queda inerte hasta
+    # que exista la variable de repositorio REPORTER_SCHEDULE_ENABLED con valor
+    # "true" (cuando estén operativas las fuentes G1/G2). Un job omitido no es un
+    # error enmascarado: no ejecuta nada.
+    if: ${{ github.event_name != 'schedule' || vars.REPORTER_SCHEDULE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Ambientes aislados: cada uno usa su propio GitHub Environment (con sus
+    # propios secretos) y la corrida programada es siempre de producción.
+    environment: reporter-${{ github.event_name == 'schedule' && 'prod' || inputs.environment }}
+    # Una corrida activa por ambiente. `cancel-in-progress: false` encola la nueva
+    # en vez de cancelar una colección en curso.
+    concurrency:
+      group: reporter-collect-${{ github.event_name == 'schedule' && 'prod' || inputs.environment }}
+      cancel-in-progress: false
+    env:
+      REPORTER_ENV: ${{ github.event_name == 'schedule' && 'prod' || inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Sin `continue-on-error` ni `|| true`: si falta cualquier fuente el comando
+      # sale con código 1 y la corrida queda en rojo (fallo visible). Los archivos
+      # se escriben igual, y el paso siguiente los conserva aunque este falle.
+      - name: Collect KPIs
+        run: pnpm --filter @watchparty/api reporter:collect
+        env:
+          REPORTER_OUTPUT_DIR: ${{ github.workspace }}/reporter-output
+          REPORTER_API_BASE_URL: ${{ vars.REPORTER_API_BASE_URL }}
+          REPORTER_DATABASE_URL: ${{ secrets.REPORTER_DATABASE_URL }}
+          REPORTER_DATABASE_CA_CERT: ${{ secrets.REPORTER_DATABASE_CA_CERT }}
+
+      # Solo el directorio de salida: JSON del lote, corte T y resultado con
+      # motivos. Esos archivos contienen códigos fijos y números, nunca claves.
+      - name: Upload artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporter-collection-${{ env.REPORTER_ENV }}-${{ github.run_id }}
+          path: reporter-output/
+          if-no-files-found: warn
+          retention-days: 30

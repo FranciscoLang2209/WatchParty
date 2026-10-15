@@ -8,12 +8,32 @@ El colector extrae, sondea, calcula y valida los cinco KPIs técnicos y de salud
 pnpm --filter @watchparty/api reporter:collect
 ```
 
-Imprime el artefacto como JSON por la salida estándar. Un KPI omitido no es un fallo del comando: queda en `omissions` con su motivo. El comando solo sale con código 1 ante un error inesperado.
+Arma el lote con el catálogo del reporter (WAT-200) y deja tres archivos en `REPORTER_OUTPUT_DIR` (por defecto `reporter-output`, ignorado por git):
+
+| Archivo        | Contenido                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| `payload.json` | El JSON del lote que se enviaría: solo las filas `kpi_id / date / env / value / run_id`.  |
+| `archive.json` | El corte T, la fecha local, el lote y los motivos de omisión (`serializeArchive`).        |
+| `result.json`  | El resultado de la corrida y los motivos, siempre presente aunque no se pueda armar lote. |
+
+`payload.json` y `archive.json` solo existen si hay al menos un KPI con valor. Los tres contienen únicamente códigos fijos, números, el `run_id` y el ambiente: nunca claves, URLs ni texto de error.
+
+Códigos de salida:
+
+| Código | Significado                                                                                                                 |
+| ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `0`    | Los cinco KPIs tienen valor.                                                                                                |
+| `1`    | Falta alguna fuente o no se pudo armar el lote (fallo visible). Los archivos se escriben igual, con los motivos de omisión. |
+| `2`    | `REPORTER_ENV` no es `dev` ni `prod`. No se colecta nada.                                                                   |
+
+Este comando no publica: `published` es siempre `false`.
 
 ## Configuración por ambiente
 
 | Variable                    | Obligatoria                    | Para qué                                                                     |
 | --------------------------- | ------------------------------ | ---------------------------------------------------------------------------- |
+| `REPORTER_ENV`              | Sí                             | Ambiente de la corrida: `dev` o `prod`. Es el `env` de las filas.            |
+| `REPORTER_OUTPUT_DIR`       | No                             | Directorio de salida de los archivos (por defecto `reporter-output`).        |
 | `REPORTER_API_BASE_URL`     | Sí, para los tres KPIs HTTP    | Base de la API a sondear en ese ambiente (sin ruta, sin query ni fragmento). |
 | `REPORTER_DATABASE_URL`     | Sí, para `catalog_match_count` | Fuente SQL de solo lectura, ver `reporter-sql-source.md`.                    |
 | `REPORTER_DATABASE_CA_CERT` | No                             | CA del servidor SQL, ver `reporter-sql-source.md`.                           |
@@ -52,6 +72,19 @@ Los motivos son fijos y sanitizados: nunca incluyen URLs, hosts, credenciales ni
 
 El artefacto (`results` y `omissions`) tiene la forma que espera `buildMeasurementBatch` (WAT-200), que arma las filas `kpi_id / date / env / value / run_id`, omite las fuentes inválidas y marca el fallo visible. Todos los motivos de omisión del colector están en `OMISSION_REASONS`. El colector no arma ni envía el lote: eso es de la publicación.
 
+## Workflow diario y disparo manual (WAT-202)
+
+`.github/workflows/reporter-collect.yml` ejecuta este comando y conserva los archivos como artifact. **Solo colecta: no publica en la plataforma central y no recibe ninguna credencial central** (la publicación sigue pendiente de WAT-194 y WAT-209).
+
+- **Disparo:** todos los días a las **04:00 UTC (01:00 de Argentina)** y manualmente (Actions → Reporter collect → Run workflow, eligiendo `dev` o `prod`). GitHub no garantiza puntualidad exacta del schedule.
+- **Programado = prod, e inerte hasta activarlo:** la corrida programada es siempre de producción y no corre hasta que exista la variable de repositorio `REPORTER_SCHEDULE_ENABLED` con valor `true`, cuando las fuentes G1/G2 estén operativas. La corrida manual está siempre disponible.
+- **Ambientes aislados:** cada corrida usa el GitHub Environment `reporter-dev` o `reporter-prod` (nombres propuestos, su existencia no está confirmada) con sus propios secretos y variables. Hay **una sola corrida activa por ambiente**: una nueva espera a la que está en curso.
+- **Configuración por Environment:** el secret `REPORTER_DATABASE_URL` (y opcional `REPORTER_DATABASE_CA_CERT`) y la variable `REPORTER_API_BASE_URL`. La credencial de producción no se copia a dev.
+- **Fallo visible:** si falta cualquier fuente el comando sale con 1 y la corrida queda en rojo, sin `continue-on-error` ni `|| true`.
+- **Artifacts:** `reporter-collection-<ambiente>-<run id>`, con los tres archivos de `reporter-output/`, se suben **siempre** (también si la colección falla) y se conservan 30 días. No contienen secretos.
+
 ## Estado de la validación
 
 Las pruebas usan fuentes simuladas. En una corrida real contra la API publicada los dos sondeos HTTP respondieron como se espera (`/health` 200 y `/matches` sin token 401). La corrida real con las cinco fuentes, incluido `catalog_match_count`, queda pendiente de la credencial SQL de WAT-192 (acceso A1): hasta entonces no se declaran las cinco fuentes operativas.
+
+El workflow de Actions todavía no se ejecutó: la corrida manual real, con G1/G2 operativos y los secretos del Environment cargados (WAT-193, WAT-192), es el requisito para acreditar la colección. Hasta entonces este workflow no declara reporting completo ni publicación central.
