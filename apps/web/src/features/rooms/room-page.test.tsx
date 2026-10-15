@@ -62,6 +62,10 @@ function esComentarios(input: unknown): boolean {
   return new URL(String(input)).pathname.endsWith('/comments');
 }
 
+function esReaccion(input: unknown): boolean {
+  return new URL(String(input)).pathname.endsWith('/reaction');
+}
+
 function esPartido(input: unknown): boolean {
   return String(input).startsWith(`${API_BASE}/matches/`);
 }
@@ -78,7 +82,9 @@ function responderCon(body: unknown, status = 200) {
         ? jsonResponse({ match: partido })
         : esComentarios(input)
           ? jsonResponse({ comments: [] })
-          : jsonResponse(body, status),
+          : esReaccion(input)
+            ? jsonResponse({ reaction: { count: 0, reacted: false } })
+            : jsonResponse(body, status),
     ),
   );
 }
@@ -610,7 +616,9 @@ describe('Sala: encabezado del partido', () => {
           ? jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)
           : esComentarios(input)
             ? jsonResponse({ comments: [] })
-            : jsonResponse({ room: sala }),
+            : esReaccion(input)
+              ? jsonResponse({ reaction: { count: 0, reacted: false } })
+              : jsonResponse({ room: sala }),
       ),
     );
   }
