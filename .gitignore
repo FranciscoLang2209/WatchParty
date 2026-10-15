@@ -8,3 +8,4 @@ coverage
 supabase/.temp
 .idea
 .DS_Store
+reporter-output
