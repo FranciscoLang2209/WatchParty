@@ -683,3 +683,38 @@ describe('CommentList: recarga por reconexión', () => {
     });
   });
 });
+
+describe('CommentList: alineación de comentario, fecha y acciones', () => {
+  const renderActions = (comment: RoomComment) => (
+    <button type="button">Acción de {comment.body}</button>
+  );
+
+  it('la fecha y las acciones comparten una fila, debajo del comentario', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1] }));
+
+    renderList({ renderActions });
+
+    const accion = await screen.findByRole('button', { name: 'Acción de Qué golazo' });
+    const fila = accion.parentElement!;
+    const tarjeta = fila.parentElement!;
+
+    // Misma fila: la fecha a un lado y la acción al otro, centradas entre sí.
+    expect(fila).toContainElement(screen.getByText(/^\d{1,2}\/\d{1,2},/));
+    expect(fila.className).toMatch(/\bflex\b/);
+    expect(fila.className).toMatch(/\bjustify-between\b/);
+    expect(fila.className).toMatch(/\bitems-center\b/);
+    // Si algo ocupa una fila entera (un aviso), baja solo en vez de desbordar.
+    expect(fila.className).toMatch(/\bflex-wrap\b/);
+    // El comentario va primero y la fila después.
+    expect(tarjeta.firstElementChild).toHaveTextContent('Qué golazo');
+    expect(tarjeta.lastElementChild).toBe(fila);
+  });
+
+  it('sin acciones la fecha sigue mostrándose bajo el comentario', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1] }));
+
+    renderList();
+
+    expect(await screen.findByText(/^\d{1,2}\/\d{1,2},/)).toBeInTheDocument();
+  });
+});

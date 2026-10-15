@@ -24,6 +24,7 @@ vi.mock('@/features/comments/realtime', () => ({ subscribeToRoomComments: subscr
 
 const { AuthProvider } = await import('@/auth/AuthProvider');
 const { AppRoutes } = await import('@/app/router');
+const { REACTION_REFRESH_MS } = await import('@/features/reactions/CommentReaction');
 
 const session = { access_token: 'token-123', user: { id: 'user-1', email: 'a@b.com' } } as Session;
 
@@ -871,5 +872,102 @@ describe('Sala: estados alternativos', () => {
     expect(p.queryByRole('textbox')).not.toBeInTheDocument();
     expect(llamadasA(`${API_BASE}/rooms/desconocida/comments`)).toHaveLength(0);
     expect(subscribeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('Sala: reacciones de los comentarios', () => {
+  const comentario = {
+    id: 'comentario-1',
+    roomId: 'room-123',
+    body: 'Qué golazo',
+    createdAt: '2026-09-24T21:00:00.000Z',
+  };
+
+  let reaccion = { count: 2, reacted: false };
+
+  /** La sala con un comentario cuya reacción es la que tenga `reaccion` en ese momento. */
+  function responderConUnComentario() {
+    fetchSpy.mockImplementation((input: unknown) =>
+      Promise.resolve(
+        esPartido(input)
+          ? jsonResponse({ match: partido })
+          : esComentarios(input)
+            ? jsonResponse({ comments: [comentario] })
+            : esReaccion(input)
+              ? jsonResponse({ reaction: reaccion })
+              : jsonResponse({ room: sala }),
+      ),
+    );
+  }
+
+  beforeEach(() => {
+    reaccion = { count: 2, reacted: false };
+    responderConUnComentario();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('ya no avisa que hace falta recargar para ver las reacciones de otras personas', async () => {
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    await p.findByRole('button', { name: 'Me gusta' });
+
+    expect(p.queryByText(/recargar/i)).not.toBeInTheDocument();
+  });
+
+  it('cada comentario muestra su reacción como ícono con contador', async () => {
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    const boton = await p.findByRole('button', { name: 'Me gusta' });
+
+    expect(boton).toHaveTextContent(/^2$/);
+    expect(boton.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(boton).toHaveAccessibleDescription('2 reacciones');
+  });
+
+  it('la reacción de otra persona aparece sin recargar la página', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    expect(await p.findByRole('button', { name: 'Me gusta' })).toHaveTextContent(/^2$/);
+
+    // Otra persona reacciona desde su sesión.
+    reaccion = { count: 3, reacted: false };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REACTION_REFRESH_MS);
+    });
+
+    expect(p.getByRole('button', { name: 'Me gusta' })).toHaveTextContent(/^3$/);
+    expect(p.getByText(comentario.body)).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it('al reaccionar, el ícono y el contador cambian sin recargar', async () => {
+    const user = userEvent.setup();
+
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    const boton = await p.findByRole('button', { name: 'Me gusta' });
+
+    fetchSpy.mockImplementation((input: unknown, init?: RequestInit) =>
+      Promise.resolve(
+        esReaccion(input)
+          ? jsonResponse({ reaction: { count: 3, reacted: init?.method === 'PUT' } })
+          : jsonResponse({ comments: [comentario] }),
+      ),
+    );
+    await user.click(boton);
+
+    await waitFor(() => expect(boton).toHaveAccessibleName('Quitar me gusta'));
+    expect(boton).toHaveTextContent(/^3$/);
+    expect(boton.querySelector('svg')).toHaveClass('fill-current');
   });
 });

@@ -188,10 +188,6 @@ function Sala({ roomId }: { roomId: string }) {
               onCommentCreated={agregarComentario}
             />
 
-            <p className="text-xs text-muted-foreground">
-              Las reacciones de otras personas se actualizan al recargar la página.
-            </p>
-
             <CommentList
               roomId={roomId}
               accessToken={accessToken}
