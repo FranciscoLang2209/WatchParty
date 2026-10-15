@@ -20,7 +20,6 @@
     "verify:watched-matches": "tsx --env-file-if-exists=.env scripts/verify-watched-matches-schema.ts",
     "matches:sync": "tsx --env-file-if-exists=.env src/scripts/sync-matches.ts",
     "reporter:collect": "tsx --env-file-if-exists=.env src/scripts/collect-kpis.ts",
-    "reporter:publish": "tsx --env-file-if-exists=.env src/scripts/publish-kpis.ts",
     "test": "vitest run"
   },
   "dependencies": {

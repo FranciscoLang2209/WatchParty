@@ -74,17 +74,17 @@ El artefacto (`results` y `omissions`) tiene la forma que espera `buildMeasureme
 
 ## Workflow diario y disparo manual (WAT-202)
 
-`.github/workflows/reporter-collect.yml` ejecuta este comando y conserva los archivos como artifact. Después de una colecta exitosa, ejecuta `reporter:publish` únicamente si la variable del Environment `REPORTER_PUBLISH_ENABLED` vale `true`. Las credenciales centrales se entregan solo al paso de publicación. Ver [reporter-publisher.md](reporter-publisher.md).
+`.github/workflows/reporter-collect.yml` ejecuta este comando y conserva los archivos como artifact. **Solo colecta: no publica en la plataforma central y no recibe ninguna credencial central** (la publicación sigue pendiente de WAT-194 y WAT-209).
 
 - **Disparo:** todos los días a las **04:00 UTC (01:00 de Argentina)** y manualmente (Actions → Reporter collect → Run workflow, eligiendo `dev` o `prod`). GitHub no garantiza puntualidad exacta del schedule.
 - **Programado = prod, e inerte hasta activarlo:** la corrida programada es siempre de producción y no corre hasta que exista la variable de repositorio `REPORTER_SCHEDULE_ENABLED` con valor `true`, cuando las fuentes G1/G2 estén operativas. La corrida manual está siempre disponible.
 - **Ambientes aislados:** cada corrida usa el GitHub Environment `reporter-dev` o `reporter-prod` (nombres propuestos, su existencia no está confirmada) con sus propios secretos y variables. Hay **una sola corrida activa por ambiente**: una nueva espera a la que está en curso.
 - **Configuración por Environment:** el secret `REPORTER_DATABASE_URL` (y opcional `REPORTER_DATABASE_CA_CERT`) y la variable `REPORTER_API_BASE_URL`. La credencial de producción no se copia a dev.
 - **Fallo visible:** si falta cualquier fuente el comando sale con 1 y la corrida queda en rojo, sin `continue-on-error` ni `|| true`.
-- **Artifacts:** `reporter-collection-<ambiente>-<run id>`, con los archivos de `reporter-output/` y `publication.json` cuando se publica, se suben **siempre** (también si la colección o publicación falla) y se conservan 30 días. No contienen secretos.
+- **Artifacts:** `reporter-collection-<ambiente>-<run id>`, con los tres archivos de `reporter-output/`, se suben **siempre** (también si la colección falla) y se conservan 30 días. No contienen secretos.
 
 ## Estado de la validación
 
 Las pruebas usan fuentes simuladas. En una corrida real contra la API publicada los dos sondeos HTTP respondieron como se espera (`/health` 200 y `/matches` sin token 401). La corrida real con las cinco fuentes, incluido `catalog_match_count`, queda pendiente de la credencial SQL de WAT-192 (acceso A1): hasta entonces no se declaran las cinco fuentes operativas.
 
-El 15/10/2026 se ejecutó correctamente la primera colecta real en `reporter-prod`: [Actions #38752013725](https://github.com/FranciscoLang2209/WatchParty/actions/runs/38752013725), con artifact conservado. Esta corrida usó la versión que solo colectaba y no acredita recepción central. La publicación se acredita por separado mediante `publication.json` con `verified: true`.
+El workflow de Actions todavía no se ejecutó: la corrida manual real, con G1/G2 operativos y los secretos del Environment cargados (WAT-193, WAT-192), es el requisito para acreditar la colección. Hasta entonces este workflow no declara reporting completo ni publicación central.

@@ -156,25 +156,16 @@ describe('workflow reporter-collect: artifacts', () => {
   });
 });
 
-describe('workflow reporter-collect: publicación central controlada', () => {
-  const publishStep = steps.find((step) => step.run?.includes('reporter:publish'));
-
-  it('la colecta no recibe credenciales centrales ni de rol de servicio', () => {
-    expect(JSON.stringify(collectStep?.env)).not.toMatch(/REPORTER_CENTRAL/);
+describe('workflow reporter-collect: sin publicación central', () => {
+  it('no recibe ninguna credencial de la plataforma central ni de rol de servicio', () => {
+    expect(source).not.toMatch(/REPORTER_CENTRAL/);
     expect(source).not.toMatch(/SUPABASE_SERVICE_ROLE_KEY|service_role/i);
+    expect(source).not.toMatch(/PROJECT_KEY|PUBLISHABLE_KEY/);
   });
 
-  it('publica solo tras colecta exitosa y activación explícita del ambiente', () => {
-    expect(publishStep?.if).toBe("${{ vars.REPORTER_PUBLISH_ENABLED == 'true' }}");
-    expect(steps.indexOf(publishStep!)).toBeGreaterThan(steps.indexOf(collectStep!));
-    expect(steps.indexOf(publishStep!)).toBeLessThan(steps.indexOf(uploadStep!));
-    expect(publishStep?.run).toBe('pnpm --filter @watchparty/api reporter:publish');
-    expect(publishStep?.env?.REPORTER_CENTRAL_PROJECT_KEY).toBe(
-      '${{ secrets.REPORTER_CENTRAL_PROJECT_KEY }}',
-    );
-    expect(publishStep?.env?.REPORTER_CENTRAL_URL).toBe('${{ secrets.REPORTER_CENTRAL_URL }}');
-    expect(publishStep?.env?.REPORTER_CENTRAL_PUBLISHABLE_KEY).toBe(
-      '${{ secrets.REPORTER_CENTRAL_PUBLISHABLE_KEY }}',
-    );
+  it('no tiene ningún paso que publique', () => {
+    for (const step of steps) {
+      expect(`${step.name ?? ''} ${step.run ?? ''}`).not.toMatch(/publish|publicar|measurement/i);
+    }
   });
 });
