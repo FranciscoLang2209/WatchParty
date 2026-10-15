@@ -636,4 +636,50 @@ describe('CommentList: recarga por reconexión', () => {
     await screen.findByText(deOtraSala.body);
     expect(textos()).toEqual([deOtraSala.body]);
   });
+  describe('CommentList: acciones por comentario', () => {
+    const renderActions = (comment: RoomComment) => (
+      <button type="button">Acción de {comment.body}</button>
+    );
+
+    it('ofrece las acciones de cada comentario mostrado', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1, COMMENT_2] }));
+
+      renderList({ renderActions });
+
+      expect(
+        await screen.findByRole('button', { name: 'Acción de Qué golazo' }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Acción de Offside clarísimo' }),
+      ).toBeInTheDocument();
+    });
+
+    it('un comentario recibido dos veces no duplica su comentario ni sus acciones', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1, COMMENT_2] }));
+
+      const { rerender } = renderList({ renderActions });
+      await screen.findByText('Qué golazo');
+
+      rerender(
+        <CommentList
+          roomId={ROOM_ID}
+          accessToken={TOKEN}
+          newComments={[COMMENT_1]}
+          renderActions={renderActions}
+        />,
+      );
+
+      expect(screen.getAllByText('Qué golazo')).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: /^Acción de/ })).toHaveLength(2);
+    });
+
+    it('sin renderActions no agrega nada', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ comments: [COMMENT_1] }));
+
+      renderList();
+      await screen.findByText('Qué golazo');
+
+      expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    });
+  });
 });

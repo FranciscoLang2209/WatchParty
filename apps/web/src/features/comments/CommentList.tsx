@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../../components/ui/button';
 import { listComments, listCommentsPage } from './api';
 import { mergeComments } from './merge';
@@ -29,6 +29,12 @@ export interface CommentListProps {
    * acción — reintentar no serviría con un token vencido.
    */
   onSessionExpired?: () => void;
+  /**
+   * Contenido extra bajo cada comentario mostrado (p. ej. reacciones, WAT-208).
+   * Se llama una vez por comentario visible, nunca por los que no se pidieron;
+   * `CommentList` no sabe qué es: no depende de ninguna otra feature.
+   */
+  renderActions?: (comment: RoomComment) => ReactNode;
 }
 
 type Estado =
@@ -90,6 +96,7 @@ export function CommentList({
   newComments = [],
   reloadSignal = 0,
   onSessionExpired,
+  renderActions,
 }: CommentListProps) {
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
@@ -276,6 +283,7 @@ export function CommentList({
           >
             <p className="text-sm break-words whitespace-pre-wrap">{comment.body}</p>
             <p className="mt-1 text-xs text-muted-foreground">{formatFecha(comment.createdAt)}</p>
+            {renderActions ? <div className="mt-2">{renderActions(comment)}</div> : null}
           </li>
         ))}
       </ul>

@@ -9,6 +9,7 @@ import { CommentForm } from '@/features/comments/CommentForm';
 import { CommentList } from '@/features/comments/CommentList';
 import type { RoomComment } from '@/features/comments/types';
 import { subscribeToRoomComments, type RoomCommentsStatus } from '@/features/comments/realtime';
+import { CommentReaction } from '@/features/reactions/CommentReaction';
 
 type Estado =
   | { status: 'loading' }
@@ -53,6 +54,7 @@ export function RoomPage() {
 function Sala({ roomId }: { roomId: string }) {
   const { session, signOut } = useAuth();
   const accessToken = session?.access_token ?? null;
+  const userId = session?.user.id ?? null;
 
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
@@ -186,12 +188,25 @@ function Sala({ roomId }: { roomId: string }) {
               onCommentCreated={agregarComentario}
             />
 
+            <p className="text-xs text-muted-foreground">
+              Las reacciones de otras personas se actualizan al recargar la página.
+            </p>
+
             <CommentList
               roomId={roomId}
               accessToken={accessToken}
               newComments={nuevosComentarios}
               reloadSignal={reconexiones}
               onSessionExpired={() => void signOut()}
+              renderActions={(comment) => (
+                <CommentReaction
+                  key={`${comment.id}:${userId}`}
+                  roomId={roomId}
+                  commentId={comment.id}
+                  accessToken={accessToken}
+                  onSessionExpired={() => void signOut()}
+                />
+              )}
             />
           </div>
         ) : null}
