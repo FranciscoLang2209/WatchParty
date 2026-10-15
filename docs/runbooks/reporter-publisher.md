@@ -98,4 +98,6 @@ Si el POST tuvo éxito y falló la verificación por red, conservar el artifact 
 - En dev: lote con un KPI desconocido rechazado con 409; clave dev enviando `env=prod` rechazada con 401. La consulta antes/después confirmó que ninguna medición se insertó en estas pruebas.
 - Secretos centrales de prod cargados en `reporter-prod`; claves fuera del código y artifacts.
 - Colecta real desde Actions: [#38752013725](https://github.com/FranciscoLang2209/WatchParty/actions/runs/38752013725).
-- La recepción productiva requiere la corrida con publicación habilitada y su `publication.json` verificado; registrar su enlace al completar la activación.
+- Publicación real y recepción verificadas desde Actions: [#38753081458](https://github.com/FranciscoLang2209/WatchParty/actions/runs/38753081458), commit `988d6a2`, fecha local `2026-10-15`, cinco valores y UUID común `835f5df3-2174-4eb5-8829-a390618beec7`. El artifact incluye `publication.json` con `ok: true` y `verified: true`.
+- Reenvío del mismo payload con el comando de publicación: exitoso, sin cambiar cantidad de filas, valores, UUID ni timestamps de recepción.
+- El panel público mostraba «Todavía no hay días evaluables» al comprobar la recepción. El calendario de evaluación lo configura la cátedra; recepción verificada no implica puntaje hasta que exista un día evaluable.
