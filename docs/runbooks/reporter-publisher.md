@@ -70,6 +70,32 @@ El resultado se archiva con `JSON.stringify` y contiene solo códigos fijos, est
 
 `verified` es siempre `false`: un HTTP 2xx **no** confirma la recepción de los valores. Confirmarla consultando las mediciones propias es parte de la activación (WAT-209).
 
-## Estado
+## Publicación y verificación desde Actions (WAT-209)
 
-La publicación productiva permanece **pendiente**: no se activó, no hay credenciales centrales cargadas y este cliente no se ejecutó contra la plataforma real.
+`reporter:collect` conserva su comportamiento de solo lectura. El workflow llama después a:
+
+```sh
+pnpm --filter @watchparty/api reporter:publish
+```
+
+El comando reutiliza `payload.json` y exige un `archive.json` completo, no simulado y del mismo ambiente. Antes del POST confirma por `current_project` que la clave pertenece a WatchParty (equipo 5) y al ambiente esperado. Después consulta las mediciones propias del día y compara los cinco identificadores, valores y `run_id`. Un HTTP exitoso con valores distintos o ausentes falla. Escribe el resultado sanitizado en `publication.json`; no modifica `result.json`, que sigue describiendo solamente la colecta.
+
+Configurar en el GitHub Environment correspondiente:
+
+- Los tres secretos `REPORTER_CENTRAL_URL`, `REPORTER_CENTRAL_PUBLISHABLE_KEY` y `REPORTER_CENTRAL_PROJECT_KEY` de la tabla anterior.
+- La variable `REPORTER_PUBLISH_ENABLED=true` para habilitar el paso. Sin ella el workflow solo colecta.
+- La variable `REPORTER_API_BASE_URL` y los secretos SQL ya documentados para colectar.
+
+El cron requiere además la variable de **repositorio** `REPORTER_SCHEDULE_ENABLED=true`; el horario sigue siendo 04:00 UTC / 01:00 Argentina. `workflow_dispatch` permite probar la rama de integración antes del merge. La publicación programada usa el código de `main`.
+
+El catálogo se registra una vez por ambiente, antes del primer envío, con los cinco registros que devuelve `prepareCatalogRegistration(env)`. El catálogo de dev no habilita prod. Las claves y URLs centrales no reemplazan las de la base propia de WatchParty.
+
+Si el POST tuvo éxito y falló la verificación por red, conservar el artifact y reintentar **el mismo** `payload.json` y `archive.json`. Una nueva colecta genera otro UUID y latencias nuevas: si el primer lote ya existe, se conserva y la comparación del nuevo lote falla. No cambiar ni borrar las mediciones recibidas para forzar un resultado exitoso.
+
+## Comprobaciones operativas — 15/10/2026
+
+- Identidad central verificada: WatchParty, equipo 5, en dev y prod; cinco KPIs registrados en cada catálogo.
+- En dev: lote con un KPI desconocido rechazado con 409; clave dev enviando `env=prod` rechazada con 401. La consulta antes/después confirmó que ninguna medición se insertó en estas pruebas.
+- Secretos centrales de prod cargados en `reporter-prod`; claves fuera del código y artifacts.
+- Colecta real desde Actions: [#38752013725](https://github.com/FranciscoLang2209/WatchParty/actions/runs/38752013725).
+- La recepción productiva requiere la corrida con publicación habilitada y su `publication.json` verificado; registrar su enlace al completar la activación.
