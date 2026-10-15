@@ -30,9 +30,11 @@ export interface CommentListProps {
    */
   onSessionExpired?: () => void;
   /**
-   * Contenido extra bajo cada comentario mostrado (p. ej. reacciones, WAT-208).
-   * Se llama una vez por comentario visible, nunca por los que no se pidieron;
-   * `CommentList` no sabe qué es: no depende de ninguna otra feature.
+   * Contenido extra de cada comentario mostrado (p. ej. reacciones, WAT-208),
+   * en la misma fila que la fecha: cada elemento que devuelva es un hijo de
+   * esa fila, y uno que deba ocupar una línea entera usa `w-full`. Se llama una
+   * vez por comentario visible, nunca por los que no se pidieron; `CommentList`
+   * no sabe qué es: no depende de ninguna otra feature.
    */
   renderActions?: (comment: RoomComment) => ReactNode;
 }
@@ -282,8 +284,15 @@ export function CommentList({
             className="w-full min-w-0 rounded-md border border-border bg-card px-3 py-2"
           >
             <p className="text-sm break-words whitespace-pre-wrap">{comment.body}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{formatFecha(comment.createdAt)}</p>
-            {renderActions ? <div className="mt-2">{renderActions(comment)}</div> : null}
+            {/* Fecha a la izquierda y las acciones (p. ej. la reacción) a la
+                derecha, alineadas en la misma fila. Lo que ocupe una fila
+                entera (un aviso de error) baja solo a la siguiente. */}
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              <p className="min-w-0 text-xs text-muted-foreground">
+                {formatFecha(comment.createdAt)}
+              </p>
+              {renderActions ? renderActions(comment) : null}
+            </div>
           </li>
         ))}
       </ul>
