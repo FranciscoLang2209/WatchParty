@@ -18,7 +18,10 @@ import type { RoomCommentStore } from './modules/comments/domain/room-comment-st
 import { SupabaseRoomCommentStore } from './modules/comments/infrastructure/supabase-room-comment-store.js';
 import type { RoomCommentReactionStore } from './modules/comments/domain/room-comment-reaction-store.js';
 import { SupabaseRoomCommentReactionStore } from './modules/comments/infrastructure/supabase-room-comment-reaction-store.js';
-import { createWatchedRouter } from './modules/watched/http/watched-router.js';
+import {
+  createWatchedHistoryRouter,
+  createWatchedRouter,
+} from './modules/watched/http/watched-router.js';
 import type { WatchedMatchStore } from './modules/watched/domain/watched-match-store.js';
 import { SupabaseWatchedMatchStore } from './modules/watched/infrastructure/supabase-watched-match-store.js';
 
@@ -63,6 +66,7 @@ export function createApp(
   app.use('/matches', createMatchesRouter(matchCatalog));
   app.use('/matches', createWatchedRouter(watchedStore));
   app.use(createProfilesRouter(profileStore));
+  app.use('/me', createWatchedHistoryRouter(watchedStore));
   app.use(createRoomsRouter(roomStore));
   app.use('/rooms', createCommentsRouter(commentStore, reactionStore));
   app.use(notFoundHandler);

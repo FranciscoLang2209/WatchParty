@@ -17,7 +17,11 @@ import { SupabaseProviderQuotaStore } from './supabase-provider-quota-store.js';
 // (20260904222112_sports_data_schema.sql). Hacemos explícito el hint de
 // relación porque `matches` tiene dos FKs a `teams` y PostgREST no puede
 // adivinar cuál embeber en cada alias.
-const MATCH_SELECT_WITH_TEAMS =
+//
+// Exportados junto con `toMatch` para que el historial de vistos (WAT-217)
+// embeba el partido en una sola consulta con el mismo select y el mismo
+// mapeo del catálogo, sin una segunda representación de Match.
+export const MATCH_SELECT_WITH_TEAMS =
   'id, kickoff_at, status, home_team:teams!matches_home_team_id_fkey(id, name), away_team:teams!matches_away_team_id_fkey(id, name)';
 
 const MATCH_STATUSES: readonly MatchStatus[] = [
@@ -43,7 +47,7 @@ interface EmbeddedTeam {
   name: string;
 }
 
-interface MatchRowWithTeams {
+export interface MatchRowWithTeams {
   id: string;
   kickoff_at: string;
   status: string;
@@ -51,7 +55,7 @@ interface MatchRowWithTeams {
   away_team: EmbeddedTeam | null;
 }
 
-function toMatch(row: MatchRowWithTeams): Match {
+export function toMatch(row: MatchRowWithTeams): Match {
   if (!row.home_team || !row.away_team) {
     throw new SupabasePersistenceError(
       `El partido ${row.id} no pudo resolver sus equipos desde la relación.`,
