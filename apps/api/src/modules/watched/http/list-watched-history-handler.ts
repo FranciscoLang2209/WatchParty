@@ -5,10 +5,10 @@ import type {
   WatchedMatchStore,
 } from '../domain/watched-match-store.js';
 import {
-  WATCHED_AT_CURSOR_PATTERN,
   WATCHED_HISTORY_PAGE_DEFAULT_LIMIT,
   WATCHED_HISTORY_PAGE_MAX_LIMIT,
   WATCHED_HISTORY_PAGE_MIN_LIMIT,
+  isValidWatchedAtCursor,
 } from '../domain/watched-match-store.js';
 import { ValidationError } from '../../../errors/http-error.js';
 import { toMatchResponse, type MatchResponse } from '../../matches/http/match-response.js';
@@ -59,13 +59,7 @@ function parsePagination(query: Record<string, unknown>): ListWatchedHistoryPage
   const watchedAt = beforeWatchedAt as string;
   const matchId = beforeMatchId as string;
 
-  if (
-    !WATCHED_AT_CURSOR_PATTERN.test(watchedAt) ||
-    Number.isNaN(Date.parse(watchedAt)) ||
-    !UUID_PATTERN.test(matchId)
-  ) {
-    return null;
-  }
+  if (!isValidWatchedAtCursor(watchedAt) || !UUID_PATTERN.test(matchId)) return null;
 
   return { limit, before: { watchedAt, matchId } };
 }

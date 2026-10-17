@@ -6,7 +6,7 @@ import {
   type MatchRowWithTeams,
 } from '../../matches/infrastructure/supabase-match-store.js';
 import {
-  WATCHED_AT_CURSOR_PATTERN,
+  isValidWatchedAtCursor,
   type ListWatchedHistoryPageOptions,
   type WatchedHistoryCursor,
   type WatchedHistoryPage,
@@ -28,11 +28,7 @@ interface HistoryRow {
 }
 
 function assertValidCursor(cursor: WatchedHistoryCursor): void {
-  if (
-    !WATCHED_AT_CURSOR_PATTERN.test(cursor.watchedAt) ||
-    Number.isNaN(Date.parse(cursor.watchedAt)) ||
-    !UUID_PATTERN.test(cursor.matchId)
-  ) {
+  if (!isValidWatchedAtCursor(cursor.watchedAt) || !UUID_PATTERN.test(cursor.matchId)) {
     throw new RangeError('El cursor del historial de vistos es inválido.');
   }
 }

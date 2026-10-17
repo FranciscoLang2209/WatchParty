@@ -188,6 +188,14 @@ describe('GET /me/watched-matches', () => {
       'beforeWatchedAt que intenta inyectar un filtro',
       { beforeWatchedAt: `${CURSOR_WATCHED_AT},user_id.neq.x`, beforeMatchId: MATCH_ID },
     ],
+    [
+      'beforeWatchedAt con una fecha inexistente',
+      { beforeWatchedAt: '2026-02-30T12:00:00Z', beforeMatchId: MATCH_ID },
+    ],
+    [
+      'beforeWatchedAt con una hora inexistente',
+      { beforeWatchedAt: '2026-10-10T24:00:00.123456+00:00', beforeMatchId: MATCH_ID },
+    ],
     ['beforeMatchId que no es UUID', { beforeWatchedAt: CURSOR_WATCHED_AT, beforeMatchId: 'x' }],
   ])('con %s responde 400 VALIDATION_ERROR y no invoca el store', async (_label, query) => {
     mockAuthenticated();

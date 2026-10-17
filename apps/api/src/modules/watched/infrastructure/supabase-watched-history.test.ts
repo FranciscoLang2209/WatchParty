@@ -264,6 +264,18 @@ describe('SupabaseWatchedMatchStore.listHistoryPage()', () => {
       { watchedAt: '2026-10-01T10:00:00Z,user_id.neq.x', matchId: matchId(1) },
     ],
     ['matchId que no es UUID', { watchedAt: '2026-10-01T10:00:00Z', matchId: 'x)' }],
+    [
+      'watchedAt con una fecha inexistente',
+      { watchedAt: '2026-02-30T12:00:00Z', matchId: matchId(1) },
+    ],
+    [
+      'watchedAt del 29/02 en año no bisiesto',
+      { watchedAt: '2026-02-29T12:00:00.123456+00:00', matchId: matchId(1) },
+    ],
+    [
+      'watchedAt con un offset imposible',
+      { watchedAt: '2026-10-01T10:00:00+16:00', matchId: matchId(1) },
+    ],
   ])('con cursor inválido (%s) lanza RangeError sin consultar la base', async (_label, before) => {
     const client = makeFakeClient([]);
     const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
