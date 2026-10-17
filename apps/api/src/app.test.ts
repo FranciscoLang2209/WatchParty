@@ -18,6 +18,7 @@ const noopReactionStore: RoomCommentReactionStore = {
 const noopWatchedStore: WatchedMatchStore = {
   setWatched: async () => null,
   getWatched: async () => null,
+  listHistoryPage: async () => ({ items: [], nextCursor: null }),
 };
 
 process.env.SUPABASE_URL = 'https://example.supabase.co';

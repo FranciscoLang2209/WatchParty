@@ -3,6 +3,7 @@ import type { WatchedMatchStore } from '../domain/watched-match-store.js';
 import { requireAuthenticatedUser } from '../../../middleware/require-authenticated-user.js';
 import { createGetWatchedMatchHandler } from './get-watched-match-handler.js';
 import { createSetWatchedMatchHandler } from './set-watched-match-handler.js';
+import { createListWatchedHistoryHandler } from './list-watched-history-handler.js';
 
 /**
  * Se monta bajo el prefijo `/matches` en app.ts, así que las rutas acá son
@@ -26,6 +27,19 @@ export function createWatchedRouter(store: WatchedMatchStore): Router {
     requireAuthenticatedUser,
     createSetWatchedMatchHandler(store, false),
   );
+
+  return router;
+}
+
+/**
+ * Se monta bajo el prefijo `/me` en app.ts (WAT-217): `GET /me/watched-matches`
+ * es la colección de vistos PROPIA del usuario autenticado, mismo criterio que
+ * `/me/profile`. Va en un router aparte porque no cuelga de `/matches`.
+ */
+export function createWatchedHistoryRouter(store: WatchedMatchStore): Router {
+  const router = Router();
+
+  router.get('/watched-matches', requireAuthenticatedUser, createListWatchedHistoryHandler(store));
 
   return router;
 }
