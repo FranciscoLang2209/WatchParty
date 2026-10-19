@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getWatched, setWatched } from './api';
+import { WATCHED_HISTORY_PAGE_SIZE, getWatched, listWatchedHistoryPage, setWatched } from './api';
 import { WatchedApiError, isCancelled } from './types';
 
 const API_BASE = 'https://api.watchparty.test';
@@ -230,6 +230,126 @@ describe('getWatched', () => {
     fetchMock.mockRejectedValue(abortError());
 
     const error = await failureOf(getWatched(MATCH_ID, TOKEN));
+
+    expect(isCancelled(error)).toBe(true);
+  });
+});
+
+describe('listWatchedHistoryPage', () => {
+  const MATCH = {
+    id: MATCH_ID,
+    homeTeam: 'Boca',
+    homeTeamId: 't1',
+    awayTeam: 'River',
+    awayTeamId: 't2',
+    kickoffAt: '2026-10-10T21:00:00Z',
+    status: 'finished',
+  };
+  const ITEM = { match: MATCH, watchedAt: '2026-10-11T12:00:00.000Z' };
+  const CURSOR = { watchedAt: '2026-10-11T12:00:00.123456+00:00', matchId: MATCH_ID };
+
+  it('manda GET /me/watched-matches con bearer, límite y sin cuerpo', async () => {
+    respondWith({ items: [], nextCursor: null });
+
+    await listWatchedHistoryPage(TOKEN);
+
+    const url = new URL(requestUrl());
+    expect(`${url.origin}${url.pathname}`).toBe(`${API_BASE}/me/watched-matches`);
+    expect(url.searchParams.get('limit')).toBe(String(WATCHED_HISTORY_PAGE_SIZE));
+    expect(url.searchParams.has('beforeWatchedAt')).toBe(false);
+    expect(url.searchParams.has('beforeMatchId')).toBe(false);
+    expect(requestInit().method).toBe('GET');
+    expect(requestInit().body).toBeUndefined();
+    expect(new Headers(requestInit().headers).get('Authorization')).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('manda el cursor tal cual, con el «+» del offset codificado', async () => {
+    respondWith({ items: [], nextCursor: null });
+
+    await listWatchedHistoryPage(TOKEN, { cursor: CURSOR });
+
+    expect(requestUrl()).toContain('beforeWatchedAt=2026-10-11T12%3A00%3A00.123456%2B00%3A00');
+    const url = new URL(requestUrl());
+    expect(url.searchParams.get('beforeWatchedAt')).toBe(CURSOR.watchedAt);
+    expect(url.searchParams.get('beforeMatchId')).toBe(CURSOR.matchId);
+  });
+
+  it('devuelve los ítems validados y el cursor siguiente, sin campos extra', async () => {
+    respondWith({
+      items: [{ ...ITEM, userId: 'otro', match: { ...MATCH, extra: 1 } }],
+      nextCursor: { ...CURSOR, extra: true },
+    });
+
+    await expect(listWatchedHistoryPage(TOKEN)).resolves.toEqual({
+      items: [ITEM],
+      nextCursor: CURSOR,
+    });
+  });
+
+  it.each([null, undefined])('un nextCursor %s es el fin de la lista', async (nextCursor) => {
+    respondWith({ items: [ITEM], nextCursor });
+
+    const page = await listWatchedHistoryPage(TOKEN);
+
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it('una lista vacía no es un error', async () => {
+    respondWith({ items: [], nextCursor: null });
+
+    await expect(listWatchedHistoryPage(TOKEN)).resolves.toEqual({ items: [], nextCursor: null });
+  });
+
+  it('pasa la señal de cancelación al fetch', async () => {
+    respondWith({ items: [], nextCursor: null });
+    const controller = new AbortController();
+
+    await listWatchedHistoryPage(TOKEN, { signal: controller.signal });
+
+    expect(requestInit().signal).toBe(controller.signal);
+  });
+
+  it.each([
+    ['sin items', { nextCursor: null }],
+    ['items que no es lista', { items: {}, nextCursor: null }],
+    ['un partido inválido', { items: [{ ...ITEM, match: { ...MATCH, status: 'LIVE' } }] }],
+    ['un ítem sin watchedAt', { items: [{ match: MATCH }] }],
+    ['un cursor incompleto', { items: [], nextCursor: { watchedAt: CURSOR.watchedAt } }],
+    ['un cursor que no es objeto', { items: [], nextCursor: 'abc' }],
+  ])('un cuerpo con %s es un error de servidor', async (_caso, body) => {
+    respondWith(body);
+
+    const error = await failureOf(listWatchedHistoryPage(TOKEN));
+
+    expect(error).toBeInstanceOf(WatchedApiError);
+    expect(error.kind).toBe('server');
+    expect(error.message).toBe('No pudimos cargar tu historial. Intentá de nuevo.');
+  });
+
+  it.each([
+    [401, 'unauthorized'],
+    [400, 'server'],
+    [500, 'server'],
+  ])('un %i se traduce a %s', async (status, kind) => {
+    respondWith({}, { status });
+
+    const error = await failureOf(listWatchedHistoryPage(TOKEN));
+
+    expect(error.kind).toBe(kind);
+  });
+
+  it('una caída de red se traduce a network', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    const error = await failureOf(listWatchedHistoryPage(TOKEN));
+
+    expect(error.kind).toBe('network');
+  });
+
+  it('una consulta abortada es cancelled y no se anuncia', async () => {
+    fetchMock.mockRejectedValue(abortError());
+
+    const error = await failureOf(listWatchedHistoryPage(TOKEN));
 
     expect(isCancelled(error)).toBe(true);
   });
