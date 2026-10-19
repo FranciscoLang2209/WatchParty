@@ -17,6 +17,7 @@ function makeMatch(status: MatchStatus): Match {
     awayTeamId: 'a',
     kickoffAt: '2026-10-01T20:00:00Z',
     status,
+    score: null,
   };
 }
 

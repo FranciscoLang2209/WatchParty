@@ -12,6 +12,7 @@ function match(overrides: Partial<Match> & Pick<Match, 'id'>): Match {
     awayTeamId: 'team-boca',
     kickoffAt: '2026-09-24T20:00:00Z',
     status: 'scheduled',
+    score: null,
     ...overrides,
   };
 }

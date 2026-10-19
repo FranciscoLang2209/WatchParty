@@ -16,7 +16,11 @@ vi.mock('../../lib/env', () => ({ readWebEnv: envMock }));
 const fetchMock = vi.fn();
 const onSessionExpired = vi.fn();
 
-function item(n: number, status = 'finished'): WatchedHistoryItem {
+function item(
+  n: number,
+  status = 'finished',
+  score: WatchedHistoryItem['match']['score'] = null,
+): WatchedHistoryItem {
   return {
     match: {
       id: `a${n}111111-1111-4111-8111-111111111111`,
@@ -26,6 +30,7 @@ function item(n: number, status = 'finished'): WatchedHistoryItem {
       awayTeamId: `v${n}`,
       kickoffAt: '2026-10-10T21:00:00Z',
       status: status as WatchedHistoryItem['match']['status'],
+      score,
     },
     watchedAt: `2026-10-${String(20 - n).padStart(2, '0')}T15:00:00.000Z`,
   };
@@ -108,6 +113,28 @@ describe('WatchedHistory: estados', () => {
     expect(within(primero!).getByText(/sáb.*10.*oct.*18:00/)).toBeInTheDocument();
     expect(within(primero!).getByText(/^Visto el .*19.*oct/)).toBeInTheDocument();
     expect(within(segundo!).getByText('Postergado')).toBeInTheDocument();
+  });
+
+  it('muestra el marcador real cuando existe y «Sin resultado» cuando no, sin inventar 0–0', async () => {
+    fetchMock.mockReturnValueOnce(
+      page([
+        item(1, 'finished', { home: 3, away: 1 }),
+        item(2, 'finished', { home: 0, away: 0 }),
+        item(3, 'postponed'),
+      ]),
+    );
+    renderHistory();
+
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+    const [conGoles, ceroCero, sinResultado] = screen.getAllByRole('listitem');
+
+    expect(within(conGoles!).getByText('3 – 1')).toBeInTheDocument();
+    expect(within(conGoles!).getByText('Resultado: Local 1 3, Visitante 1 1')).toBeInTheDocument();
+    expect(within(conGoles!).getByText('Finalizado')).toBeInTheDocument();
+    expect(within(ceroCero!).getByText('0 – 0')).toBeInTheDocument();
+    expect(within(sinResultado!).getByText('Sin resultado')).toBeInTheDocument();
+    expect(within(sinResultado!).getByText('Postergado')).toBeInTheDocument();
+    expect(within(sinResultado!).queryByText(/\d+\s*–\s*\d+/)).not.toBeInTheDocument();
   });
 
   it('un historial vacío no es un fallo', async () => {

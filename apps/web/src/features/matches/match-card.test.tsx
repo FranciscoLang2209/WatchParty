@@ -12,6 +12,7 @@ const partido: Match = {
   awayTeamId: 'team-boca-juniors',
   kickoffAt: '2026-09-06T21:00:00Z',
   status: 'scheduled',
+  score: null,
 };
 
 function renderCard(match: Match = partido) {

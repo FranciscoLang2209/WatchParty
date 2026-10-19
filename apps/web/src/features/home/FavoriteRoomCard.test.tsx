@@ -24,6 +24,7 @@ const partido: Match = {
   awayTeamId: 'team-boca',
   kickoffAt: '2026-09-06T21:00:00Z',
   status: 'live',
+  score: null,
 };
 
 const sala = { id: 'room-123', matchId: 'match-1', createdAt: '2026-09-06T20:00:00.000Z' };

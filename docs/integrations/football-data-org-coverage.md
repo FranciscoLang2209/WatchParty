@@ -58,6 +58,41 @@ explícito entre ambos vocabularios, no asumir que coinciden.
 - **Filtro de fechas (`dateFrom` / `dateTo`)**: comprobado el 2026-10-06 con consultas de límite. En la práctica ambos extremos son **inclusivos**, aunque la documentación oficial de la API v4 describe `dateTo` como exclusivo: `dateFrom=2026-10-09&dateTo=2026-10-10` devolvió los 6 partidos del 10-10, y `dateFrom=2026-10-10&dateTo=2026-10-12` devolvió 10 partidos, el último del 10-12.
 - **`season`** combinado con el rango de fechas: aceptado (`season=2026&dateFrom=2026-10-01&dateTo=2026-10-09`, 9 días, respuesta válida sin partidos). `matchday` no se probó.
 
+## Marcador — WAT-230
+
+Verificado el 2026-10-19 con una API key Free real, dos consultas a
+`GET /v4/competitions/PL/matches`:
+
+- `dateFrom=2026-10-17&dateTo=2026-10-19`: 10 partidos, todos `FINISHED` (`resultSet.played: 10`).
+- `dateFrom=2026-10-24&dateTo=2026-10-24`: partidos `TIMED`, sin jugar.
+
+El marcador viene en `score.fullTime`. Un partido jugado trae los dos goles como enteros; uno sin
+jugar trae los dos en `null`, así que la ausencia de resultado no se confunde con un 0–0.
+`halfTime`, `winner` y `duration` también llegan, pero no forman parte del marcador que guarda la
+aplicación.
+
+```json
+// Jugado (Everton FC 0–2 Chelsea FC, id 560603)
+"score": {
+  "winner": "AWAY_TEAM",
+  "duration": "REGULAR",
+  "fullTime": { "home": 0, "away": 2 },
+  "halfTime": { "home": 0, "away": 0 }
+}
+
+// Sin jugar (id 560614)
+"score": {
+  "winner": null,
+  "duration": "REGULAR",
+  "fullTime": { "home": null, "away": null },
+  "halfTime": { "home": null, "away": null }
+}
+```
+
+La normalización (`football-data-org-normalizer.ts`) toma `fullTime` solo si los dos goles son
+enteros no negativos; si falta alguno, el partido se importa sin marcador. `upsert_match_fixture`
+nunca borra un marcador ya guardado porque llegue uno ausente o incompleto.
+
 ## Límites observados
 
 | Métrica                                                    | Valor observado |

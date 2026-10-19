@@ -34,6 +34,7 @@ const partido = {
   awayTeamId: 'team-boca-juniors',
   kickoffAt: '2026-09-06T21:00:00Z',
   status: 'scheduled',
+  score: null,
 };
 
 let fetchSpy: ReturnType<typeof vi.spyOn>;
@@ -147,7 +148,7 @@ describe('Detalle del partido: éxito', () => {
     expect(await (await detalle()).findByRole('status')).toHaveTextContent('Cargando el partido…');
   });
 
-  it('no incluye chat, marcador ni estadísticas; la sala es un único acceso', async () => {
+  it('no incluye chat ni estadísticas; la sala es un único acceso', async () => {
     renderAt('/matches/match-001');
 
     const m = await detalle();
@@ -166,6 +167,54 @@ describe('Detalle del partido: éxito', () => {
     renderAt('/matches/match-001');
 
     expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
+  });
+});
+
+describe('Detalle del partido: marcador', () => {
+  it('muestra el marcador real con cada gol asociado a su equipo, y el estado aparte', async () => {
+    responderCon({ match: { ...partido, status: 'finished', score: { home: 2, away: 1 } } });
+    renderAt('/matches/match-001');
+
+    const m = await detalle();
+
+    expect(await m.findByText('2 – 1')).toBeInTheDocument();
+    expect(m.getByText('Resultado: River Plate 2, Boca Juniors 1')).toBeInTheDocument();
+    expect(m.getByText('Finalizado')).toBeInTheDocument();
+  });
+
+  it('un 0–0 confirmado se muestra como resultado', async () => {
+    responderCon({ match: { ...partido, status: 'finished', score: { home: 0, away: 0 } } });
+    renderAt('/matches/match-001');
+
+    const m = await detalle();
+
+    expect(await m.findByText('0 – 0')).toBeInTheDocument();
+    expect(m.queryByText('Sin resultado')).not.toBeInTheDocument();
+  });
+
+  it('sin marcador lo dice explícitamente, sin inventar un 0–0, y conserva equipos, fecha y estado', async () => {
+    responderCon({ match: { ...partido, status: 'finished', score: null } });
+    renderAt('/matches/match-001');
+
+    const m = await detalle();
+
+    expect(await m.findByText('Sin resultado')).toBeInTheDocument();
+    expect(m.queryByText(/\d+\s*–\s*\d+/)).not.toBeInTheDocument();
+    expect(
+      m.getByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' }),
+    ).toBeInTheDocument();
+    expect(m.getByText(/18:00/)).toBeInTheDocument();
+    expect(m.getByText('Finalizado')).toBeInTheDocument();
+  });
+
+  it('un marcador con forma inválida se trata como error del servidor, no como resultado', async () => {
+    responderCon({ match: { ...partido, score: { home: 1 } } });
+    renderAt('/matches/match-001');
+
+    const m = await detalle();
+
+    expect(await m.findByRole('alert')).toBeInTheDocument();
+    expect(m.queryByText(/\d+\s*–\s*\d+/)).not.toBeInTheDocument();
   });
 });
 

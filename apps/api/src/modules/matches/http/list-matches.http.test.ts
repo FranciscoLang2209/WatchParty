@@ -53,6 +53,7 @@ const MATCH_EARLY: Match = {
   awayTeamId: 'team-fc-barcelona',
   kickoffAt: '2026-09-06T21:00:00.000Z',
   status: 'scheduled',
+  score: null,
 };
 
 const MATCH_EARLY_TIE: Match = {
@@ -63,6 +64,7 @@ const MATCH_EARLY_TIE: Match = {
   awayTeamId: 'team-liverpool',
   kickoffAt: '2026-09-06T21:00:00.000Z',
   status: 'scheduled',
+  score: null,
 };
 
 const MATCH_LATE: Match = {
@@ -73,6 +75,7 @@ const MATCH_LATE: Match = {
   awayTeamId: 'team-boca-juniors',
   kickoffAt: '2026-09-13T19:00:00.000Z',
   status: 'scheduled',
+  score: null,
 };
 
 describe('GET /matches', () => {

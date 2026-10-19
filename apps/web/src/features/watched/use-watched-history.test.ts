@@ -27,6 +27,7 @@ function item(n: number): WatchedHistoryItem {
       awayTeamId: `a${n}`,
       kickoffAt: '2026-10-10T21:00:00Z',
       status: 'finished',
+      score: null,
     },
     watchedAt: `2026-10-${String(20 - n).padStart(2, '0')}T12:00:00.000Z`,
   };

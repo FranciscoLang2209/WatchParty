@@ -72,6 +72,7 @@ const FIXTURE: NormalizedMatchFixture = {
   season: '2026',
   kickoffAt: '2026-09-06T21:00:00Z',
   status: 'scheduled',
+  score: null,
 };
 
 describe('SupabaseMatchStore', () => {
@@ -84,6 +85,8 @@ describe('SupabaseMatchStore', () => {
               id: 'a1111111-1111-1111-1111-111111111111',
               kickoff_at: '2026-09-06T21:00:00+00:00',
               status: 'scheduled',
+              home_score: null,
+              away_score: null,
               home_team: { id: 'team-norte', name: 'Club Atlético Norte' },
               away_team: { id: 'team-deportivo-sur', name: 'Deportivo Sur' },
             },
@@ -104,6 +107,7 @@ describe('SupabaseMatchStore', () => {
           awayTeamId: 'team-deportivo-sur',
           kickoffAt: '2026-09-06T21:00:00.000Z',
           status: 'scheduled',
+          score: null,
         },
       ]);
     });
@@ -172,6 +176,47 @@ describe('SupabaseMatchStore', () => {
     });
   });
 
+  describe('marcador', () => {
+    function rowWithScore(id: string, homeScore: number | null, awayScore: number | null) {
+      return {
+        id,
+        kickoff_at: '2026-09-06T21:00:00Z',
+        status: 'finished',
+        home_score: homeScore,
+        away_score: awayScore,
+        home_team: { id: 'team-norte', name: 'Club Atlético Norte' },
+        away_team: { id: 'team-deportivo-sur', name: 'Deportivo Sur' },
+      };
+    }
+
+    it('distingue un 0–0 confirmado de un partido sin resultado', async () => {
+      const client = makeFakeClient({
+        matches: () => ({
+          data: [rowWithScore('con-cero-cero', 0, 0), rowWithScore('sin-resultado', null, null)],
+          error: null,
+        }),
+      });
+      const store = new SupabaseMatchStore(asSupabaseClient(client));
+
+      const [ceroCero, sinResultado] = await store.list(WINDOW);
+
+      expect(ceroCero?.score).toEqual({ home: 0, away: 0 });
+      expect(sinResultado?.score).toBeNull();
+      expect(sinResultado?.status).toBe('finished');
+    });
+
+    it('pide los goles junto con el resto del partido', async () => {
+      const client = makeFakeClient({ matches: () => ({ data: [], error: null }) });
+      const store = new SupabaseMatchStore(asSupabaseClient(client));
+
+      await store.list(WINDOW);
+
+      expect(client.builders[0]?.select).toHaveBeenCalledWith(
+        expect.stringContaining('home_score, away_score'),
+      );
+    });
+  });
+
   describe('findById()', () => {
     it('devuelve el Match cuando existe', async () => {
       const client = makeFakeClient({
@@ -180,6 +225,8 @@ describe('SupabaseMatchStore', () => {
             id: 'a1111111-1111-1111-1111-111111111111',
             kickoff_at: '2026-09-06T21:00:00Z',
             status: 'live',
+            home_score: 1,
+            away_score: 0,
             home_team: { id: 'team-norte', name: 'Club Atlético Norte' },
             away_team: { id: 'team-deportivo-sur', name: 'Deportivo Sur' },
           },
@@ -198,6 +245,7 @@ describe('SupabaseMatchStore', () => {
         awayTeamId: 'team-deportivo-sur',
         kickoffAt: '2026-09-06T21:00:00.000Z',
         status: 'live',
+        score: { home: 1, away: 0 },
       });
     });
 
@@ -240,7 +288,23 @@ describe('SupabaseMatchStore', () => {
         p_season: '2026',
         p_kickoff_at: '2026-09-06T21:00:00Z',
         p_status: 'scheduled',
+        p_home_score: null,
+        p_away_score: null,
       });
+    });
+
+    it('envía los goles del marcador cuando el fixture lo trae, incluido un 0–0', async () => {
+      const client = makeFakeClient({
+        rpc: () => ({ data: [{ match_id: 'match-uuid', was_inserted: false }], error: null }),
+      });
+      const store = new SupabaseMatchStore(asSupabaseClient(client));
+
+      await store.upsertFixture({ ...FIXTURE, status: 'finished', score: { home: 0, away: 0 } });
+
+      expect(client.rpc).toHaveBeenCalledWith(
+        'upsert_match_fixture',
+        expect.objectContaining({ p_status: 'finished', p_home_score: 0, p_away_score: 0 }),
+      );
     });
 
     it('propaga un error de Supabase como SupabasePersistenceError', async () => {

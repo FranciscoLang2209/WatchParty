@@ -21,6 +21,7 @@ const MATCHES: readonly Match[] = [
     awayTeamId: 'team-boca-juniors',
     kickoffAt: '2026-09-06T21:00:00Z',
     status: 'scheduled',
+    score: null,
   },
   {
     id: 'match-002',
@@ -30,6 +31,7 @@ const MATCHES: readonly Match[] = [
     awayTeamId: 'team-fc-barcelona',
     kickoffAt: '2026-09-13T19:00:00Z',
     status: 'scheduled',
+    score: null,
   },
   {
     id: 'match-003',
@@ -39,6 +41,7 @@ const MATCHES: readonly Match[] = [
     awayTeamId: 'team-liverpool',
     kickoffAt: '2026-08-30T14:30:00Z',
     status: 'finished',
+    score: null,
   },
 ];
 

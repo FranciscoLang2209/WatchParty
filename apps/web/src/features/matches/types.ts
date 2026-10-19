@@ -9,6 +9,12 @@ export const MATCH_STATUSES = ['scheduled', 'live', 'finished', 'postponed', 'ca
 
 export type MatchStatus = (typeof MATCH_STATUSES)[number];
 
+/** Marcador real del partido. Es independiente del estado. */
+export interface MatchScore {
+  home: number;
+  away: number;
+}
+
 export interface Match {
   id: string;
   homeTeam: string;
@@ -19,6 +25,8 @@ export interface Match {
   /** ISO 8601 en UTC, p. ej. «2026-09-06T21:00:00Z». */
   kickoffAt: string;
   status: MatchStatus;
+  /** `null` cuando no hay resultado: nunca se muestra como 0–0. */
+  score: MatchScore | null;
 }
 
 /** La API envuelve sus respuestas: la lista en `matches` y el detalle en `match`. */

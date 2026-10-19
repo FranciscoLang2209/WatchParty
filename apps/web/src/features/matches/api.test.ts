@@ -17,6 +17,7 @@ const partido = {
   awayTeamId: 'team-boca-juniors',
   kickoffAt: '2026-09-06T21:00:00Z',
   status: 'scheduled',
+  score: null,
 };
 
 const fetchMock = vi.fn();
@@ -96,13 +97,45 @@ describe('listMatches', () => {
   });
 
   it('descarta los campos que no son del contrato', async () => {
-    respondWith({ matches: [{ ...partido, score: '1-1', minute: 68 }] });
+    respondWith({ matches: [{ ...partido, minute: 68 }] });
 
     const [primero] = await listMatches(TOKEN);
 
     expect(primero).toEqual(partido);
-    expect(primero).not.toHaveProperty('score');
     expect(primero).not.toHaveProperty('minute');
+  });
+
+  it('conserva el marcador real, incluido un 0–0 confirmado', async () => {
+    respondWith({
+      matches: [
+        { ...partido, id: 'con-goles', status: 'finished', score: { home: 2, away: 1 } },
+        { ...partido, id: 'cero-cero', status: 'finished', score: { home: 0, away: 0 } },
+      ],
+    });
+
+    const [conGoles, ceroCero] = await listMatches(TOKEN);
+
+    expect(conGoles?.score).toEqual({ home: 2, away: 1 });
+    expect(ceroCero?.score).toEqual({ home: 0, away: 0 });
+  });
+
+  it('un partido sin el campo score se lee como sin resultado, nunca 0–0', async () => {
+    respondWith({ matches: [{ ...partido, score: undefined }] });
+
+    const [primero] = await listMatches(TOKEN);
+
+    expect(primero?.score).toBeNull();
+  });
+
+  it.each([
+    ['texto', '1-1'],
+    ['un gol faltante', { home: 1 }],
+    ['un gol negativo', { home: -1, away: 0 }],
+    ['un gol decimal', { home: 1.5, away: 0 }],
+  ])('rechaza un marcador con forma inválida (%s)', async (_, score) => {
+    respondWith({ matches: [{ ...partido, score }] });
+
+    await expect(listMatches(TOKEN)).rejects.toMatchObject({ kind: 'server' });
   });
 
   it('rechaza un estado que no es del dominio en vez de dejarlo pasar', async () => {

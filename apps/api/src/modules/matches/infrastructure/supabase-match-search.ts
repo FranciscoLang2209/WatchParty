@@ -1,5 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Match, MatchStatus } from '../domain/match.js';
 import {
   SEARCH_DEFAULT_LIMIT,
   SEARCH_MAX_LIMIT,
@@ -12,57 +11,12 @@ import {
   type TeamSearchResult,
 } from '../domain/match-search.js';
 import { SupabasePersistenceError } from './supabase-persistence-error.js';
-
-const MATCH_STATUSES: readonly MatchStatus[] = [
-  'scheduled',
-  'live',
-  'finished',
-  'postponed',
-  'cancelled',
-];
-
-function isMatchStatus(value: string): value is MatchStatus {
-  return (MATCH_STATUSES as readonly string[]).includes(value);
-}
-
-// Mismo hint de relación que SupabaseMatchStore: matches tiene dos FKs a teams.
-const MATCH_SELECT_WITH_TEAMS =
-  'id, kickoff_at, status, home_team:teams!matches_home_team_id_fkey(id, name), away_team:teams!matches_away_team_id_fkey(id, name)';
-
-interface EmbeddedTeam {
-  id: string;
-  name: string;
-}
-
-interface MatchRowWithTeams {
-  id: string;
-  kickoff_at: string;
-  status: string;
-  home_team: EmbeddedTeam | null;
-  away_team: EmbeddedTeam | null;
-}
-
-function toMatch(row: MatchRowWithTeams): Match {
-  if (!row.home_team || !row.away_team) {
-    throw new SupabasePersistenceError(
-      `El partido ${row.id} no pudo resolver sus equipos desde la relación.`,
-    );
-  }
-  if (!isMatchStatus(row.status)) {
-    throw new SupabasePersistenceError(
-      `El partido ${row.id} tiene un status fuera del contrato canónico de Match.`,
-    );
-  }
-  return {
-    id: row.id,
-    homeTeam: row.home_team.name,
-    homeTeamId: row.home_team.id,
-    awayTeam: row.away_team.name,
-    awayTeamId: row.away_team.id,
-    kickoffAt: new Date(row.kickoff_at).toISOString(),
-    status: row.status,
-  };
-}
+// Mismo select y mismo mapeo que el catálogo: una sola representación de Match.
+import {
+  MATCH_SELECT_WITH_TEAMS,
+  toMatch,
+  type MatchRowWithTeams,
+} from './supabase-match-store.js';
 
 /** Un límite fuera de rango (o directamente inválido) se ajusta, no falla. */
 function clampLimit(limit: number): number {

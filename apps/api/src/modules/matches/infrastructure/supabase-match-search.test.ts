@@ -94,6 +94,8 @@ const MATCH_ROW = {
   id: 'b1111111-1111-1111-1111-111111111111',
   kickoff_at: '2026-09-06T21:00:00+00:00',
   status: 'scheduled',
+  home_score: null,
+  away_score: null,
   home_team: { id: RIVER.id, name: 'River Plate' },
   away_team: { id: BOCA.id, name: 'Boca Juniors' },
 };
@@ -205,11 +207,12 @@ describe('SupabaseMatchSearch', () => {
           awayTeamId: BOCA.id,
           kickoffAt: '2026-09-06T21:00:00.000Z',
           status: 'scheduled',
+          score: null,
         },
       ]);
       // Los ids de equipo salen de la relación: hay que pedirlos junto al nombre.
       expect(nthBuilder(client.builders.matches, 0).select).toHaveBeenCalledWith(
-        'id, kickoff_at, status, home_team:teams!matches_home_team_id_fkey(id, name), away_team:teams!matches_away_team_id_fkey(id, name)',
+        'id, kickoff_at, status, home_score, away_score, home_team:teams!matches_home_team_id_fkey(id, name), away_team:teams!matches_away_team_id_fkey(id, name)',
       );
       expect(nthBuilder(client.builders.matches, 0).or).toHaveBeenCalledWith(
         `home_team_id.in.(${RIVER.id}),away_team_id.in.(${RIVER.id})`,

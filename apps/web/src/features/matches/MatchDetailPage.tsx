@@ -8,6 +8,7 @@ import { RoomsApiError, isCancelled as isRoomCancelled } from '@/features/rooms/
 import { getWatched, setWatched } from '@/features/watched/api';
 import { WatchedApiError, isCancelled as isWatchedCancelled } from '@/features/watched/types';
 import { formatKickoff, matchStatusLabel } from './format';
+import { MatchResult } from './MatchResult';
 import { getMatch } from './api';
 import { MatchesApiError, isCancelled, type Match } from './types';
 
@@ -331,6 +332,7 @@ function DetallePartido({ matchId }: { matchId: string }) {
                 {formatKickoff(estado.match.kickoffAt)}
               </p>
               <p className="text-base font-semibold">{matchStatusLabel(estado.match.status)}</p>
+              <MatchResult match={estado.match} />
             </Card>
 
             <Button

@@ -1,4 +1,4 @@
-import type { Match, MatchStatus } from '../domain/match.js';
+import type { Match, MatchScore, MatchStatus } from '../domain/match.js';
 
 export interface MatchResponse {
   id: string;
@@ -8,6 +8,8 @@ export interface MatchResponse {
   awayTeamId: string;
   kickoffAt: string;
   status: MatchStatus;
+  /** `null` cuando el partido no tiene resultado. */
+  score: MatchScore | null;
 }
 
 export function toMatchResponse(match: Match): MatchResponse {
@@ -19,5 +21,6 @@ export function toMatchResponse(match: Match): MatchResponse {
     awayTeamId: match.awayTeamId,
     kickoffAt: match.kickoffAt,
     status: match.status,
+    score: match.score,
   };
 }
