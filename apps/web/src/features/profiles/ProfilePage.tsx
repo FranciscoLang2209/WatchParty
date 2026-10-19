@@ -10,6 +10,7 @@ import {
   type Profile,
   type TeamOption,
 } from '@/features/profiles/types';
+import { WatchedHistory } from '@/features/watched/WatchedHistory';
 
 type Estado =
   | { status: 'loading' }
@@ -44,7 +45,8 @@ function toEstadoError(error: unknown): Estado {
 }
 
 /**
- * Perfil propio: nombre visible, biografía y equipo favorito.
+ * Perfil propio: nombre visible, biografía y equipo favorito, y debajo el
+ * historial de partidos vistos (WAT-219).
  *
  * Consume sólo la Node API autenticada — la sesión aporta el bearer y nada más.
  * Carga, ausencia de perfil, error y sesión vencida son estados distintos: un
@@ -54,6 +56,7 @@ function toEstadoError(error: unknown): Estado {
 export function ProfilePage() {
   const { session, signOut } = useAuth();
   const accessToken = session?.access_token ?? null;
+  const userId = session?.user.id ?? null;
 
   const favoriteId = useId();
   const feedbackId = useId();
@@ -252,6 +255,13 @@ export function ProfilePage() {
             </Button>
           </form>
         ) : null}
+
+        {/* Independiente del formulario: su carga o su fallo no bloquean la edición. */}
+        <WatchedHistory
+          userId={userId}
+          accessToken={accessToken}
+          onSessionExpired={() => void signOut()}
+        />
       </div>
     </section>
   );
