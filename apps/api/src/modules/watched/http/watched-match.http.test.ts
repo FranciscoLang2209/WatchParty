@@ -40,7 +40,7 @@ type SetWatched = (
 type GetWatched = (userId: string, matchId: string) => Promise<WatchedMatchResult | null>;
 
 function buildTestApp(setWatched: SetWatched, getWatched: GetWatched = vi.fn()): Express {
-  const store: WatchedMatchStore = { setWatched, getWatched };
+  const store: WatchedMatchStore = { setWatched, getWatched, listHistoryPage: vi.fn() };
   const app = express();
 
   app.use(express.json());

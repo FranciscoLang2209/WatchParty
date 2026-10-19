@@ -1,7 +1,37 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { MatchCatalog } from '../../matches/domain/match-catalog.js';
-import type { WatchedMatchResult, WatchedMatchStore } from '../domain/watched-match-store.js';
+import {
+  MATCH_SELECT_WITH_TEAMS,
+  toMatch,
+  type MatchRowWithTeams,
+} from '../../matches/infrastructure/supabase-match-store.js';
+import {
+  isValidWatchedAtCursor,
+  type ListWatchedHistoryPageOptions,
+  type WatchedHistoryCursor,
+  type WatchedHistoryPage,
+  type WatchedMatchResult,
+  type WatchedMatchStore,
+} from '../domain/watched-match-store.js';
+import { UUID_PATTERN } from '../http/match-id-pattern.js';
 import { WatchedMatchPersistenceError } from './watched-match-persistence-error.js';
+
+// `watched_matches.match_id` es una FK inline sin nombre explícito
+// (20260930120000_watched_matches.sql): Postgres la nombra
+// `<tabla>_<columna>_fkey`. El hint deja explícito qué relación embeber.
+const HISTORY_SELECT = `match_id, created_at, match:matches!watched_matches_match_id_fkey(${MATCH_SELECT_WITH_TEAMS})`;
+
+interface HistoryRow {
+  match_id: string;
+  created_at: string;
+  match: MatchRowWithTeams | null;
+}
+
+function assertValidCursor(cursor: WatchedHistoryCursor): void {
+  if (!isValidWatchedAtCursor(cursor.watchedAt) || !UUID_PATTERN.test(cursor.matchId)) {
+    throw new RangeError('El cursor del historial de vistos es inválido.');
+  }
+}
 
 /**
  * Implementación de `WatchedMatchStore` respaldada por Supabase (WAT-177),
@@ -83,5 +113,60 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
     }
 
     return { matchId, watched: data !== null };
+  }
+
+  /**
+   * Página por cursor sobre `(created_at desc, match_id desc)` (WAT-217),
+   * mismo enfoque que `listPageByRoom` de comentarios: pide `limit + 1` filas
+   * y la extra solo indica que hay otra página. La comparación con el cursor
+   * es estricta (`<`), así que el último visto de la página anterior no se
+   * repite. El partido viene embebido (una sola consulta, sin N+1); como la
+   * FK no cascadea, todo visto tiene su partido.
+   */
+  async listHistoryPage(
+    userId: string,
+    { limit, before }: ListWatchedHistoryPageOptions,
+  ): Promise<WatchedHistoryPage> {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new RangeError('El límite de la página debe ser un entero mayor o igual a 1.');
+    }
+    if (before) assertValidCursor(before);
+
+    let query = this.client.from('watched_matches').select(HISTORY_SELECT).eq('user_id', userId);
+
+    if (before) {
+      // (created_at, match_id) < (before.watchedAt, before.matchId), en el
+      // filtro `or` de PostgREST: anterior en fecha, o misma fecha y id menor.
+      query = query.or(
+        `created_at.lt.${before.watchedAt},and(created_at.eq.${before.watchedAt},match_id.lt.${before.matchId})`,
+      );
+    }
+
+    const { data, error } = await query
+      .order('created_at', { ascending: false })
+      .order('match_id', { ascending: false })
+      .limit(limit + 1);
+
+    if (error) {
+      throw new WatchedMatchPersistenceError('No se pudo listar el historial de vistos.', error);
+    }
+
+    const rows = (data ?? []) as unknown as HistoryRow[];
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const lastRow = pageRows[pageRows.length - 1];
+
+    return {
+      items: pageRows.map((row) => {
+        if (!row.match) {
+          throw new WatchedMatchPersistenceError(
+            `El visto del partido ${row.match_id} no pudo resolver su partido.`,
+          );
+        }
+        return { match: toMatch(row.match), watchedAt: new Date(row.created_at).toISOString() };
+      }),
+      nextCursor:
+        hasMore && lastRow ? { watchedAt: lastRow.created_at, matchId: lastRow.match_id } : null,
+    };
   }
 }
