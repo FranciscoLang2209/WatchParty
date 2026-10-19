@@ -67,9 +67,14 @@ async function toApiError(response: Response): Promise<MatchesApiError> {
   return fail(mapped ?? kindFromStatus(response.status));
 }
 
-/** Se queda con los campos canónicos y descarta cualquier extra. */
-function toMatch(value: unknown): Match {
-  if (typeof value !== 'object' || value === null) throw fail('server');
+/**
+ * Se queda con los campos canónicos y descarta cualquier extra. `null` si no
+ * es un partido válido: no lanza, así otra feature que recibe partidos
+ * anidados (p. ej. el historial de vistos, WAT-218) lo traduce a su propio
+ * error.
+ */
+export function parseMatch(value: unknown): Match | null {
+  if (typeof value !== 'object' || value === null) return null;
 
   const { id, homeTeam, homeTeamId, awayTeam, awayTeamId, kickoffAt, status } = value as Record<
     string,
@@ -85,10 +90,18 @@ function toMatch(value: unknown): Match {
     typeof kickoffAt !== 'string' ||
     !isMatchStatus(status)
   ) {
-    throw fail('server');
+    return null;
   }
 
   return { id, homeTeam, homeTeamId, awayTeam, awayTeamId, kickoffAt, status };
+}
+
+function toMatch(value: unknown): Match {
+  const match = parseMatch(value);
+
+  if (!match) throw fail('server');
+
+  return match;
 }
 
 async function request<T>(url: string, accessToken: string, signal?: AbortSignal): Promise<T> {

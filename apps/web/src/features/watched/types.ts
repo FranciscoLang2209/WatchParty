@@ -1,3 +1,5 @@
+import type { Match } from '../matches/types';
+
 /**
  * Espejo del contrato público del partido visto propio de la Node API
  * (`GET`, WAT-197, y `PUT`/`DELETE /matches/:matchId/watched`, WAT-178), que
@@ -28,4 +30,36 @@ export class WatchedApiError extends Error {
 /** Una operación cancelada no es un fallo: no se anuncia ni se reintenta. */
 export function isCancelled(error: unknown): boolean {
   return error instanceof WatchedApiError && error.kind === 'cancelled';
+}
+
+export function isUnauthorized(error: unknown): boolean {
+  return error instanceof WatchedApiError && error.kind === 'unauthorized';
+}
+
+/**
+ * Espejo del historial propio de vistos de la Node API
+ * (`GET /me/watched-matches`, WAT-217), del más reciente al más antiguo.
+ */
+
+/** Un partido del historial, con el momento en que se marcó visto. */
+export interface WatchedHistoryItem {
+  match: Match;
+  /** ISO 8601 en UTC, truncado a milisegundos. */
+  watchedAt: string;
+}
+
+/**
+ * Posición desde la que sigue la página siguiente. Es opaco: lo arma el
+ * servidor y se devuelve tal cual, sin construirlo ni interpretarlo.
+ * `watchedAt` no es el `watchedAt` del ítem: trae la precisión de la base.
+ */
+export interface WatchedHistoryCursor {
+  watchedAt: string;
+  matchId: string;
+}
+
+/** Una página del historial. `nextCursor` es `null` cuando no quedan más. */
+export interface WatchedHistoryPage {
+  items: WatchedHistoryItem[];
+  nextCursor: WatchedHistoryCursor | null;
 }
