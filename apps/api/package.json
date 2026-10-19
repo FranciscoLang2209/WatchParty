@@ -19,6 +19,7 @@
     "verify:match-search": "tsx --env-file-if-exists=.env scripts/verify-match-search.ts",
     "verify:watched-matches": "tsx --env-file-if-exists=.env scripts/verify-watched-matches-schema.ts",
     "verify:match-ratings": "tsx --env-file-if-exists=.env scripts/verify-match-ratings-schema.ts",
+    "verify:match-rating-api": "tsx --env-file-if-exists=.env scripts/verify-match-rating-api.ts",
     "matches:sync": "tsx --env-file-if-exists=.env src/scripts/sync-matches.ts",
     "reporter:collect": "tsx --env-file-if-exists=.env src/scripts/collect-kpis.ts",
     "reporter:publish": "tsx --env-file-if-exists=.env src/scripts/publish-kpis.ts",

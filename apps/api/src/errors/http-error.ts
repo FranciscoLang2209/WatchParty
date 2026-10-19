@@ -1,5 +1,5 @@
-export type HttpErrorCode = 'UNAUTHORIZED' | 'NOT_FOUND' | 'VALIDATION_ERROR' | 'INTERNAL_ERROR';
-
+export type HttpErrorCode =
+  'UNAUTHORIZED' | 'NOT_FOUND' | 'VALIDATION_ERROR' | 'CONFLICT' | 'INTERNAL_ERROR';
 export class HttpError extends Error {
   readonly code: HttpErrorCode;
   readonly statusCode: number;
@@ -30,5 +30,12 @@ export class ValidationError extends HttpError {
   constructor(message = 'Datos inválidos.') {
     super('VALIDATION_ERROR', 400, message);
     this.name = 'ValidationError';
+  }
+}
+
+export class ConflictError extends HttpError {
+  constructor(message = 'La operación no es válida para el estado actual del recurso.') {
+    super('CONFLICT', 409, message);
+    this.name = 'ConflictError';
   }
 }
