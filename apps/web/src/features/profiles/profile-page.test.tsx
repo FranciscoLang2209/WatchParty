@@ -59,6 +59,9 @@ interface Escenario {
   /** Lo que responde el PUT. Por defecto, lo que se mandó. */
   saved?: unknown;
   saveStatus?: number;
+  /** Lo que responde el historial de vistos (WAT-219). */
+  history?: unknown;
+  historyStatus?: number;
 }
 
 function jsonResponse(body: unknown, status: number) {
@@ -77,6 +80,8 @@ function stubApi(escenario: Escenario = {}) {
     teamsStatus = 200,
     saved,
     saveStatus = 200,
+    history = { items: [], nextCursor: null },
+    historyStatus = 200,
   } = escenario;
 
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
@@ -91,6 +96,15 @@ function stubApi(escenario: Escenario = {}) {
             ? { error: { code: saveStatus === 400 ? 'VALIDATION_ERROR' : 'INTERNAL_ERROR' } }
             : { profile: saved ?? enviado },
           saveStatus,
+        ),
+      );
+    }
+
+    if (String(url).includes('/me/watched-matches')) {
+      return Promise.resolve(
+        jsonResponse(
+          historyStatus >= 400 ? { error: { code: 'INTERNAL_ERROR' } } : history,
+          historyStatus,
         ),
       );
     }
@@ -153,7 +167,7 @@ describe('ProfilePage: la carga', () => {
   it('anuncia que está cargando', () => {
     renderPage();
 
-    expect(screen.getByRole('status')).toHaveTextContent('Cargando tu perfil…');
+    expect(screen.getByText('Cargando tu perfil…')).toHaveAttribute('role', 'status');
   });
 
   it('consulta únicamente la Node API, con bearer', async () => {
@@ -394,5 +408,55 @@ describe('ProfilePage: teclado', () => {
 
     await user.tab();
     expect(guardar()).toHaveFocus();
+  });
+});
+
+describe('ProfilePage: historial de partidos vistos', () => {
+  const vistoBoca = {
+    match: {
+      id: 'a1111111-1111-4111-8111-111111111111',
+      homeTeam: 'Boca Juniors',
+      homeTeamId: BOCA,
+      awayTeam: 'River Plate',
+      awayTeamId: RIVER,
+      kickoffAt: '2026-10-10T21:00:00Z',
+      status: 'finished',
+    },
+    watchedAt: '2026-10-11T12:00:00.000Z',
+  };
+
+  it('muestra los vistos propios debajo del formulario, con el bearer de la sesión', async () => {
+    stubApi({ history: { items: [vistoBoca], nextCursor: null } });
+    renderPage();
+
+    const seccion = await screen.findByRole('region', { name: 'Partidos vistos' });
+
+    expect(
+      await within(seccion).findByRole('link', {
+        name: 'Ver partido: Boca Juniors vs. River Plate',
+      }),
+    ).toHaveAttribute('href', `/matches/${vistoBoca.match.id}`);
+
+    const pedido = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes('/me/watched-matches'),
+    );
+    expect(new Headers(pedido![1].headers).get('Authorization')).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('un fallo del historial no bloquea la edición del perfil', async () => {
+    stubApi({ historyStatus: 500 });
+    const { user } = renderPage();
+
+    const seccion = await screen.findByRole('region', { name: 'Partidos vistos' });
+    expect(await within(seccion).findByRole('alert')).toHaveTextContent(
+      'No pudimos cargar tu historial',
+    );
+
+    await user.clear(nombre());
+    await user.type(nombre(), 'Martu');
+    await user.click(guardar());
+
+    expect(await screen.findByText('Guardamos tu perfil.')).toBeInTheDocument();
+    expect(guardado()).toMatchObject({ displayName: 'Martu' });
   });
 });
