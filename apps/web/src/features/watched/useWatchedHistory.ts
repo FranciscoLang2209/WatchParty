@@ -80,11 +80,13 @@ function agregarPagina(
  * Historial propio de partidos vistos, paginado (WAT-218). Sólo habla con la
  * Node API con el bearer de la sesión: nunca consulta Supabase directo.
  *
- * Pide la primera página al montarse y cada vez que cambia `userId`. Un
- * resultado de otro usuario nunca se muestra: se presenta como carga hasta que
- * llega el del usuario actual, y la respuesta de la sesión anterior se cancela
- * y se descarta. Renovar el token del mismo usuario conserva la lista: la
- * página siguiente se pide con el token vigente. Sin sesión no pide nada.
+ * Pide la primera página al montarse y cada vez que cambia `userId`. Cambiar
+ * de usuario descarta todo lo anterior —lista, cursor y respuestas en
+ * camino—, aunque se vuelva a un usuario ya visto: su estado viejo no
+ * reaparece. Renovar el token mientras carga la primera página la vuelve a
+ * pedir con el token nuevo y descarta la del viejo (p. ej. un 401 tardío);
+ * renovarlo con la lista ya cargada la conserva, y la página siguiente se
+ * pide con el token vigente. Sin sesión no pide nada.
  */
 export function useWatchedHistory(
   userId: string | null,
@@ -92,27 +94,31 @@ export function useWatchedHistory(
 ): UseWatchedHistory {
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
-  // El token vigente sin que su renovación vuelva a pedir la primera página.
-  const token = useRef(accessToken);
+  const [usuarioPrevio, setUsuarioPrevio] = useState(userId);
+  // Usuario cuya primera página ya llegó: renovar el token no la vuelve a pedir.
+  const cargada = useRef<string | null>(null);
   // Hay un pedido de página en curso: bloquea un segundo pedido aunque todavía
   // no se haya vuelto a renderizar.
   const cargandoMas = useRef(false);
   const pedidoDeMas = useRef<AbortController | null>(null);
-  const conToken = accessToken !== null;
+
+  // Cambiar de usuario invalida el estado en el mismo render, antes de que se
+  // pueda mostrar o usar su cursor: ni siquiera vuelve el de un usuario previo.
+  if (usuarioPrevio !== userId) {
+    setUsuarioPrevio(userId);
+    setEstado({ status: 'loading' });
+  }
 
   useEffect(() => {
-    token.current = accessToken;
-  }, [accessToken]);
-
-  useEffect(() => {
-    if (userId === null || token.current === null) return;
+    if (userId === null || accessToken === null || cargada.current === userId) return;
 
     const controller = new AbortController();
 
-    listWatchedHistoryPage(token.current, { signal: controller.signal })
+    listWatchedHistoryPage(accessToken, { signal: controller.signal })
       .then((page) => {
         if (controller.signal.aborted) return;
 
+        cargada.current = userId;
         setEstado({
           status: 'ready',
           userId,
@@ -123,14 +129,15 @@ export function useWatchedHistory(
         });
       })
       .catch((error: unknown) => {
-        // Una respuesta descartada por desmontaje o cambio de sesión no se anuncia.
+        // Una respuesta descartada por desmontaje, cambio de usuario o
+        // renovación del token no se anuncia.
         if (controller.signal.aborted || isCancelled(error)) return;
 
         setEstado({ status: 'error', userId, ...toFallo(error) });
       });
 
     return () => controller.abort();
-  }, [userId, conToken, intento]);
+  }, [userId, accessToken, intento]);
 
   // Al salir, cambiar de usuario o renovarse el token se cancela la página que
   // estuviera en camino: su respuesta (p. ej. un 401 del token viejo) ya no
@@ -151,7 +158,17 @@ export function useWatchedHistory(
     [userId, accessToken],
   );
 
+  // Volver a un usuario anterior (A → B → A) pide su primera página de nuevo.
+  useEffect(
+    () => () => {
+      cargada.current = null;
+    },
+    [userId],
+  );
+
   const retry = useCallback(() => {
+    // Un 401 de la página siguiente también se reintenta desde la primera.
+    cargada.current = null;
     setIntento((valor) => valor + 1);
     setEstado({ status: 'loading' });
   }, []);

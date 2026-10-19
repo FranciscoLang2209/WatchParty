@@ -307,6 +307,83 @@ describe('useWatchedHistory', () => {
     });
   });
 
+  it('renovar el token mientras carga la primera página descarta un 401 tardío del token viejo', async () => {
+    const vieja = deferred();
+    listMock
+      .mockReturnValueOnce(vieja.promise)
+      .mockResolvedValueOnce({ items: [item(1)], nextCursor: null });
+
+    const { result, rerender } = render();
+
+    rerender({ userId: USER_A, accessToken: 'token-renovado' });
+    expect(signalOf(0).aborted).toBe(true);
+    expect(listMock).toHaveBeenLastCalledWith('token-renovado', {
+      signal: expect.any(AbortSignal),
+    });
+    await waitFor(() => expect(result.current.state).toMatchObject({ items: [item(1)] }));
+
+    await act(async () => vieja.reject(new WatchedApiError('unauthorized', 'La sesión venció.')));
+    expect(result.current.state).toMatchObject({ status: 'ready', items: [item(1)] });
+  });
+
+  it('A → B → A no recupera la lista ni el cursor anteriores de A', async () => {
+    const deA = deferred();
+    listMock
+      .mockResolvedValueOnce({ items: [item(1)], nextCursor: cursor(1) })
+      .mockResolvedValueOnce({ items: [item(9)], nextCursor: null })
+      .mockReturnValueOnce(deA.promise);
+
+    const { result, rerender } = render();
+    await waitFor(() => expect(result.current.state).toMatchObject({ items: [item(1)] }));
+
+    rerender({ userId: USER_B, accessToken: 'token-b' });
+    await waitFor(() => expect(result.current.state).toMatchObject({ items: [item(9)] }));
+
+    rerender({ userId: USER_A, accessToken: TOKEN });
+    expect(result.current.state).toEqual({ status: 'loading' });
+    expect(listMock).toHaveBeenLastCalledWith(TOKEN, { signal: expect.any(AbortSignal) });
+
+    // El cursor viejo de A no sirve para pedir más mientras llega la consulta nueva.
+    act(() => result.current.loadMore());
+    expect(listMock).toHaveBeenCalledTimes(3);
+
+    await act(async () => deA.resolve({ items: [item(2)], nextCursor: null }));
+    expect(result.current.state).toMatchObject({ items: [item(2)], hasMore: false });
+  });
+
+  it('volver a A antes de que cargue B vuelve a pedir la primera página de A', async () => {
+    listMock
+      .mockResolvedValueOnce({ items: [item(1)], nextCursor: null })
+      .mockReturnValueOnce(deferred().promise)
+      .mockResolvedValueOnce({ items: [item(3)], nextCursor: null });
+
+    const { result, rerender } = render();
+    await waitFor(() => expect(result.current.state).toMatchObject({ items: [item(1)] }));
+
+    rerender({ userId: USER_B, accessToken: 'token-b' });
+    rerender({ userId: USER_A, accessToken: TOKEN });
+
+    expect(listMock).toHaveBeenCalledTimes(3);
+    await waitFor(() => expect(result.current.state).toMatchObject({ items: [item(3)] }));
+  });
+
+  it('reintentar tras un 401 de la página siguiente vuelve a pedir la primera', async () => {
+    listMock
+      .mockResolvedValueOnce({ items: [item(1)], nextCursor: cursor(1) })
+      .mockRejectedValueOnce(new WatchedApiError('unauthorized', 'La sesión venció.'))
+      .mockResolvedValueOnce({ items: [item(1)], nextCursor: null });
+
+    const { result } = render();
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.state).toMatchObject({ expired: true }));
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.state).toMatchObject({ hasMore: false }));
+    expect(listMock).toHaveBeenLastCalledWith(TOKEN, { signal: expect.any(AbortSignal) });
+  });
+
   it('desmontar cancela la consulta en curso', async () => {
     listMock.mockReturnValueOnce(deferred().promise);
 
