@@ -9,6 +9,8 @@ interface EmbeddedMatchRow {
   id: string;
   kickoff_at: string;
   status: string;
+  home_score: number | null;
+  away_score: number | null;
   home_team: { id: string; name: string } | null;
   away_team: { id: string; name: string } | null;
 }
@@ -122,6 +124,8 @@ function row(userId: string, n: number, createdAt: string, status = 'finished'):
       id: matchId(n),
       kickoff_at: '2026-10-05T21:00:00+00:00',
       status,
+      home_score: 2,
+      away_score: 1,
       home_team: { id: `home-${n}`, name: `Local ${n}` },
       away_team: { id: `away-${n}`, name: `Visitante ${n}` },
     },
@@ -159,6 +163,7 @@ describe('SupabaseWatchedMatchStore.listHistoryPage()', () => {
           awayTeamId: 'away-1',
           kickoffAt: '2026-10-05T21:00:00.000Z',
           status: 'finished',
+          score: { home: 2, away: 1 },
         },
         watchedAt: '2026-10-10T12:00:00.123Z',
       },

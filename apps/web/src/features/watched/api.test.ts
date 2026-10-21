@@ -244,6 +244,7 @@ describe('listWatchedHistoryPage', () => {
     awayTeamId: 't2',
     kickoffAt: '2026-10-10T21:00:00Z',
     status: 'finished',
+    score: { home: 3, away: 0 },
   };
   const ITEM = { match: MATCH, watchedAt: '2026-10-11T12:00:00.000Z' };
   const CURSOR = { watchedAt: '2026-10-11T12:00:00.123456+00:00', matchId: MATCH_ID };

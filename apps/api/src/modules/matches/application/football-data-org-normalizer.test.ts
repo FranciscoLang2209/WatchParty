@@ -15,7 +15,36 @@ const VALID_MATCH = {
   season: { id: 2502, startDate: '2026-08-21', endDate: '2027-05-30' },
   homeTeam: { id: 57, name: 'Arsenal FC' },
   awayTeam: { id: 341, name: 'Leeds United FC' },
+  // Forma real de un partido sin jugar (verificada el 19/10/2026).
+  score: {
+    winner: null,
+    duration: 'REGULAR',
+    fullTime: { home: null, away: null },
+    halfTime: { home: null, away: null },
+  },
 };
+
+// Forma real de un partido jugado (Everton 0–2 Chelsea, 17/10/2026).
+function playedMatch(home: unknown, away: unknown) {
+  return {
+    ...VALID_MATCH,
+    status: 'FINISHED',
+    score: {
+      winner: 'AWAY_TEAM',
+      duration: 'REGULAR',
+      fullTime: { home, away },
+      halfTime: { home: 0, away: 0 },
+    },
+  };
+}
+
+function firstScore(rawMatch: unknown) {
+  const result = normalizeFootballDataOrgMatches(successOutcome({ matches: [rawMatch] }));
+  if (result.kind !== 'success' || result.fixtures.length !== 1) {
+    throw new Error('Se esperaba exactamente un fixture normalizado.');
+  }
+  return result.fixtures[0]!.score;
+}
 
 describe('normalizeFootballDataOrgMatches', () => {
   it('normaliza un partido válido con fecha ISO UTC y estado mapeado', () => {
@@ -33,6 +62,7 @@ describe('normalizeFootballDataOrgMatches', () => {
           season: '2502',
           kickoffAt: '2026-10-10T11:30:00.000Z',
           status: 'scheduled',
+          score: null,
         },
       ],
       skipped: [],
@@ -63,6 +93,29 @@ describe('normalizeFootballDataOrgMatches', () => {
       expect(result.kind).toBe('success');
       expect(result.kind === 'success' && result.fixtures[0]?.status).toBe(expectedStatus);
     }
+  });
+
+  it('toma el marcador de score.fullTime', () => {
+    expect(firstScore(playedMatch(0, 2))).toEqual({ home: 0, away: 2 });
+  });
+
+  it('un 0–0 confirmado por el proveedor es un marcador, no la ausencia de uno', () => {
+    expect(firstScore(playedMatch(0, 0))).toEqual({ home: 0, away: 0 });
+  });
+
+  it('un partido sin jugar no tiene marcador', () => {
+    expect(firstScore(VALID_MATCH)).toBeNull();
+  });
+
+  it.each([
+    ['falta score', { ...VALID_MATCH, score: undefined }],
+    ['falta fullTime', { ...VALID_MATCH, score: { winner: null } }],
+    ['falta un gol', playedMatch(1, null)],
+    ['gol negativo', playedMatch(-1, 0)],
+    ['gol decimal', playedMatch(1.5, 0)],
+    ['gol como texto', playedMatch('1', 0)],
+  ])('un marcador incompleto o inválido (%s) se importa sin marcador, nunca 0–0', (_, raw) => {
+    expect(firstScore(raw)).toBeNull();
   });
 
   it('un estado desconocido se omite con motivo explícito, sin inventar un mapeo', () => {

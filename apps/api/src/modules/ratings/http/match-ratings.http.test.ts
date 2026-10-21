@@ -57,6 +57,7 @@ function buildTestApp(options: Setup = {}) {
           awayTeamId: 'a',
           kickoffAt: '2026-10-01T20:00:00Z',
           status: options.status ?? 'finished',
+          score: null,
         };
   const catalog: MatchCatalog = { list: vi.fn(), findById: vi.fn(async () => match) };
   const watchedStore: WatchedMatchStore = {

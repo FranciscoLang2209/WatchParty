@@ -1,4 +1,4 @@
-import type { MatchStatus } from '../domain/match.js';
+import type { MatchScore, MatchStatus } from '../domain/match.js';
 import type { NormalizedMatchFixture } from '../domain/normalized-match-fixture.js';
 import type { FootballDataOrgFetchOutcome } from '../infrastructure/football-data-org-client.js';
 
@@ -60,6 +60,29 @@ function isPositiveInteger(value: unknown): value is number {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim() !== '';
+}
+
+function isGoalCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Marcador del proveedor: `score.fullTime` (verificado contra la API real,
+ * ver docs/integrations/football-data-org-coverage.md). Un partido sin jugar
+ * llega con `{ home: null, away: null }`. Si falta cualquiera de los dos
+ * goles, o no es un entero válido, no hay marcador: se devuelve `null` en vez
+ * de completar con 0, y el partido se importa igual.
+ */
+function normalizeScore(rawScore: unknown): MatchScore | null {
+  if (typeof rawScore !== 'object' || rawScore === null) return null;
+
+  const fullTime = (rawScore as Record<string, unknown>).fullTime;
+  if (typeof fullTime !== 'object' || fullTime === null) return null;
+
+  const { home, away } = fullTime as Record<string, unknown>;
+  if (!isGoalCount(home) || !isGoalCount(away)) return null;
+
+  return { home, away };
 }
 
 const ISO_DATE_TIME_PATTERN =
@@ -165,6 +188,7 @@ function normalizeMatch(
       season: String(externalSeasonId),
       kickoffAt,
       status,
+      score: normalizeScore(record.score),
     },
   };
 }

@@ -52,6 +52,7 @@ const MATCH: Match = {
   awayTeamId: 'team-fc-barcelona',
   kickoffAt: '2026-09-06T21:00:00.000Z',
   status: 'scheduled',
+  score: null,
 };
 
 describe('GET /matches/:matchId', () => {
@@ -70,7 +71,16 @@ describe('GET /matches/:matchId', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ match: MATCH });
     expect(Object.keys(response.body.match).sort()).toEqual(
-      ['id', 'homeTeam', 'homeTeamId', 'awayTeam', 'awayTeamId', 'kickoffAt', 'status'].sort(),
+      [
+        'id',
+        'homeTeam',
+        'homeTeamId',
+        'awayTeam',
+        'awayTeamId',
+        'kickoffAt',
+        'status',
+        'score',
+      ].sort(),
     );
   });
 

@@ -6,6 +6,7 @@ import {
   type MatchEnvelope,
   type MatchesEnvelope,
   type MatchesErrorKind,
+  type MatchScore,
 } from './types';
 
 /**
@@ -67,6 +68,24 @@ async function toApiError(response: Response): Promise<MatchesApiError> {
   return fail(mapped ?? kindFromStatus(response.status));
 }
 
+function isGoalCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * `null` es «sin resultado». Una API anterior que no envía el campo también
+ * se lee como sin resultado. `undefined` señala un marcador con forma
+ * inválida: el partido no cumple el contrato.
+ */
+function parseScore(value: unknown): MatchScore | null | undefined {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'object') return undefined;
+
+  const { home, away } = value as Record<string, unknown>;
+
+  return isGoalCount(home) && isGoalCount(away) ? { home, away } : undefined;
+}
+
 /**
  * Se queda con los campos canónicos y descarta cualquier extra. `null` si no
  * es un partido válido: no lanza, así otra feature que recibe partidos
@@ -76,10 +95,9 @@ async function toApiError(response: Response): Promise<MatchesApiError> {
 export function parseMatch(value: unknown): Match | null {
   if (typeof value !== 'object' || value === null) return null;
 
-  const { id, homeTeam, homeTeamId, awayTeam, awayTeamId, kickoffAt, status } = value as Record<
-    string,
-    unknown
-  >;
+  const { id, homeTeam, homeTeamId, awayTeam, awayTeamId, kickoffAt, status, score } =
+    value as Record<string, unknown>;
+  const parsedScore = parseScore(score);
 
   if (
     typeof id !== 'string' ||
@@ -88,12 +106,22 @@ export function parseMatch(value: unknown): Match | null {
     typeof awayTeam !== 'string' ||
     typeof awayTeamId !== 'string' ||
     typeof kickoffAt !== 'string' ||
-    !isMatchStatus(status)
+    !isMatchStatus(status) ||
+    parsedScore === undefined
   ) {
     return null;
   }
 
-  return { id, homeTeam, homeTeamId, awayTeam, awayTeamId, kickoffAt, status };
+  return {
+    id,
+    homeTeam,
+    homeTeamId,
+    awayTeam,
+    awayTeamId,
+    kickoffAt,
+    status,
+    score: parsedScore,
+  };
 }
 
 function toMatch(value: unknown): Match {

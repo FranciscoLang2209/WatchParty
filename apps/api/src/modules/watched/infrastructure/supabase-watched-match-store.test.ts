@@ -96,6 +96,7 @@ function makeCatalog(): MatchCatalog {
     awayTeamId: 'team-river-plate',
     kickoffAt: '2026-09-20T21:00:00.000Z',
     status: 'scheduled',
+    score: null,
   };
 
   return {

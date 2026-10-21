@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { cn } from '../../lib/utils';
 import { formatKickoff, formatKickoffDate, matchStatusLabel } from '../matches/format';
+import { MatchResult } from '../matches/MatchResult';
 import type { WatchedHistoryItem } from './types';
 import { useWatchedHistory } from './useWatchedHistory';
 
@@ -17,8 +18,8 @@ interface WatchedHistoryProps {
 const MENSAJE_VACIO = 'Todavía no marcaste partidos como vistos.';
 
 /**
- * Un partido del historial. El resultado disponible es el estado del partido:
- * el contrato de la API no trae marcador.
+ * Un partido del historial: el marcador real cuando existe (WAT-230) y el
+ * estado del partido como dato aparte.
  */
 function HistoryItem({ item }: { item: WatchedHistoryItem }) {
   const { match, watchedAt } = item;
@@ -30,6 +31,8 @@ function HistoryItem({ item }: { item: WatchedHistoryItem }) {
       <h3 className="min-w-0 text-base leading-snug font-semibold break-words">
         {match.homeTeam} <span className="text-muted-foreground">vs.</span> {match.awayTeam}
       </h3>
+
+      <MatchResult match={match} />
 
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
         <p className="min-w-0 text-sm text-muted-foreground">{formatKickoff(match.kickoffAt)}</p>

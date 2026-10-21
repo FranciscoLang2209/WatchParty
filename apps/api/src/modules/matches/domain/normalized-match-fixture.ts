@@ -1,4 +1,4 @@
-import type { MatchStatus } from './match.js';
+import type { MatchScore, MatchStatus } from './match.js';
 
 /**
  * Referencia a un equipo dentro de un fixture normalizado: solo lo mínimo
@@ -37,4 +37,9 @@ export interface NormalizedMatchFixture {
   /** Fecha y hora de inicio en formato ISO 8601 UTC, p. ej. "2026-09-06T21:00:00Z". */
   kickoffAt: string;
   status: MatchStatus;
+  /**
+   * Marcador del proveedor, o `null` si no lo informó completo. Un `null` no
+   * borra un marcador ya guardado (ver `upsert_match_fixture`).
+   */
+  score: MatchScore | null;
 }

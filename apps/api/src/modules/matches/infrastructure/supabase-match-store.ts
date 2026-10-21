@@ -22,7 +22,7 @@ import { SupabaseProviderQuotaStore } from './supabase-provider-quota-store.js';
 // embeba el partido en una sola consulta con el mismo select y el mismo
 // mapeo del catálogo, sin una segunda representación de Match.
 export const MATCH_SELECT_WITH_TEAMS =
-  'id, kickoff_at, status, home_team:teams!matches_home_team_id_fkey(id, name), away_team:teams!matches_away_team_id_fkey(id, name)';
+  'id, kickoff_at, status, home_score, away_score, home_team:teams!matches_home_team_id_fkey(id, name), away_team:teams!matches_away_team_id_fkey(id, name)';
 
 const MATCH_STATUSES: readonly MatchStatus[] = [
   'scheduled',
@@ -51,6 +51,8 @@ export interface MatchRowWithTeams {
   id: string;
   kickoff_at: string;
   status: string;
+  home_score: number | null;
+  away_score: number | null;
   home_team: EmbeddedTeam | null;
   away_team: EmbeddedTeam | null;
 }
@@ -76,6 +78,12 @@ export function toMatch(row: MatchRowWithTeams): Match {
     awayTeamId: row.away_team.id,
     kickoffAt: new Date(row.kickoff_at).toISOString(),
     status: row.status,
+    // La base garantiza que los dos goles están juntos o ninguno
+    // (matches_score_complete).
+    score:
+      typeof row.home_score === 'number' && typeof row.away_score === 'number'
+        ? { home: row.home_score, away: row.away_score }
+        : null,
   };
 }
 
@@ -146,6 +154,8 @@ export class SupabaseMatchStore implements MatchStore {
       p_season: fixture.season,
       p_kickoff_at: fixture.kickoffAt,
       p_status: fixture.status,
+      p_home_score: fixture.score?.home ?? null,
+      p_away_score: fixture.score?.away ?? null,
     });
 
     if (error) {

@@ -261,6 +261,9 @@ function toNormalizedMatchFixture(fixture: NormalizedSportsFixture): NormalizedM
     season: String(fixture.season),
     kickoffAt: fixture.kickoffAt,
     status: fixture.status,
+    // El marcador de API-Football no se verificó (WAT-230 cubre el proveedor
+    // activo, football-data.org). `null` no borra uno ya guardado.
+    score: null,
   };
 }
 
