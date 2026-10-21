@@ -13,7 +13,9 @@ alter table matches
     add constraint matches_score_not_negative check (home_score >= 0 and away_score >= 0);
 
 -- Nueva firma de upsert_match_fixture: suma los goles. Se elimina la anterior
--- para que no queden dos sobrecargas que PostgREST no sabría elegir.
+-- para que no queden dos sobrecargas que PostgREST no sabría elegir. Los goles
+-- tienen DEFAULT NULL para que un sync con el código anterior (diez argumentos)
+-- siga guardando partidos durante el despliegue o tras un rollback.
 drop function if exists upsert_match_fixture(
     text, text, text, text, text, text, text, text, timestamptz, text
     );
@@ -29,8 +31,8 @@ create or replace function upsert_match_fixture(
   p_season text,
   p_kickoff_at timestamptz,
   p_status text,
-  p_home_score smallint,
-  p_away_score smallint
+  p_home_score smallint default null,
+  p_away_score smallint default null
 ) returns table(match_id uuid, was_inserted boolean)
 language plpgsql
 as $$

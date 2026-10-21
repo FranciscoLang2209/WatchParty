@@ -281,6 +281,33 @@ async function checkMatchScore(
     detail: partial.error ? partial.error.message : scoreLabel(afterPartial),
   });
 
+  // Compatibilidad de despliegue: un sync con el código anterior a WAT-230
+  // llama con diez argumentos, sin goles. Debe seguir guardando el partido y
+  // no tocar el marcador confirmado.
+  const legacy = await adminClient.rpc('upsert_match_fixture', {
+    p_provider: PROVIDER,
+    p_external_id: EXTERNAL_MATCH_ID,
+    p_home_team_external_id: HOME_TEAM_EXTERNAL_ID,
+    p_home_team_name: 'Equipo Verificación A',
+    p_away_team_external_id: AWAY_TEAM_EXTERNAL_ID,
+    p_away_team_name: 'Equipo Verificación B',
+    p_competition_external_id: 'verify-competition',
+    p_season: '2026',
+    p_kickoff_at: new Date().toISOString(),
+    p_status: 'finished',
+  });
+  const afterLegacy = await store.findById(matchId);
+  results.push({
+    label:
+      'marcador: un sync sin parámetros de goles (cliente anterior) sigue guardando el partido',
+    passed:
+      legacy.error == null &&
+      afterLegacy?.status === 'finished' &&
+      afterLegacy.score?.home === 2 &&
+      afterLegacy.score.away === 1,
+    detail: legacy.error ? legacy.error.message : scoreLabel(afterLegacy),
+  });
+
   const matchCount = await adminClient
     .from('matches')
     .select('id', { count: 'exact', head: true })
