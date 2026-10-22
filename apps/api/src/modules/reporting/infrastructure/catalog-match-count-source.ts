@@ -174,6 +174,18 @@ export interface CatalogMatchCountDeps {
   env?: NodeJS.ProcessEnv;
   createClient?: CatalogSqlClientFactory;
   now?: () => Date;
+  /** Reloj monotónico en milisegundos, único origen de la latencia de la consulta. */
+  monotonicMs?: () => number;
+}
+
+/**
+ * Lo que devuelve una lectura del catálogo: el conteo y cuánto tardó la
+ * consulta que lo trajo (`catalog_query_latency`, en milisegundos).
+ */
+export interface CatalogQueryRead {
+  count: CatalogMatchCount;
+  /** Desde antes de enviar la consulta hasta recibir su resultado; no incluye la conexión. */
+  queryDurationMs: number;
 }
 
 function sqlState(error: unknown): string | undefined {
@@ -223,20 +235,25 @@ function parseCount(rows: unknown[]): number {
 }
 
 /**
- * Cantidad de partidos distintos del catálogo persistido al corte `cutoff`
- * (`catalog_match_count`, unidad `{match}`), leída con el usuario de solo
- * lectura del reporter por una conexión TLS verificada.
+ * Lee el catálogo UNA vez, con la consulta real del conteo, y mide con el reloj
+ * monotónico cuánto tardó esa consulta hasta recibir su resultado. Es la base de
+ * `readCatalogMatchCount` y de `catalog_query_latency`: ninguna ejecuta una
+ * segunda consulta.
  *
- * Solo hay dos desenlaces: un conteo real o un `CatalogMatchCountSourceError`
- * con su motivo. Un fallo de permisos, de configuración o de la fuente nunca
- * se convierte en cero: cero solo se devuelve si la consulta tuvo éxito y
- * respondió cero.
+ * La duración solo existe si la consulta terminó y su resultado es válido: ante
+ * cualquier fallo (configuración, conexión, permisos, consulta o resultado) se
+ * lanza el `CatalogMatchCountSourceError` y no se informa ninguna latencia.
  */
-export async function readCatalogMatchCount(
+export async function readCatalogMatchCountWithLatency(
   cutoff: Date,
   deps: CatalogMatchCountDeps = {},
-): Promise<CatalogMatchCount> {
-  const { env = process.env, createClient = createPgClient, now = () => new Date() } = deps;
+): Promise<CatalogQueryRead> {
+  const {
+    env = process.env,
+    createClient = createPgClient,
+    now = () => new Date(),
+    monotonicMs = () => performance.now(),
+  } = deps;
 
   const config = readCatalogSourceConfig(env);
 
@@ -256,14 +273,21 @@ export async function readCatalogMatchCount(
     }
 
     let rows: unknown[];
+    let queryDurationMs: number;
 
     try {
+      const startedMs = monotonicMs();
+
       ({ rows } = await client.query(COUNT_SQL, [cutoff.toISOString()]));
+      queryDurationMs = monotonicMs() - startedMs;
     } catch (error) {
       throw classify(error, 'query-failed');
     }
 
-    return { value: parseCount(rows), unit: CATALOG_MATCH_COUNT_UNIT };
+    return {
+      count: { value: parseCount(rows), unit: CATALOG_MATCH_COUNT_UNIT },
+      queryDurationMs,
+    };
   } finally {
     try {
       await client.end();
@@ -271,4 +295,21 @@ export async function readCatalogMatchCount(
       // Cerrar es best-effort: no debe tapar el resultado ni el motivo del fallo.
     }
   }
+}
+
+/**
+ * Cantidad de partidos distintos del catálogo persistido al corte `cutoff`
+ * (`catalog_match_count`, unidad `{match}`), leída con el usuario de solo
+ * lectura del reporter por una conexión TLS verificada.
+ *
+ * Solo hay dos desenlaces: un conteo real o un `CatalogMatchCountSourceError`
+ * con su motivo. Un fallo de permisos, de configuración o de la fuente nunca
+ * se convierte en cero: cero solo se devuelve si la consulta tuvo éxito y
+ * respondió cero.
+ */
+export async function readCatalogMatchCount(
+  cutoff: Date,
+  deps: CatalogMatchCountDeps = {},
+): Promise<CatalogMatchCount> {
+  return (await readCatalogMatchCountWithLatency(cutoff, deps)).count;
 }

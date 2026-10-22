@@ -13,6 +13,7 @@ function artifact(overrides: Partial<CollectionArtifact> = {}): CollectionArtifa
     results: [
       { kpi: 'catalog_match_count', kind: 'technical', unit: '{match}', value: 4210 },
       { kpi: 'health_response_latency', kind: 'technical', unit: 'ms', value: 312.456 },
+      { kpi: 'catalog_query_latency', kind: 'technical', unit: 'ms', value: 41.5 },
       { kpi: 'health_up', kind: 'health', unit: '1', value: 1 },
       { kpi: 'auth_guard_up', kind: 'health', unit: '1', value: 1 },
       { kpi: 'report_collection_duration', kind: 'technical', unit: 's', value: 1.591 },
@@ -30,7 +31,7 @@ function parsed(files: Record<string, string>, name: string) {
   return JSON.parse(files[name]!) as Record<string, unknown>;
 }
 
-describe('runReport: cinco fuentes válidas', () => {
+describe('runReport: todas las fuentes válidas', () => {
   it('sale con 0 y deja el JSON del lote, el corte T y el resultado', async () => {
     const { files, exitCode } = await run(artifact());
 
@@ -42,7 +43,7 @@ describe('runReport: cinco fuentes válidas', () => {
     const { files } = await run(artifact());
     const rows = JSON.parse(files[PAYLOAD_FILE]!) as Record<string, unknown>[];
 
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(6);
 
     for (const row of rows) {
       expect(Object.keys(row)).toEqual(['kpi_id', 'date', 'env', 'value', 'run_id']);
@@ -107,7 +108,7 @@ describe('runReport: falta de fuentes = fallo visible, pero los archivos se cons
 
     expect(exitCode).toBe(1);
     expect(Object.keys(files).sort()).toEqual([ARCHIVE_FILE, PAYLOAD_FILE, RESULT_FILE].sort());
-    expect(JSON.parse(files[PAYLOAD_FILE]!)).toHaveLength(4);
+    expect(JSON.parse(files[PAYLOAD_FILE]!)).toHaveLength(5);
   });
 
   it('el resultado y el archivo conservan el motivo y marcan el fallo visible', async () => {
@@ -130,6 +131,7 @@ describe('runReport: falta de fuentes = fallo visible, pero los archivos se cons
         omissions: [
           { kpi: 'catalog_match_count', reason: 'config-missing' },
           { kpi: 'health_response_latency', reason: 'api-config-missing' },
+          { kpi: 'catalog_query_latency', reason: 'config-missing' },
           { kpi: 'health_up', reason: 'api-config-missing' },
           { kpi: 'auth_guard_up', reason: 'api-config-missing' },
           { kpi: 'report_collection_duration', reason: 'invalid-value' },
@@ -144,7 +146,7 @@ describe('runReport: falta de fuentes = fallo visible, pero los archivos se cons
 
     expect(result).toMatchObject({ ok: false, visible_failure: true });
     expect(result.issues).toEqual([{ row: null, code: 'empty-batch' }]);
-    expect(result.omissions).toHaveLength(5);
+    expect(result.omissions).toHaveLength(6);
     expect(result.omissions).toContainEqual({
       kpi_id: 'catalog_match_count',
       reason: 'config-missing',

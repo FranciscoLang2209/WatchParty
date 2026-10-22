@@ -7,7 +7,7 @@ import {
 } from './collect-kpis.js';
 import {
   CatalogMatchCountSourceError,
-  type CatalogMatchCount,
+  type CatalogQueryRead,
 } from '../infrastructure/catalog-match-count-source.js';
 import { KPI_CATALOG } from '../domain/kpi-catalog.js';
 import { OMISSION_REASONS, buildMeasurementBatch } from '../domain/measurement-batch.js';
@@ -23,9 +23,14 @@ interface Scenario {
   guardStatus?: number;
   guardError?: Error;
   guardMs?: number;
-  catalog?: () => Promise<CatalogMatchCount>;
+  catalog?: () => Promise<CatalogQueryRead>;
   catalogMs?: number;
   now?: Date;
+}
+
+/** Una lectura del catálogo: el conteo y cuánto tardó la consulta que lo trajo. */
+function catalogRead(value: number, queryDurationMs = 35.1234): CatalogQueryRead {
+  return { count: { value, unit: '{match}' }, queryDurationMs };
 }
 
 function setup(scenario: Scenario = {}) {
@@ -44,22 +49,22 @@ function setup(scenario: Scenario = {}) {
     return { status, text: async () => '' } as unknown as Response;
   });
 
-  const readCatalogMatchCount = vi.fn<CollectKpisDeps['readCatalogMatchCount']>(async () => {
+  const readCatalog = vi.fn<CollectKpisDeps['readCatalog']>(async () => {
     clockMs += scenario.catalogMs ?? 50;
-    return scenario.catalog ? scenario.catalog() : { value: 12, unit: '{match}' };
+    return scenario.catalog ? scenario.catalog() : catalogRead(12);
   });
 
   const nowFn = vi.fn(() => scenario.now ?? NOW);
 
   const deps: CollectKpisDeps = {
     apiBaseUrl: scenario.apiBaseUrl ?? { ok: true, baseUrl: BASE },
-    readCatalogMatchCount,
+    readCatalog,
     fetchFn,
     now: nowFn,
     monotonicMs: () => clockMs,
   };
 
-  return { deps, fetchFn, readCatalogMatchCount, nowFn };
+  return { deps, fetchFn, readCatalog, nowFn };
 }
 
 function valueOf(artifact: Awaited<ReturnType<typeof collectKpis>>, kpi: string) {
@@ -75,7 +80,7 @@ function timeoutError() {
 }
 
 describe('collectKpis: todas las fuentes válidas', () => {
-  it('devuelve los cinco KPIs con categoría, unidad y valores reales y finitos', async () => {
+  it('devuelve todos los KPIs del catálogo con tipo, unidad y valores reales y finitos', async () => {
     const { deps } = setup();
 
     const artifact = await collectKpis(deps);
@@ -84,6 +89,7 @@ describe('collectKpis: todas las fuentes válidas', () => {
     expect(artifact.results).toEqual([
       { kpi: 'catalog_match_count', kind: 'technical', unit: '{match}', value: 12 },
       { kpi: 'health_response_latency', kind: 'technical', unit: 'ms', value: 120 },
+      { kpi: 'catalog_query_latency', kind: 'technical', unit: 'ms', value: 35.123 },
       { kpi: 'health_up', kind: 'health', unit: '1', value: 1 },
       { kpi: 'auth_guard_up', kind: 'health', unit: '1', value: 1 },
       // 120 ms + 80 ms de sondeos + 50 ms de consulta SQL = 0,25 s.
@@ -93,7 +99,7 @@ describe('collectKpis: todas las fuentes válidas', () => {
   });
 
   it('sondea /health y /matches y consulta el catálogo al corte T', async () => {
-    const { deps, fetchFn, readCatalogMatchCount } = setup();
+    const { deps, fetchFn, readCatalog } = setup();
 
     const artifact = await collectKpis(deps);
 
@@ -101,8 +107,8 @@ describe('collectKpis: todas las fuentes válidas', () => {
       `${BASE}/health`,
       `${BASE}/matches`,
     ]);
-    expect(readCatalogMatchCount).toHaveBeenCalledTimes(1);
-    expect(readCatalogMatchCount.mock.calls[0]![0].toISOString()).toBe(artifact.cutoff);
+    expect(readCatalog).toHaveBeenCalledTimes(1);
+    expect(readCatalog.mock.calls[0]![0].toISOString()).toBe(artifact.cutoff);
   });
 
   it('no incluye datos personales ni la URL sondeada', async () => {
@@ -227,7 +233,7 @@ describe('collectKpis: auth_guard_up', () => {
 
 describe('collectKpis: catalog_match_count', () => {
   it('cero es un valor válido cuando la fuente respondió cero', async () => {
-    const { deps } = setup({ catalog: async () => ({ value: 0, unit: '{match}' }) });
+    const { deps } = setup({ catalog: async () => catalogRead(0) });
 
     expect(valueOf(await collectKpis(deps), 'catalog_match_count')).toBe(0);
   });
@@ -277,7 +283,7 @@ describe('collectKpis: catalog_match_count', () => {
     ['decimal', 1.5],
     ['Infinity', Number.POSITIVE_INFINITY],
   ])('un valor inválido (%s) se omite como invalid-value', async (_label, value) => {
-    const { deps } = setup({ catalog: async () => ({ value, unit: '{match}' }) });
+    const { deps } = setup({ catalog: async () => catalogRead(value) });
 
     const artifact = await collectKpis(deps);
 
@@ -326,7 +332,7 @@ describe('collectKpis: report_collection_duration', () => {
     const artifact = await collectKpis(deps);
 
     expect(artifact.results.map((result) => result.kpi)).toEqual(['report_collection_duration']);
-    expect(artifact.omissions).toHaveLength(4);
+    expect(artifact.omissions).toHaveLength(5);
   });
 
   it('un reloj monotónico que retrocede produce una duración inválida y se omite', async () => {
@@ -402,7 +408,7 @@ describe('collectKpis: catálogo y lote del reporter', () => {
     expect(batch.ok && batch.batch.date).toBe(artifact.localDate);
   });
 
-  it('con las cinco fuentes válidas, el artefacto arma un lote completo', async () => {
+  it('con todas las fuentes válidas, el artefacto arma un lote completo', async () => {
     const { deps } = setup();
 
     const artifact = await collectKpis(deps);
@@ -416,7 +422,7 @@ describe('collectKpis: catálogo y lote del reporter', () => {
     });
 
     expect(batch.ok).toBe(true);
-    expect(batch.ok && batch.batch.rows).toHaveLength(5);
+    expect(batch.ok && batch.batch.rows).toHaveLength(6);
     expect(batch.ok && batch.batch.complete).toBe(true);
   });
 
@@ -433,7 +439,7 @@ describe('collectKpis: catálogo y lote del reporter', () => {
       simulated: true,
     });
 
-    expect(batch.ok && batch.batch.rows).toHaveLength(4);
+    expect(batch.ok && batch.batch.rows).toHaveLength(5);
     expect(batch.ok && batch.batch.complete).toBe(false);
     expect(batch.ok && batch.batch.visible_failure).toBe(true);
     expect(batch.ok && batch.batch.omissions).toEqual([
@@ -448,7 +454,7 @@ describe('collectKpis: catálogo y lote del reporter', () => {
       { healthError: timeoutError(), guardError: new TypeError('fetch failed') },
       { healthStatus: 503 },
       { healthStatus: 404 },
-      { catalog: async () => ({ value: -1, unit: '{match}' }) },
+      { catalog: async () => catalogRead(-1) },
       {
         catalog: async () => {
           throw new Error('inesperado');
@@ -464,7 +470,7 @@ describe('collectKpis: catálogo y lote del reporter', () => {
           'invalid-result',
         ] as const
       ).map((reason) => ({
-        catalog: async (): Promise<CatalogMatchCount> => {
+        catalog: async (): Promise<CatalogQueryRead> => {
           throw new CatalogMatchCountSourceError(reason);
         },
       })),
@@ -482,5 +488,126 @@ describe('collectKpis: catálogo y lote del reporter', () => {
     for (const reason of reasons) {
       expect(OMISSION_REASONS as readonly string[]).toContain(reason);
     }
+  });
+});
+
+// `catalog_query_latency`: la duración de la consulta SQL del catálogo, que llega de la
+// misma lectura que el conteo (una sola consulta).
+describe('collectKpis: catalog_query_latency', () => {
+  it('toma la duración de la consulta del catálogo, redondeada a milisegundos con tres decimales', async () => {
+    const { deps } = setup({ catalog: async () => catalogRead(12, 41.123456) });
+
+    const artifact = await collectKpis(deps);
+
+    expect(artifact.results).toContainEqual({
+      kpi: 'catalog_query_latency',
+      kind: 'technical',
+      unit: 'ms',
+      value: 41.123,
+    });
+  });
+
+  it('no es la duración total del reporter: son dos KPIs con valores y unidades distintos', async () => {
+    // La consulta tarda 7,5 ms; el reporte entero tarda 250 ms (120 + 80 + 50).
+    const { deps } = setup({ catalog: async () => catalogRead(12, 7.5) });
+
+    const artifact = await collectKpis(deps);
+
+    expect(valueOf(artifact, 'catalog_query_latency')).toBe(7.5);
+    expect(valueOf(artifact, 'report_collection_duration')).toBe(0.25);
+  });
+
+  it('una consulta instantánea informa 0, que es una latencia válida', async () => {
+    const { deps } = setup({ catalog: async () => catalogRead(12, 0) });
+
+    expect(valueOf(await collectKpis(deps), 'catalog_query_latency')).toBe(0);
+  });
+
+  it('pide el catálogo una sola vez y con el corte T: una consulta alimenta los dos KPIs', async () => {
+    const { deps, readCatalog } = setup();
+
+    const artifact = await collectKpis(deps);
+
+    expect(readCatalog).toHaveBeenCalledTimes(1);
+    expect(readCatalog.mock.calls[0]![0].toISOString()).toBe(artifact.cutoff);
+    expect(valueOf(artifact, 'catalog_match_count')).toBe(12);
+    expect(valueOf(artifact, 'catalog_query_latency')).toBeDefined();
+  });
+
+  it.each([
+    'config-missing',
+    'config-invalid',
+    'connection-failed',
+    'permission-denied',
+    'query-failed',
+    'invalid-result',
+  ] as const)(
+    'si la fuente falla (%s) se omite la latencia con el mismo motivo que el conteo, sin valor',
+    async (reason) => {
+      const { deps } = setup({
+        catalog: async () => {
+          throw new CatalogMatchCountSourceError(reason);
+        },
+      });
+
+      const artifact = await collectKpis(deps);
+
+      expect(valueOf(artifact, 'catalog_query_latency')).toBeUndefined();
+      expect(reasonOf(artifact, 'catalog_query_latency')).toBe(reason);
+      expect(reasonOf(artifact, 'catalog_match_count')).toBe(reason);
+    },
+  );
+
+  it('un error inesperado omite la latencia sin filtrar su mensaje', async () => {
+    const { deps } = setup({
+      catalog: async () => {
+        throw new Error('password=secreta host=db.interno');
+      },
+    });
+
+    const artifact = await collectKpis(deps);
+
+    expect(reasonOf(artifact, 'catalog_query_latency')).toBe('unexpected-error');
+    expect(JSON.stringify(artifact)).not.toContain('secreta');
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['negativa', -1],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])(
+    'una duración inválida (%s) se omite como invalid-value y no afecta al conteo',
+    async (_label, durationMs) => {
+      const { deps } = setup({ catalog: async () => catalogRead(12, durationMs) });
+
+      const artifact = await collectKpis(deps);
+
+      expect(valueOf(artifact, 'catalog_query_latency')).toBeUndefined();
+      expect(reasonOf(artifact, 'catalog_query_latency')).toBe('invalid-value');
+      expect(valueOf(artifact, 'catalog_match_count')).toBe(12);
+    },
+  );
+
+  it('un conteo inválido no invalida la latencia de una consulta que sí terminó', async () => {
+    const { deps } = setup({ catalog: async () => catalogRead(-1, 20) });
+
+    const artifact = await collectKpis(deps);
+
+    expect(reasonOf(artifact, 'catalog_match_count')).toBe('invalid-value');
+    expect(valueOf(artifact, 'catalog_query_latency')).toBe(20);
+  });
+
+  it('un fallo del catálogo no arrastra a los sondeos HTTP', async () => {
+    const { deps } = setup({
+      catalog: async () => {
+        throw new CatalogMatchCountSourceError('permission-denied');
+      },
+    });
+
+    const artifact = await collectKpis(deps);
+
+    expect(valueOf(artifact, 'health_up')).toBe(1);
+    expect(valueOf(artifact, 'health_response_latency')).toBe(120);
+    expect(valueOf(artifact, 'auth_guard_up')).toBe(1);
   });
 });

@@ -28,9 +28,10 @@ interface KpiDefinition {
 }
 
 /**
- * Catálogo inicial: exactamente los cinco KPIs con fuentes verificadas (ADR-05
- * rev. 2.0). Ampliarlo a los diez objetivo es una decisión posterior; el orden
- * es el de los artefactos.
+ * Catálogo: los KPIs con fuentes verificadas (ADR-05 rev. 2.0). Ampliarlo hasta
+ * los diez objetivo se hace de a uno, y cada KPI nuevo debe registrarse además
+ * en el catálogo central de cada ambiente antes de publicar. El orden es el de
+ * los artefactos.
  */
 export const KPI_CATALOG = [
   {
@@ -47,6 +48,14 @@ export const KPI_CATALOG = [
     unit: 'ms',
     description:
       'Tiempo monotónico, en milisegundos, de GET /health hasta recibir el cuerpo de una respuesta 200; sin éxito se omite. Observa la latencia externa del backend.',
+    rule: { min: 0 },
+  },
+  {
+    id: 'catalog_query_latency',
+    kind: 'technical',
+    unit: 'ms',
+    description:
+      'Tiempo monotónico, en milisegundos, de la consulta SQL del catálogo hasta recibir su resultado, sin contar la conexión; solo si la consulta termina correctamente, si no se omite. Observa el tiempo de acceso a datos.',
     rule: { min: 0 },
   },
   {

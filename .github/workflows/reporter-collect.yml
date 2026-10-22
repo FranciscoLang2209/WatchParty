@@ -1,6 +1,6 @@
 name: Reporter collect
 
-# Colección diaria de los cinco KPIs del reporter externo (ADR-05 rev. 2.0).
+# Colección diaria de los KPIs del reporter externo (ADR-05 rev. 2.0).
 # La publicación requiere REPORTER_PUBLISH_ENABLED en el Environment y una
 # colecta completa. Ver docs/runbooks/reporter-publisher.md (WAT-209).
 on:

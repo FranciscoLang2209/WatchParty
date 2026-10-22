@@ -1,6 +1,6 @@
 # Runbook: colector de los cinco KPIs iniciales del reporter (WAT-199)
 
-El colector extrae, sondea, calcula y valida los cinco KPIs técnicos y de salud de ADR-05 rev. 2.0 y devuelve un artefacto de resultados y motivos de omisión. No publica nada, no escribe en la base y no activa los diez KPIs: publicar es otra tarea.
+El colector extrae, sondea, calcula y valida los KPIs técnicos y de salud de ADR-05 rev. 2.0 y devuelve un artefacto de resultados y motivos de omisión. No publica nada, no escribe en la base y no activa los diez KPIs: publicar es otra tarea.
 
 ## Cómo ejecutarlo
 
@@ -22,7 +22,7 @@ Códigos de salida:
 
 | Código | Significado                                                                                                                 |
 | ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `0`    | Los cinco KPIs tienen valor.                                                                                                |
+| `0`    | Todos los KPIs del catálogo tienen valor.                                                                                   |
 | `1`    | Falta alguna fuente o no se pudo armar el lote (fallo visible). Los archivos se escriben igual, con los motivos de omisión. |
 | `2`    | `REPORTER_ENV` no es `dev` ni `prod`. No se colecta nada.                                                                   |
 
@@ -40,17 +40,18 @@ Este comando no publica: `published` es siempre `false`.
 
 Sin valor por defecto: lo que falte se omite con motivo. Los sondeos no usan cuentas ni tokens.
 
-## Los cinco KPIs
+## Los KPIs
 
 Todos comparten el corte T y la fecha local (`America/Argentina/Buenos_Aires`), fijados una sola vez por corrida. Sus ids, tipos (`kind`), unidades y rangos salen del catálogo de `modules/reporting/domain/kpi-catalog.ts` (WAT-200), y la fecha local se calcula con `toArgentinaDate`: el colector no tiene copias propias.
 
-| KPI                          | Tipo (`kind`) / unidad  | Valor                                                                                                                          |
-| ---------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `catalog_match_count`        | `technical` / `{match}` | Partidos distintos del catálogo al corte T (fuente SQL, WAT-198). Cero es válido solo si la consulta tuvo éxito.               |
-| `health_response_latency`    | `technical` / `ms`      | Tiempo monotónico de `GET /health` hasta leer el cuerpo completo. Solo con respuesta 200.                                      |
-| `health_up`                  | `health` / `1`          | `1` ante 200; `0` ante un 5xx comprobado. Otros estados (404, 429...) y la falta de respuesta se omiten: no prueban una caída. |
-| `auth_guard_up`              | `health` / `1`          | `GET /matches` sin token: `1` ante 401, `0` ante cualquier otro estado recibido. Sin respuesta se omite.                       |
-| `report_collection_duration` | `technical` / `s`       | Tiempo monotónico de extracción, sondeos, cálculo y validación. Excluye la publicación.                                        |
+| KPI                          | Tipo (`kind`) / unidad  | Valor                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `catalog_match_count`        | `technical` / `{match}` | Partidos distintos del catálogo al corte T (fuente SQL, WAT-198). Cero es válido solo si la consulta tuvo éxito.                                                                                                                                                                                                        |
+| `health_response_latency`    | `technical` / `ms`      | Tiempo monotónico de `GET /health` hasta leer el cuerpo completo. Solo con respuesta 200.                                                                                                                                                                                                                               |
+| `catalog_query_latency`      | `technical` / `ms`      | Tiempo monotónico de la consulta SQL del catálogo (la misma que trae `catalog_match_count`) hasta recibir su resultado, sin contar la conexión. Solo si la consulta termina bien; si falla la fuente, los permisos o la configuración, se omite con el mismo motivo que el conteo. No es la duración total del reporte. |
+| `health_up`                  | `health` / `1`          | `1` ante 200; `0` ante un 5xx comprobado. Otros estados (404, 429...) y la falta de respuesta se omiten: no prueban una caída.                                                                                                                                                                                          |
+| `auth_guard_up`              | `health` / `1`          | `GET /matches` sin token: `1` ante 401, `0` ante cualquier otro estado recibido. Sin respuesta se omite.                                                                                                                                                                                                                |
+| `report_collection_duration` | `technical` / `s`       | Tiempo monotónico de extracción, sondeos, cálculo y validación. Excluye la publicación.                                                                                                                                                                                                                                 |
 
 Las duraciones salen solo del reloj monotónico; el reloj de pared se usa únicamente para fijar el corte T y la fecha local. Cada sondeo tiene un timeout de 10 s.
 
