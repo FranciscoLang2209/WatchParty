@@ -91,6 +91,12 @@ export interface CollectKpisDeps {
    */
   readCatalog: (cutoff: Date) => Promise<CatalogQueryRead>;
   /**
+   * Lectura SQL mínima de la base (`database_up`): `1` ante éxito y `0` solo ante
+   * una indisponibilidad comprobada. Falla con `CatalogMatchCountSourceError`
+   * cuando el motivo no es atribuible a la base.
+   */
+  probeDatabase: () => Promise<0 | 1>;
+  /**
    * Entrega a `use` el token de la cuenta técnica de lectura y lo descarta al
    * terminar. El colector nunca ve credenciales ni guarda el token. Si no hay
    * token, informa el motivo y `use` no corre.
@@ -201,6 +207,17 @@ export async function collectKpis(deps: CollectKpisDeps): Promise<CollectionArti
     outcomes.health_response_latency = { reason };
     outcomes.auth_guard_up = { reason };
     outcomes.catalog_read_up = { reason };
+  }
+
+  // `database_up`: su propia lectura mínima, independiente de `/health` y de la
+  // consulta del catálogo. Un fallo que no es una caída comprobada se omite con su
+  // motivo; nunca se informa como 0.
+  try {
+    outcomes.database_up = { value: await deps.probeDatabase() };
+  } catch (error) {
+    outcomes.database_up = {
+      reason: error instanceof CatalogMatchCountSourceError ? error.reason : 'unexpected-error',
+    };
   }
 
   // Una sola consulta alimenta `catalog_match_count` y `catalog_query_latency`. La

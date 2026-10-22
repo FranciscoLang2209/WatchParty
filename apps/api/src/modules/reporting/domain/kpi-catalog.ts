@@ -67,6 +67,14 @@ export const KPI_CATALOG = [
     rule: { min: 0, allowed: [0, 1] },
   },
   {
+    id: 'database_up',
+    kind: 'health',
+    unit: '1',
+    description:
+      'Lectura SQL mínima (select 1) con el rol de solo lectura del reporter, por TLS: 1 ante éxito y 0 solo ante una indisponibilidad comprobada de la base; permisos, configuración o fallos del reporter se omiten. /health no lo sustituye. Verifica el acceso real a la base.',
+    rule: { min: 0, allowed: [0, 1] },
+  },
+  {
     id: 'catalog_read_up',
     kind: 'health',
     unit: '1',
