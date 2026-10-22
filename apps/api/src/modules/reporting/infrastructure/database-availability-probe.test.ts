@@ -151,11 +151,12 @@ describe('probeDatabaseAvailability: indisponibilidad comprobada = 0', () => {
   );
 
   it.each(['ECONNREFUSED', 'ECONNRESET', 'EPIPE'])(
-    'si el servidor rechaza o corta la conexión (%s), es 0',
+    'un corte (%s) con la sesión ya autenticada prueba que la base falló: es 0',
     async (code) => {
-      const { result } = probe({ connectError: nodeError(code) });
+      const { client, result } = probe({ queryError: nodeError(code) });
 
       await expect(result).resolves.toBe(0);
+      expect(client.connect).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -171,7 +172,7 @@ describe('probeDatabaseAvailability: indisponibilidad comprobada = 0', () => {
   });
 
   it('un 0 no lanza ni deja valores intermedios: es un desenlace normal', async () => {
-    const { client, result } = probe({ connectError: nodeError('ECONNREFUSED') });
+    const { client, result } = probe({ connectError: sqlError('57P03') });
 
     await expect(result).resolves.toBe(0);
     expect(client.query).not.toHaveBeenCalled();
@@ -222,6 +223,19 @@ describe('probeDatabaseAvailability: se omite con motivo, nunca 0', () => {
     },
   );
 
+  // Antes de autenticar no hay ninguna respuesta de la base: un puerto equivocado o un
+  // firewall dan exactamente el mismo error que una base caída.
+  it.each(['ECONNREFUSED', 'ECONNRESET', 'EPIPE'])(
+    'un rechazo o corte (%s) ANTES de autenticar no prueba una caída: connection-failed',
+    async (code) => {
+      const { client, result } = probe({ connectError: nodeError(code) });
+
+      expect((await failureOf(result)).reason).toBe('connection-failed');
+      expect(client.query).not.toHaveBeenCalled();
+      expect(client.end).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('un tiempo agotado al conectar no se distingue de un problema de red del reporter', async () => {
     const { result } = probe({
       connectError: new Error('Connection terminated due to connection timeout'),
@@ -255,7 +269,7 @@ describe('probeDatabaseAvailability: se omite con motivo, nunca 0', () => {
 
   it('un error al cerrar la conexión no tapa el resultado ni el motivo', async () => {
     const ok = probe({ endError: new Error('socket cerrado') });
-    const down = probe({ connectError: nodeError('ECONNREFUSED'), endError: new Error('x') });
+    const down = probe({ connectError: sqlError('57P01'), endError: new Error('x') });
     const denied = probe({ connectError: sqlError('28P01'), endError: new Error('x') });
 
     await expect(ok.result).resolves.toBe(1);
@@ -348,7 +362,7 @@ describe('probeDatabaseAvailability: no filtra credenciales', () => {
 // conexión es local y sin TLS solo en este test: el TLS verificado ya lo prueba
 // `createPgClient` en sus propios tests.
 describe('probeDatabaseAvailability: con el driver real', () => {
-  type Mode = 'ok' | 'drop-on-query' | 'shutdown' | 'reject-auth';
+  type Mode = 'ok' | 'drop-on-startup' | 'drop-on-query' | 'shutdown' | 'reject-auth';
 
   /** Mensaje del protocolo: tipo, longitud (incluye los 4 bytes propios) y contenido. */
   function message(type: string, body: Buffer = Buffer.alloc(0)): Buffer {
@@ -426,7 +440,9 @@ describe('probeDatabaseAvailability: con el driver real', () => {
         if (!started) {
           started = true;
 
-          if (mode === 'shutdown') {
+          if (mode === 'drop-on-startup') {
+            socket.destroy();
+          } else if (mode === 'shutdown') {
             socket.end(
               errorResponse('57P01', 'terminating connection due to administrator command'),
             );
@@ -505,11 +521,25 @@ describe('probeDatabaseAvailability: con el driver real', () => {
     }
   });
 
-  it('si el servidor rechaza la conexión (nadie escucha en el puerto), es 0', async () => {
+  it('con un puerto equivocado (nadie escucha) se omite como connection-failed: no es una caída', async () => {
     const restore = useLocalServer(await closedPort());
 
     try {
-      await expect(probeDatabaseAvailability({ env: VALID_ENV })).resolves.toBe(0);
+      const error = await failureOf(probeDatabaseAvailability({ env: VALID_ENV }));
+
+      expect(error.reason).toBe('connection-failed');
+    } finally {
+      restore();
+    }
+  });
+
+  it('si algo corta la conexión antes de autenticar (sin respuesta de Postgres), se omite', async () => {
+    const restore = useLocalServer(await startServer('drop-on-startup'));
+
+    try {
+      const error = await failureOf(probeDatabaseAvailability({ env: VALID_ENV }));
+
+      expect(error.reason).toBe('connection-failed');
     } finally {
       restore();
     }

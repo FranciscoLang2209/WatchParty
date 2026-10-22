@@ -23,7 +23,9 @@ export interface DatabaseAvailabilityDeps {
 // (53300) o conexión perdida (08006).
 const UNAVAILABLE_SQLSTATES = ['57P01', '57P02', '57P03', '53300', '08006'];
 
-// Un servidor que se alcanzó y rechazó o cortó la conexión.
+// Rechazo o corte de la conexión por parte del otro extremo. Solo prueba una caída si
+// la sesión ya estaba autenticada: antes de eso no hay ninguna respuesta de Postgres, y
+// un puerto equivocado, un firewall o un proxy dan exactamente el mismo error.
 const REFUSED_NODE_CODES = ['ECONNREFUSED', 'ECONNRESET', 'EPIPE'];
 
 // Fallos que no prueban nada sobre la base: DNS, rutas o tiempos agotados al conectar
@@ -66,11 +68,12 @@ type Verdict = { down: true } | { down: false; reason: CatalogMatchCountFailureR
  * Decide si un fallo es una indisponibilidad COMPROBADA de la base (0) o algo que
  * no se puede atribuir a ella y se omite con motivo:
  *
- * - 0: la base informa que no atiende (SQLSTATE de apagado, caída o sin cupo), el
- *   servidor rechaza o corta la conexión, o, ya autenticado, deja de responder.
- * - Se omite: permisos (28xxx, 42501), certificados y TLS, DNS y rutas, un tiempo
- *   agotado al conectar (no se distingue de un problema de red del reporter) y
- *   cualquier otro error de SQL.
+ * - 0: la base RESPONDE explícitamente que no atiende (SQLSTATE de apagado, caída o
+ *   sin cupo), o la sesión ya autenticada se corta o deja de responder.
+ * - Se omite: todo lo que ocurre antes de autenticar sin una respuesta de la base
+ *   (rechazo o corte de la conexión, tiempo agotado, DNS, rutas, certificados y TLS:
+ *   no se distingue una base caída de un puerto o una red mal configurados), los
+ *   permisos (28xxx, 42501) y cualquier otro error de SQL.
  */
 function judge(error: unknown, connected: boolean): Verdict {
   const code = errorCode(error);
@@ -80,7 +83,9 @@ function judge(error: unknown, connected: boolean): Verdict {
     if (code === '42501' || /^28[0-9A-Z]{3}$/.test(code)) {
       return { down: false, reason: 'permission-denied' };
     }
-    if (REFUSED_NODE_CODES.includes(code)) return { down: true };
+    if (REFUSED_NODE_CODES.includes(code)) {
+      return connected ? { down: true } : { down: false, reason: 'connection-failed' };
+    }
     if (isTlsFailure(code) || ENVIRONMENT_NODE_CODES.includes(code)) {
       return { down: false, reason: 'connection-failed' };
     }
