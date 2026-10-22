@@ -19,7 +19,7 @@ Precondiciones: Supabase local levantado con las migraciones aplicadas y la API 
 pnpm --filter @watchparty/api verify:watched-history-journey
 ```
 
-Crea dos usuarios temporales, marca partidos reales del catálogo local y recorre `GET /me/watched-matches` con páginas de 2 para tener varias páginas con pocos partidos.
+Crea dos usuarios temporales y sus propios 3 partidos (con service_role, como el backend), los marca por la API y recorre `GET /me/watched-matches` con páginas de 2 para tener varias páginas. No depende del seed ni de la ventana de agenda de `GET /matches`, así que funciona igual en una base recién inicializada. Al terminar borra los partidos, los equipos y los vistos que creó.
 
 | Chequeo                                                               | Resultado |
 | --------------------------------------------------------------------- | --------- |

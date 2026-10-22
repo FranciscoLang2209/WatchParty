@@ -1,10 +1,14 @@
-import { createAnonClient } from './utils/supabase-clients.js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createAnonClient, createServiceRoleClient } from './utils/supabase-clients.js';
 import { printResults, type CheckResult } from './utils/db-checks.js';
 
 const API_BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:3000';
 const PASSWORD = 'Verify-History-Pass-1!';
 // Página chica a propósito: con pocos partidos locales igual hay varias páginas.
 const PAGE_LIMIT = 2;
+const FIXTURE_PROVIDER = 'verify-history';
+const FIXTURE_MATCHES = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface HistoryItem {
   match: { id: string };
@@ -91,13 +95,81 @@ function sameList(actual: string[], expected: string[]): boolean {
   return actual.length === expected.length && actual.every((id, i) => id === expected[i]);
 }
 
+interface MatchFixture {
+  teamIds: string[];
+  matchIds: string[];
+}
+
+async function insertOrFail<T>(
+  label: string,
+  query: PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<T[]> {
+  const { data, error } = await query;
+  if (error || !data) {
+    throw new Error(`No se pudo ${label}: ${error?.message ?? 'sin datos'}`);
+  }
+  return data;
+}
+
+/**
+ * Partidos propios del recorrido, con service_role (como el backend). No
+ * depende del seed ni de la ventana de agenda de `GET /matches`: el detalle y
+ * el historial se resuelven por id, así que alcanza con que existan.
+ */
+async function createMatchFixture(admin: SupabaseClient): Promise<MatchFixture> {
+  const run = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const teams = await insertOrFail<{ id: string }>(
+    'crear los equipos de prueba',
+    admin
+      .from('teams')
+      .insert([
+        { provider: FIXTURE_PROVIDER, external_id: `${run}-home`, name: 'Verify Local' },
+        { provider: FIXTURE_PROVIDER, external_id: `${run}-away`, name: 'Verify Visitante' },
+      ])
+      .select('id'),
+  );
+  const [home, away] = teams.map((team) => team.id);
+
+  const matches = await insertOrFail<{ id: string; external_id: string }>(
+    'crear los partidos de prueba',
+    admin
+      .from('matches')
+      .insert(
+        Array.from({ length: FIXTURE_MATCHES }, (_, i) => ({
+          provider: FIXTURE_PROVIDER,
+          external_id: `${run}-match-${i}`,
+          home_team_id: home,
+          away_team_id: away,
+          competition_external_id: FIXTURE_PROVIDER,
+          season: '2026',
+          kickoff_at: new Date(Date.now() + (i + 1) * DAY_MS).toISOString(),
+          status: 'scheduled',
+        })),
+      )
+      .select('id, external_id'),
+  );
+
+  // Orden estable: el del índice con que se crearon.
+  matches.sort((x, y) => x.external_id.localeCompare(y.external_id));
+
+  return { teamIds: teams.map((team) => team.id), matchIds: matches.map((match) => match.id) };
+}
+
+/** Borra lo que creó el recorrido. Los vistos van primero: sus FK no cascadean. */
+async function removeMatchFixture(admin: SupabaseClient, fixture: MatchFixture): Promise<void> {
+  await admin.from('watched_matches').delete().in('match_id', fixture.matchIds);
+  await admin.from('matches').delete().in('id', fixture.matchIds);
+  await admin.from('teams').delete().in('id', fixture.teamIds);
+}
+
 /**
  * Recorrido integrado del historial de vistos (WAT-223) contra la API y el
  * Supabase locales: dos usuarios temporales, varias páginas, orden, ausencia
  * de duplicados y de datos ajenos, persistencia en una sesión nueva y
- * navegación al detalle. Crea usuarios y filas de prueba: solo para local.
+ * navegación al detalle. Crea usuarios temporales y sus propios partidos
+ * (que borra al final): no depende del seed. Solo para local.
  */
-async function main(): Promise<void> {
+async function runChecks(matchIds: string[]): Promise<boolean> {
   const results: CheckResult[] = [];
 
   const unauthenticated = await api('/me/watched-matches');
@@ -116,13 +188,6 @@ async function main(): Promise<void> {
     passed: empty.items.length === 0 && empty.pages === 1,
     detail: `items=${empty.items.length}, páginas=${empty.pages}`,
   });
-
-  const catalog = await api('/matches', a.token);
-  const { matches } = (await catalog.json()) as { matches: Array<{ id: string }> };
-  const matchIds = matches.slice(0, 4).map((match) => match.id);
-  if (matchIds.length < 3) {
-    throw new Error('Hacen falta al menos 3 partidos locales para probar varias páginas.');
-  }
 
   // Marcados en orden: el más reciente es el último.
   for (const matchId of matchIds) {
@@ -200,8 +265,18 @@ async function main(): Promise<void> {
     detail: `status=${invalid.status}`,
   });
 
-  const allPassed = printResults(results);
-  process.exitCode = allPassed ? 0 : 1;
+  return printResults(results);
+}
+
+async function main(): Promise<void> {
+  const admin = createServiceRoleClient();
+  const fixture = await createMatchFixture(admin);
+
+  try {
+    process.exitCode = (await runChecks(fixture.matchIds)) ? 0 : 1;
+  } finally {
+    await removeMatchFixture(admin, fixture);
+  }
 }
 
 main().catch((error: unknown) => {
