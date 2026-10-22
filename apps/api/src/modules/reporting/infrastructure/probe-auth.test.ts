@@ -408,3 +408,166 @@ describe('withProbeAccessToken: con el cliente real de Supabase', () => {
     expect(visible).not.toContain(session.access_token);
   });
 });
+
+// Timeout propio de Autenticación: si Supabase Auth no responde, la colecta no
+// puede quedar esperando, ni en el inicio de sesión ni al cerrarla.
+describe('withProbeAccessToken: timeouts de autenticación', () => {
+  const TIMEOUT_MS = 150;
+  const servers: { close: () => Promise<void> }[] = [];
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await Promise.all(servers.splice(0).map((server) => server.close()));
+  });
+
+  const session = {
+    access_token: `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: 'u-1', role: 'authenticated', exp: 4_102_444_800 })}.firma`,
+    token_type: 'bearer',
+    expires_in: 3600,
+    expires_at: 4_102_444_800,
+    refresh_token: 'refresh-simulado',
+    user: { id: 'u-1', aud: 'authenticated', email: SIMULATED_EMAIL },
+  };
+
+  /** Servidor que responde el login y/o deja colgado el logout, según se pida. */
+  async function startServer({ hangLogin = false, hangLogout = false } = {}) {
+    const requests: string[] = [];
+    const sockets = new Set<Socket>();
+
+    const server = http.createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        requests.push(req.url ?? '');
+
+        const isLogin = req.url?.startsWith('/auth/v1/token') ?? false;
+
+        if ((isLogin && hangLogin) || (!isLogin && hangLogout)) return;
+
+        res.writeHead(isLogin ? 200 : 204, { 'Content-Type': 'application/json' });
+        res.end(isLogin ? JSON.stringify(session) : undefined);
+      });
+    });
+
+    server.on('connection', (socket) => {
+      sockets.add(socket);
+      socket.on('close', () => sockets.delete(socket));
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+    const handle = {
+      url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      requests,
+      close: () =>
+        new Promise<void>((resolve) => {
+          for (const socket of sockets) socket.destroy();
+          server.close(() => resolve());
+        }),
+    };
+
+    servers.push(handle);
+
+    return handle;
+  }
+
+  it('el inicio de sesión y el cierre salen con una señal de cancelación', async () => {
+    const inits: { url: string; signal: AbortSignal | null | undefined }[] = [];
+
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      inits.push({ url, signal: init?.signal });
+
+      return url.includes('/auth/v1/token')
+        ? new Response(JSON.stringify(session), { status: 200 })
+        : new Response(null, { status: 204 });
+    });
+
+    const result = await withProbeAccessToken(async () => 'listo', { env: envFor(AUTH_URL) });
+
+    expect(result).toEqual({ ok: true, value: 'listo' });
+    expect(inits.map((i) => i.url.split('?')[0])).toEqual([
+      `${AUTH_URL}/auth/v1/token`,
+      `${AUTH_URL}/auth/v1/logout`,
+    ]);
+
+    for (const { signal } of inits) {
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal?.aborted).toBe(false);
+    }
+  });
+
+  it('si Auth no responde al iniciar sesión se corta por timeout: auth-unavailable y no corre el sondeo', async () => {
+    const server = await startServer({ hangLogin: true });
+    const use = vi.fn(async () => 1);
+    const startedAt = Date.now();
+
+    const result = await withProbeAccessToken(use, {
+      env: envFor(server.url),
+      timeoutMs: TIMEOUT_MS,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'auth-unavailable' });
+    expect(use).not.toHaveBeenCalled();
+    expect(server.requests).toHaveLength(1);
+    // Vuelve poco después del timeout: no queda esperando.
+    expect(Date.now() - startedAt).toBeLessThan(TIMEOUT_MS + 2_000);
+  });
+
+  it('si Auth no responde al cerrar la sesión, el resultado del sondeo igual se devuelve', async () => {
+    const server = await startServer({ hangLogout: true });
+    const startedAt = Date.now();
+
+    const result = await withProbeAccessToken(async () => 'sondeo terminado', {
+      env: envFor(server.url),
+      timeoutMs: TIMEOUT_MS,
+    });
+
+    expect(result).toEqual({ ok: true, value: 'sondeo terminado' });
+    // El cierre sí se intentó, y se cortó por timeout.
+    expect(server.requests.some((url) => url.startsWith('/auth/v1/logout'))).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(TIMEOUT_MS + 2_000);
+  });
+
+  it('un cierre colgado tampoco tapa el error del sondeo', async () => {
+    const server = await startServer({ hangLogout: true });
+
+    await expect(
+      withProbeAccessToken(
+        async () => {
+          throw new Error('el sondeo falló');
+        },
+        { env: envFor(server.url), timeoutMs: TIMEOUT_MS },
+      ),
+    ).rejects.toThrow('el sondeo falló');
+  });
+
+  it('el motivo sigue siendo un código fijo: no expone URL, correo ni contraseña', async () => {
+    const server = await startServer({ hangLogin: true });
+
+    const result = await withProbeAccessToken(async () => 1, {
+      env: envFor(server.url),
+      timeoutMs: TIMEOUT_MS,
+    });
+    const visible = JSON.stringify(result);
+
+    for (const secret of [SIMULATED_PASSWORD, SIMULATED_EMAIL, server.url, SIMULATED_ANON_KEY]) {
+      expect(visible).not.toContain(secret);
+    }
+  });
+
+  it('por defecto el timeout es de 10 s: la señal aún no venció al hacer el pedido', async () => {
+    let signal: AbortSignal | null | undefined;
+
+    vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal;
+
+      return new Response(JSON.stringify(session), { status: 200 });
+    });
+
+    await withProbeAccessToken(async () => 1, { env: envFor(AUTH_URL) });
+
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+  });
+});

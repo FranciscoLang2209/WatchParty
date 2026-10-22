@@ -11,6 +11,7 @@ import {
   type ProbeDeps,
   type ProbeOutcome,
 } from '../infrastructure/api-probes.js';
+import { isLoopbackHost } from '../infrastructure/central-measurement-publisher.js';
 import type { ProbeTokenRun } from '../infrastructure/probe-auth.js';
 import { KPI_CATALOG, isValidKpiValue, type KpiId, type KpiKind } from '../domain/kpi-catalog.js';
 import { toArgentinaDate } from '../domain/measurement-batch.js';
@@ -52,6 +53,10 @@ export type ApiBaseUrlConfig =
 /**
  * Base de la API a sondear, por ambiente (`REPORTER_API_BASE_URL`). Sin valor
  * por defecto: si falta o es inválida, los KPIs HTTP se omiten con motivo.
+ *
+ * Debe ser HTTPS: el sondeo de lectura autenticada manda el token de la cuenta
+ * técnica en un header, y por HTTP viajaría sin cifrar. HTTP se admite solo en
+ * loopback, para desarrollo local, igual que la configuración de autenticación.
  */
 export function readReporterApiBaseUrl(env: NodeJS.ProcessEnv = process.env): ApiBaseUrlConfig {
   const raw = env.REPORTER_API_BASE_URL?.trim();
@@ -68,7 +73,10 @@ export function readReporterApiBaseUrl(env: NodeJS.ProcessEnv = process.env): Ap
     return { ok: false, reason: 'api-config-invalid' };
   }
 
-  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.search || url.hash) {
+  const secureEnough =
+    url.protocol === 'https:' || (url.protocol === 'http:' && isLoopbackHost(url.hostname));
+
+  if (!secureEnough || url.search || url.hash) {
     return { ok: false, reason: 'api-config-invalid' };
   }
 

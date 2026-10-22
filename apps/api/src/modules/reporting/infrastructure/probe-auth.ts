@@ -77,14 +77,37 @@ export interface ProbeAuthClient {
 
 export type ProbeAuthClientFactory = (config: ProbeAuthConfig) => ProbeAuthClient;
 
+/** Tiempo máximo de cada pedido a Supabase Auth (inicio y cierre de sesión). */
+export const PROBE_AUTH_TIMEOUT_MS = 10_000;
+
+/**
+ * `fetch` con un tiempo máximo por pedido. El SDK de Supabase no lo pone: si Auth
+ * deja de responder, sin esto el inicio de sesión (y el cierre) esperarían para
+ * siempre y con ellos toda la colecta. Cancelar hace que el SDK devuelva un error
+ * sin respuesta (estado 0), que acá se informa como `auth-unavailable`.
+ */
+function fetchWithTimeout(timeoutMs: number): typeof fetch {
+  return (input, init) => {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+
+    return fetch(input, { ...init, signal });
+  };
+}
+
 /**
  * Cliente de Supabase Auth con las mismas opciones que usa la API para verificar
  * tokens: sin sesión persistida, sin renovación automática y sin clave elevada.
- * Inicia sesión con una cuenta existente; no crea usuarios.
+ * Inicia sesión con una cuenta existente; no crea usuarios. Todos sus pedidos
+ * tienen un tiempo máximo.
  */
-export function createProbeAuthClient(config: ProbeAuthConfig): ProbeAuthClient {
+export function createProbeAuthClient(
+  config: ProbeAuthConfig,
+  { timeoutMs = PROBE_AUTH_TIMEOUT_MS }: { timeoutMs?: number } = {},
+): ProbeAuthClient {
   const client = createClient(config.url, config.anonKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { fetch: fetchWithTimeout(timeoutMs) },
   });
 
   return {
@@ -120,6 +143,8 @@ export type ProbeTokenRun<T> =
 export interface ProbeAuthDeps {
   env?: NodeJS.ProcessEnv;
   createClient?: ProbeAuthClientFactory;
+  /** Tiempo máximo de cada pedido a Auth; solo aplica al cliente real. */
+  timeoutMs?: number;
 }
 
 /**
@@ -133,7 +158,11 @@ export interface ProbeAuthDeps {
  */
 export async function withProbeAccessToken<T>(
   use: (accessToken: string) => Promise<T>,
-  { env = process.env, createClient: createAuthClient = createProbeAuthClient }: ProbeAuthDeps = {},
+  {
+    env = process.env,
+    timeoutMs,
+    createClient: createAuthClient = (config) => createProbeAuthClient(config, { timeoutMs }),
+  }: ProbeAuthDeps = {},
 ): Promise<ProbeTokenRun<T>> {
   const configured = readProbeAuthConfig(env);
 

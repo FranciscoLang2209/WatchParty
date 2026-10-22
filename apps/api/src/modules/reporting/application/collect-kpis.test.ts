@@ -405,6 +405,47 @@ describe('readReporterApiBaseUrl', () => {
       reason: 'api-config-invalid',
     });
   });
+
+  // El sondeo de lectura autenticada manda el token de la cuenta técnica en un
+  // header: por HTTP sin cifrar lo expondría. Solo se admite HTTP en loopback.
+  it.each([
+    'http://api.example.test',
+    'http://api.example.test:3000',
+    'http://192.168.1.10:3000',
+    'http://10.0.0.5',
+    'http://localhost.evil.example',
+    'http://127.0.0.1.evil.example',
+  ])('exige HTTPS: rechaza %s (HTTP fuera de loopback)', (REPORTER_API_BASE_URL) => {
+    expect(readReporterApiBaseUrl({ REPORTER_API_BASE_URL })).toEqual({
+      ok: false,
+      reason: 'api-config-invalid',
+    });
+  });
+
+  it.each(['http://localhost:3000', 'http://127.0.0.1:3000', 'http://[::1]:3000'])(
+    'permite HTTP solo en loopback, para desarrollo local: %s',
+    (REPORTER_API_BASE_URL) => {
+      expect(readReporterApiBaseUrl({ REPORTER_API_BASE_URL })).toEqual({
+        ok: true,
+        baseUrl: REPORTER_API_BASE_URL,
+      });
+    },
+  );
+
+  it('con una base HTTP no cifrada el token ni siquiera se pide y no sale ningún pedido', async () => {
+    const { deps, fetchFn, withProbeToken } = setup({
+      apiBaseUrl: readReporterApiBaseUrl({ REPORTER_API_BASE_URL: 'http://api.example.test' }),
+    });
+
+    const artifact = await collectKpis(deps);
+
+    expect(withProbeToken).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(artifact.omissions).toContainEqual({
+      kpi: 'catalog_read_up',
+      reason: 'api-config-invalid',
+    });
+  });
 });
 
 // Contrato con el catálogo y el lote (WAT-200): el colector no tiene copias propias.
