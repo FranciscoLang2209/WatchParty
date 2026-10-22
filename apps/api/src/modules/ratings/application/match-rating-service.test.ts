@@ -32,6 +32,7 @@ function setup(options: { match?: Match | null; watched?: boolean } = {}) {
   const ratingStore: MatchRatingStore = {
     findRating: vi.fn(async () => 4),
     saveRating: vi.fn(async (_u, _m, rating) => rating),
+    getSummary: vi.fn(async () => ({ average: 4.5, count: 2 })),
   };
   return {
     service: new MatchRatingService(catalog, watchedStore, ratingStore),
@@ -105,5 +106,51 @@ describe('MatchRatingService.getOwnRating', () => {
 
     expect(await service.getOwnRating(USER_ID, MATCH_ID)).toEqual({ kind: 'match_not_found' });
     expect(ratingStore.findRating).not.toHaveBeenCalled();
+  });
+});
+
+describe('MatchRatingService.getRatingSummary', () => {
+  it('devuelve promedio y cantidad de votos del partido', async () => {
+    const { service, ratingStore } = setup();
+
+    expect(await service.getRatingSummary(MATCH_ID)).toEqual({
+      kind: 'ok',
+      summary: { average: 4.5, count: 2 },
+    });
+    expect(ratingStore.getSummary).toHaveBeenCalledWith(MATCH_ID);
+  });
+
+  it('sin votos devuelve average null y count 0 (no un promedio cero)', async () => {
+    const { service, ratingStore } = setup();
+    vi.mocked(ratingStore.getSummary).mockResolvedValueOnce({ average: null, count: 0 });
+
+    expect(await service.getRatingSummary(MATCH_ID)).toEqual({
+      kind: 'ok',
+      summary: { average: null, count: 0 },
+    });
+  });
+
+  it.each<MatchStatus>(['scheduled', 'live', 'finished', 'postponed', 'cancelled'])(
+    'partido %s: solo exige que exista, sin consultar "visto"',
+    async (status) => {
+      const { service, watchedStore } = setup({ match: makeMatch(status) });
+
+      expect((await service.getRatingSummary(MATCH_ID)).kind).toBe('ok');
+      expect(watchedStore.getWatched).not.toHaveBeenCalled();
+    },
+  );
+
+  it('partido inexistente: match_not_found y no consulta el resumen', async () => {
+    const { service, ratingStore } = setup({ match: null });
+
+    expect(await service.getRatingSummary(MATCH_ID)).toEqual({ kind: 'match_not_found' });
+    expect(ratingStore.getSummary).not.toHaveBeenCalled();
+  });
+
+  it('un fallo de persistencia se propaga, nunca se convierte en "sin votos"', async () => {
+    const { service, ratingStore } = setup();
+    vi.mocked(ratingStore.getSummary).mockRejectedValueOnce(new Error('boom'));
+
+    await expect(service.getRatingSummary(MATCH_ID)).rejects.toThrow('boom');
   });
 });

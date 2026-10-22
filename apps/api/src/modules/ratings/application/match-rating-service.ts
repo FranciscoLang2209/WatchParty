@@ -1,9 +1,12 @@
 import type { MatchCatalog } from '../../matches/domain/match-catalog.js';
 import type { WatchedMatchStore } from '../../watched/domain/watched-match-store.js';
-import type { MatchRatingStore } from '../domain/match-rating-store.js';
+import type { MatchRatingStore, MatchRatingSummary } from '../domain/match-rating-store.js';
 
 export type GetOwnRatingResult =
   { kind: 'ok'; rating: number | null } | { kind: 'match_not_found' };
+
+export type GetRatingSummaryResult =
+  { kind: 'ok'; summary: MatchRatingSummary } | { kind: 'match_not_found' };
 
 export type SaveOwnRatingResult =
   | { kind: 'ok'; rating: number }
@@ -16,6 +19,10 @@ export type SaveOwnRatingResult =
  * existentes sin duplicar sus consultas: `MatchCatalog` (existencia y
  * estado), `WatchedMatchStore` (visto por el usuario) y `MatchRatingStore`
  * (persistencia de la nota).
+ *
+ * Resumen (WAT-214): promedio y cantidad de votos de un partido. Solo exige
+ * que el partido exista; no depende de su estado ni de si quien consulta lo
+ * calificó o lo vio.
  *
  * Elegibilidad para GUARDAR/EDITAR: el partido existe, está `finished` y el
  * usuario lo marcó como visto. Leer la nota propia solo exige que el partido
@@ -42,6 +49,13 @@ export class MatchRatingService {
     if (!match) return { kind: 'match_not_found' };
 
     return { kind: 'ok', rating: await this.ratingStore.findRating(userId, matchId) };
+  }
+
+  async getRatingSummary(matchId: string): Promise<GetRatingSummaryResult> {
+    const match = await this.matchCatalog.findById(matchId);
+    if (!match) return { kind: 'match_not_found' };
+
+    return { kind: 'ok', summary: await this.ratingStore.getSummary(matchId) };
   }
 
   async saveOwnRating(

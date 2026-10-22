@@ -68,6 +68,7 @@ function buildTestApp(options: Setup = {}) {
   const ratingStore: MatchRatingStore = {
     findRating: vi.fn(async () => null),
     saveRating: vi.fn(async (_u, _m, rating) => rating),
+    getSummary: vi.fn(async () => ({ average: null, count: 0 })),
   };
 
   const app: Express = express();
@@ -402,5 +403,151 @@ describe('PUT /matches/:matchId/rating', () => {
 
     expect(response.status).toBe(500);
     expect(ratingStore.saveRating).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /matches/:matchId/rating-summary', () => {
+  const SUMMARY_URL = `/matches/${MATCH_ID}/rating-summary`;
+
+  it('sin token responde 401 y no toca nada', async () => {
+    const { app, ratingStore, catalog } = buildTestApp();
+
+    const response = await request(app).get(SUMMARY_URL);
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({ error: { code: 'UNAUTHORIZED', message: expect.any(String) } });
+    expect(catalog.findById).not.toHaveBeenCalled();
+    expect(ratingStore.getSummary).not.toHaveBeenCalled();
+  });
+
+  it('con token inválido responde 401', async () => {
+    mockInvalidToken();
+    const { app, ratingStore } = buildTestApp();
+
+    const response = await request(app).get(SUMMARY_URL).set('Authorization', 'Bearer bad');
+
+    expect(response.status).toBe(401);
+    expect(ratingStore.getSummary).not.toHaveBeenCalled();
+  });
+
+  it('id de partido inválido responde 400 sin tocar el servicio', async () => {
+    mockAuthenticated();
+    const { app, catalog, ratingStore } = buildTestApp();
+
+    const response = await request(app)
+      .get('/matches/no-es-uuid/rating-summary')
+      .set('Authorization', 'Bearer good');
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('VALIDATION_ERROR');
+    expect(catalog.findById).not.toHaveBeenCalled();
+    expect(ratingStore.getSummary).not.toHaveBeenCalled();
+  });
+
+  it('partido inexistente responde 404 y no consulta el resumen', async () => {
+    mockAuthenticated();
+    const { app, ratingStore } = buildTestApp({ matchExists: false });
+
+    const response = await request(app).get(SUMMARY_URL).set('Authorization', 'Bearer good');
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe('NOT_FOUND');
+    expect(ratingStore.getSummary).not.toHaveBeenCalled();
+  });
+
+  it('devuelve promedio y cantidad de votos con 200', async () => {
+    mockAuthenticated();
+    const { app, ratingStore } = buildTestApp();
+    vi.mocked(ratingStore.getSummary).mockResolvedValueOnce({ average: 3.67, count: 3 });
+
+    const response = await request(app).get(SUMMARY_URL).set('Authorization', 'Bearer good');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ average: 3.67, count: 3 });
+    expect(ratingStore.getSummary).toHaveBeenCalledWith(MATCH_ID);
+  });
+
+  it('sin votos devuelve { average: null, count: 0 }, no un promedio cero', async () => {
+    mockAuthenticated();
+    const { app } = buildTestApp();
+
+    const response = await request(app).get(SUMMARY_URL).set('Authorization', 'Bearer good');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ average: null, count: 0 });
+    expect(response.body.average).toBeNull();
+  });
+
+  it('el resultado no depende de quién consulta ni de si vio el partido', async () => {
+    const { app, ratingStore, watchedStore } = buildTestApp({ watched: false });
+    vi.mocked(ratingStore.getSummary).mockResolvedValue({ average: 4, count: 2 });
+
+    mockAuthenticated('user-A');
+    const a = await request(app).get(SUMMARY_URL).set('Authorization', 'Bearer a');
+    mockAuthenticated('user-B');
+    const b = await request(app).get(SUMMARY_URL).set('Authorization', 'Bearer b');
+
+    expect(a.body).toEqual({ average: 4, count: 2 });
+    expect(b.body).toEqual(a.body);
+    expect(watchedStore.getWatched).not.toHaveBeenCalled();
+  });
+
+  it.each<MatchStatus>(['scheduled', 'live', 'finished'])(
+    'responde 200 con el partido en estado %s',
+    async (status) => {
+      mockAuthenticated();
+      const { app } = buildTestApp({ status });
+
+      const response = await request(app).get(SUMMARY_URL).set('Authorization', 'Bearer good');
+
+      expect(response.status).toBe(200);
+    },
+  );
+
+  it('expone solo { average, count }: ignora cualquier dato extra del servicio', async () => {
+    mockAuthenticated();
+    const { app, ratingStore } = buildTestApp();
+    vi.mocked(ratingStore.getSummary).mockResolvedValueOnce({
+      average: 4,
+      count: 2,
+      userId: 'user-ajeno',
+      ratings: [5, 3],
+    } as never);
+
+    const response = await request(app).get(SUMMARY_URL).set('Authorization', 'Bearer good');
+
+    expect(Object.keys(response.body).sort()).toEqual(['average', 'count']);
+    expect(JSON.stringify(response.body)).not.toContain('user-ajeno');
+  });
+
+  it('ignora un userId en la query: el resumen es del partido, no de un usuario', async () => {
+    mockAuthenticated();
+    const { app, ratingStore } = buildTestApp();
+
+    const response = await request(app)
+      .get(`${SUMMARY_URL}?userId=otro-usuario`)
+      .set('Authorization', 'Bearer good');
+
+    expect(response.status).toBe(200);
+    expect(ratingStore.getSummary).toHaveBeenCalledWith(MATCH_ID);
+  });
+
+  it('un fallo de persistencia responde 500 sanitizado, nunca "sin votos"', async () => {
+    mockAuthenticated();
+    const { app, ratingStore } = buildTestApp();
+    vi.mocked(ratingStore.getSummary).mockRejectedValueOnce(
+      new MatchRatingPersistenceError('No se pudo leer el resumen.', {
+        message: 'password=secreto host=db.interno',
+      }),
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const response = await request(app).get(SUMMARY_URL).set('Authorization', 'Bearer good');
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({
+      error: { code: 'INTERNAL_ERROR', message: 'Ocurrió un error inesperado.' },
+    });
+    expect(JSON.stringify(response.body)).not.toContain('secreto');
   });
 });
