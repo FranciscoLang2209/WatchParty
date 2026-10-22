@@ -16,6 +16,7 @@ describe('KPI_CATALOG', () => {
       'health_response_latency',
       'catalog_query_latency',
       'health_up',
+      'catalog_read_up',
       'auth_guard_up',
       'report_collection_duration',
     ]);
@@ -27,6 +28,7 @@ describe('KPI_CATALOG', () => {
       { id: 'health_response_latency', kind: 'technical', unit: 'ms' },
       { id: 'catalog_query_latency', kind: 'technical', unit: 'ms' },
       { id: 'health_up', kind: 'health', unit: '1' },
+      { id: 'catalog_read_up', kind: 'health', unit: '1' },
       { id: 'auth_guard_up', kind: 'health', unit: '1' },
       { id: 'report_collection_duration', kind: 'technical', unit: 's' },
     ]);
@@ -49,12 +51,7 @@ describe('KPI_CATALOG', () => {
   });
 
   it('no incluye los KPIs de negocio ni los que aún no tienen fuente verificada', () => {
-    for (const id of [
-      'rated_match_rate',
-      'monthly_interactions_avg',
-      'database_up',
-      'catalog_read_up',
-    ]) {
+    for (const id of ['rated_match_rate', 'monthly_interactions_avg', 'database_up']) {
       expect(isKpiId(id)).toBe(false);
     }
   });
@@ -70,6 +67,8 @@ describe('isValidKpiValue: rangos y unidades', () => {
     ['catalog_query_latency', 41.5],
     ['health_up', 0],
     ['health_up', 1],
+    ['catalog_read_up', 0],
+    ['catalog_read_up', 1],
     ['auth_guard_up', 0],
     ['auth_guard_up', 1],
     ['report_collection_duration', 0],
@@ -86,6 +85,9 @@ describe('isValidKpiValue: rangos y unidades', () => {
     ['health_up', 2],
     ['health_up', -1],
     ['health_up', 0.5],
+    ['catalog_read_up', 2],
+    ['catalog_read_up', -1],
+    ['catalog_read_up', 0.5],
     ['auth_guard_up', 2],
     ['auth_guard_up', 0.5],
     ['report_collection_duration', -0.1],

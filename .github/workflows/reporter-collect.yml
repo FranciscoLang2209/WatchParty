@@ -66,6 +66,13 @@ jobs:
           REPORTER_API_BASE_URL: ${{ vars.REPORTER_API_BASE_URL }}
           REPORTER_DATABASE_URL: ${{ secrets.REPORTER_DATABASE_URL }}
           REPORTER_DATABASE_CA_CERT: ${{ secrets.REPORTER_DATABASE_CA_CERT }}
+          # Sondeo autenticado de GET /matches con la cuenta técnica de lectura del
+          # ambiente. La URL y la clave anónima son públicas; el usuario y la
+          # contraseña son secretos del Environment.
+          REPORTER_PROBE_AUTH_URL: ${{ vars.REPORTER_PROBE_AUTH_URL }}
+          REPORTER_PROBE_ANON_KEY: ${{ vars.REPORTER_PROBE_ANON_KEY }}
+          REPORTER_PROBE_EMAIL: ${{ secrets.REPORTER_PROBE_EMAIL }}
+          REPORTER_PROBE_PASSWORD: ${{ secrets.REPORTER_PROBE_PASSWORD }}
 
       - name: Publish and verify KPIs
         if: ${{ vars.REPORTER_PUBLISH_ENABLED == 'true' }}

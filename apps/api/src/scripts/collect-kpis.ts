@@ -7,6 +7,7 @@ import {
 } from '../modules/reporting/application/collect-kpis.js';
 import { runReport, RESULT_FILE } from '../modules/reporting/application/run-report.js';
 import { isReporterEnv } from '../modules/reporting/domain/kpi-catalog.js';
+import { withProbeAccessToken } from '../modules/reporting/infrastructure/probe-auth.js';
 import { readCatalogMatchCountWithLatency } from '../modules/reporting/infrastructure/catalog-match-count-source.js';
 
 const DEFAULT_OUTPUT_DIR = 'reporter-output';
@@ -36,6 +37,7 @@ async function main(): Promise<void> {
       collectKpis({
         apiBaseUrl: readReporterApiBaseUrl(),
         readCatalog: (cutoff) => readCatalogMatchCountWithLatency(cutoff),
+        withProbeToken: (use) => withProbeAccessToken(use),
         fetchFn: fetch,
         now: () => new Date(),
         monotonicMs: () => performance.now(),

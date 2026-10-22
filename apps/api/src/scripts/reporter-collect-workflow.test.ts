@@ -178,3 +178,25 @@ describe('workflow reporter-collect: publicación central controlada', () => {
     );
   });
 });
+
+describe('workflow reporter-collect: cuenta técnica del sondeo autenticado', () => {
+  const publishStep = steps.find((step) => step.run?.includes('reporter:publish'));
+
+  it('la cuenta técnica llega solo desde secrets y variables del Environment', () => {
+    const env = collectStep?.env ?? {};
+
+    expect(env.REPORTER_PROBE_EMAIL).toBe('${{ secrets.REPORTER_PROBE_EMAIL }}');
+    expect(env.REPORTER_PROBE_PASSWORD).toBe('${{ secrets.REPORTER_PROBE_PASSWORD }}');
+    // La URL y la clave anónima de Supabase son públicas: variables, no secretos.
+    expect(env.REPORTER_PROBE_AUTH_URL).toBe('${{ vars.REPORTER_PROBE_AUTH_URL }}');
+    expect(env.REPORTER_PROBE_ANON_KEY).toBe('${{ vars.REPORTER_PROBE_ANON_KEY }}');
+  });
+
+  it('el paso de publicación no recibe la cuenta técnica', () => {
+    expect(JSON.stringify(publishStep?.env)).not.toMatch(/REPORTER_PROBE/);
+  });
+
+  it('ninguna clave de rol de servicio se entrega al sondeo', () => {
+    expect(JSON.stringify(collectStep?.env)).not.toMatch(/service_role|SERVICE_ROLE/i);
+  });
+});

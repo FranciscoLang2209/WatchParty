@@ -3,11 +3,16 @@ import {
   type CatalogQueryRead,
 } from '../infrastructure/catalog-match-count-source.js';
 import {
+  hasExpectedMatchesSchema,
   probeAuthGuard,
+  probeCatalogRead,
   probeHealth,
+  type CatalogReadProbe,
   type ProbeDeps,
   type ProbeOutcome,
 } from '../infrastructure/api-probes.js';
+import { isLoopbackHost } from '../infrastructure/central-measurement-publisher.js';
+import type { ProbeTokenRun } from '../infrastructure/probe-auth.js';
 import { KPI_CATALOG, isValidKpiValue, type KpiId, type KpiKind } from '../domain/kpi-catalog.js';
 import { toArgentinaDate } from '../domain/measurement-batch.js';
 
@@ -48,6 +53,10 @@ export type ApiBaseUrlConfig =
 /**
  * Base de la API a sondear, por ambiente (`REPORTER_API_BASE_URL`). Sin valor
  * por defecto: si falta o es inválida, los KPIs HTTP se omiten con motivo.
+ *
+ * Debe ser HTTPS: el sondeo de lectura autenticada manda el token de la cuenta
+ * técnica en un header, y por HTTP viajaría sin cifrar. HTTP se admite solo en
+ * loopback, para desarrollo local, igual que la configuración de autenticación.
  */
 export function readReporterApiBaseUrl(env: NodeJS.ProcessEnv = process.env): ApiBaseUrlConfig {
   const raw = env.REPORTER_API_BASE_URL?.trim();
@@ -64,7 +73,10 @@ export function readReporterApiBaseUrl(env: NodeJS.ProcessEnv = process.env): Ap
     return { ok: false, reason: 'api-config-invalid' };
   }
 
-  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.search || url.hash) {
+  const secureEnough =
+    url.protocol === 'https:' || (url.protocol === 'http:' && isLoopbackHost(url.hostname));
+
+  if (!secureEnough || url.search || url.hash) {
     return { ok: false, reason: 'api-config-invalid' };
   }
 
@@ -78,6 +90,12 @@ export interface CollectKpisDeps {
    * duración de esa consulta. Falla con `CatalogMatchCountSourceError`.
    */
   readCatalog: (cutoff: Date) => Promise<CatalogQueryRead>;
+  /**
+   * Entrega a `use` el token de la cuenta técnica de lectura y lo descarta al
+   * terminar. El colector nunca ve credenciales ni guarda el token. Si no hay
+   * token, informa el motivo y `use` no corre.
+   */
+  withProbeToken: <T>(use: (accessToken: string) => Promise<T>) => Promise<ProbeTokenRun<T>>;
   fetchFn: typeof fetch;
   /** Reloj de pared: solo para fijar el corte T y la fecha local. */
   now: () => Date;
@@ -119,6 +137,28 @@ function interpretAuthGuard(probe: ProbeOutcome, outcomes: Partial<Record<KpiId,
     probe.kind === 'failed' ? { reason: probe.reason } : { value: probe.status === 401 ? 1 : 0 };
 }
 
+// `catalog_read_up`: con un 200 y el esquema esperado, la lectura autenticada
+// funciona = 1, aunque la lista venga vacía. Un 5xx, o un 200 con una respuesta que
+// no cumple el contrato, es un fallo comprobado del servicio = 0. Un 401/403 con un
+// token recién emitido, otros estados y la falta de respuesta no prueban una caída
+// del servicio (credencial, configuración o red del reporter): se omiten con motivo.
+function interpretCatalogRead(
+  probe: CatalogReadProbe,
+  outcomes: Partial<Record<KpiId, Outcome>>,
+): void {
+  if (probe.kind === 'failed') {
+    outcomes.catalog_read_up = { reason: probe.reason };
+  } else if (probe.status === 200) {
+    outcomes.catalog_read_up = { value: hasExpectedMatchesSchema(probe.body) ? 1 : 0 };
+  } else if (probe.status >= 500) {
+    outcomes.catalog_read_up = { value: 0 };
+  } else if (probe.status === 401 || probe.status === 403) {
+    outcomes.catalog_read_up = { reason: 'unauthorized' };
+  } else {
+    outcomes.catalog_read_up = { reason: 'unexpected-status' };
+  }
+}
+
 /**
  * Colector determinista de los KPIs del catálogo. No publica nada: solo
  * extrae, sondea, calcula y valida. Un KPI sin fuente válida se omite con su
@@ -138,12 +178,29 @@ export async function collectKpis(deps: CollectKpisDeps): Promise<CollectionArti
 
     interpretHealth(await probeHealth(deps.apiBaseUrl.baseUrl, probeDeps), outcomes);
     interpretAuthGuard(await probeAuthGuard(deps.apiBaseUrl.baseUrl, probeDeps), outcomes);
+
+    const { baseUrl } = deps.apiBaseUrl;
+
+    try {
+      const run = await deps.withProbeToken((accessToken) =>
+        probeCatalogRead(baseUrl, accessToken, probeDeps),
+      );
+
+      if (run.ok) {
+        interpretCatalogRead(run.value, outcomes);
+      } else {
+        outcomes.catalog_read_up = { reason: run.reason };
+      }
+    } catch {
+      outcomes.catalog_read_up = { reason: 'unexpected-error' };
+    }
   } else {
     const reason = deps.apiBaseUrl.reason;
 
     outcomes.health_up = { reason };
     outcomes.health_response_latency = { reason };
     outcomes.auth_guard_up = { reason };
+    outcomes.catalog_read_up = { reason };
   }
 
   // Una sola consulta alimenta `catalog_match_count` y `catalog_query_latency`. La

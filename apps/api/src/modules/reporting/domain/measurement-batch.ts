@@ -86,6 +86,10 @@ export const OMISSION_REASONS = [
   'network-error',
   'not-200',
   'unexpected-status',
+  // Sondeo autenticado (cuenta técnica de lectura).
+  'credentials-invalid',
+  'auth-unavailable',
+  'unauthorized',
   // Error no previsto del colector.
   'unexpected-error',
 ] as const;

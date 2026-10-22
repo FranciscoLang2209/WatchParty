@@ -15,6 +15,7 @@ function artifact(overrides: Partial<CollectionArtifact> = {}): CollectionArtifa
       { kpi: 'health_response_latency', kind: 'technical', unit: 'ms', value: 312.456 },
       { kpi: 'catalog_query_latency', kind: 'technical', unit: 'ms', value: 41.5 },
       { kpi: 'health_up', kind: 'health', unit: '1', value: 1 },
+      { kpi: 'catalog_read_up', kind: 'health', unit: '1', value: 1 },
       { kpi: 'auth_guard_up', kind: 'health', unit: '1', value: 1 },
       { kpi: 'report_collection_duration', kind: 'technical', unit: 's', value: 1.591 },
     ],
@@ -43,7 +44,7 @@ describe('runReport: todas las fuentes válidas', () => {
     const { files } = await run(artifact());
     const rows = JSON.parse(files[PAYLOAD_FILE]!) as Record<string, unknown>[];
 
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(7);
 
     for (const row of rows) {
       expect(Object.keys(row)).toEqual(['kpi_id', 'date', 'env', 'value', 'run_id']);
@@ -108,7 +109,7 @@ describe('runReport: falta de fuentes = fallo visible, pero los archivos se cons
 
     expect(exitCode).toBe(1);
     expect(Object.keys(files).sort()).toEqual([ARCHIVE_FILE, PAYLOAD_FILE, RESULT_FILE].sort());
-    expect(JSON.parse(files[PAYLOAD_FILE]!)).toHaveLength(5);
+    expect(JSON.parse(files[PAYLOAD_FILE]!)).toHaveLength(6);
   });
 
   it('el resultado y el archivo conservan el motivo y marcan el fallo visible', async () => {
@@ -133,6 +134,7 @@ describe('runReport: falta de fuentes = fallo visible, pero los archivos se cons
           { kpi: 'health_response_latency', reason: 'api-config-missing' },
           { kpi: 'catalog_query_latency', reason: 'config-missing' },
           { kpi: 'health_up', reason: 'api-config-missing' },
+          { kpi: 'catalog_read_up', reason: 'api-config-missing' },
           { kpi: 'auth_guard_up', reason: 'api-config-missing' },
           { kpi: 'report_collection_duration', reason: 'invalid-value' },
         ],
@@ -146,7 +148,7 @@ describe('runReport: falta de fuentes = fallo visible, pero los archivos se cons
 
     expect(result).toMatchObject({ ok: false, visible_failure: true });
     expect(result.issues).toEqual([{ row: null, code: 'empty-batch' }]);
-    expect(result.omissions).toHaveLength(6);
+    expect(result.omissions).toHaveLength(7);
     expect(result.omissions).toContainEqual({
       kpi_id: 'catalog_match_count',
       reason: 'config-missing',

@@ -67,6 +67,14 @@ export const KPI_CATALOG = [
     rule: { min: 0, allowed: [0, 1] },
   },
   {
+    id: 'catalog_read_up',
+    kind: 'health',
+    unit: '1',
+    description:
+      'GET /matches autenticado con la cuenta técnica de lectura del reporter: 1 ante un 200 con el esquema esperado (también con la lista vacía) y 0 ante un fallo comprobado del servicio; credenciales o configuración inválidas y fallos del reporter se omiten. Verifica la lectura autenticada.',
+    rule: { min: 0, allowed: [0, 1] },
+  },
+  {
     id: 'auth_guard_up',
     kind: 'health',
     unit: '1',
