@@ -1,6 +1,6 @@
 import {
   CatalogMatchCountSourceError,
-  type CatalogMatchCount,
+  type CatalogQueryRead,
 } from '../infrastructure/catalog-match-count-source.js';
 import {
   probeAuthGuard,
@@ -11,7 +11,7 @@ import {
 import { KPI_CATALOG, isValidKpiValue, type KpiId, type KpiKind } from '../domain/kpi-catalog.js';
 import { toArgentinaDate } from '../domain/measurement-batch.js';
 
-// Los cinco KPIs, sus tipos, unidades y rangos salen del catálogo (WAT-200): el
+// Los KPIs, sus tipos, unidades y rangos salen del catálogo (WAT-200): el
 // colector no tiene una copia propia. El orden del catálogo es el del artefacto.
 const KPI_ORDER: readonly KpiId[] = KPI_CATALOG.map((kpi) => kpi.id);
 
@@ -73,8 +73,11 @@ export function readReporterApiBaseUrl(env: NodeJS.ProcessEnv = process.env): Ap
 
 export interface CollectKpisDeps {
   apiBaseUrl: ApiBaseUrlConfig;
-  /** Fuente SQL del conteo del catálogo (WAT-198). Falla con `CatalogMatchCountSourceError`. */
-  readCatalogMatchCount: (cutoff: Date) => Promise<CatalogMatchCount>;
+  /**
+   * Fuente SQL del catálogo (WAT-198): una sola consulta que trae el conteo y la
+   * duración de esa consulta. Falla con `CatalogMatchCountSourceError`.
+   */
+  readCatalog: (cutoff: Date) => Promise<CatalogQueryRead>;
   fetchFn: typeof fetch;
   /** Reloj de pared: solo para fijar el corte T y la fecha local. */
   now: () => Date;
@@ -117,7 +120,7 @@ function interpretAuthGuard(probe: ProbeOutcome, outcomes: Partial<Record<KpiId,
 }
 
 /**
- * Colector determinista de los cinco KPIs iniciales. No publica nada: solo
+ * Colector determinista de los KPIs del catálogo. No publica nada: solo
  * extrae, sondea, calcula y valida. Un KPI sin fuente válida se omite con su
  * motivo; ningún fallo se convierte en cero.
  */
@@ -143,12 +146,20 @@ export async function collectKpis(deps: CollectKpisDeps): Promise<CollectionArti
     outcomes.auth_guard_up = { reason };
   }
 
+  // Una sola consulta alimenta `catalog_match_count` y `catalog_query_latency`. La
+  // latencia es la de esa consulta (no la duración total del reporter) y solo
+  // existe si terminó bien: ante cualquier fallo se omiten las dos con el mismo motivo.
   try {
-    outcomes.catalog_match_count = { value: (await deps.readCatalogMatchCount(cutoff)).value };
+    const { count, queryDurationMs } = await deps.readCatalog(cutoff);
+
+    outcomes.catalog_match_count = { value: count.value };
+    outcomes.catalog_query_latency = { value: round3(queryDurationMs) };
   } catch (error) {
-    outcomes.catalog_match_count = {
-      reason: error instanceof CatalogMatchCountSourceError ? error.reason : 'unexpected-error',
-    };
+    const reason =
+      error instanceof CatalogMatchCountSourceError ? error.reason : 'unexpected-error';
+
+    outcomes.catalog_match_count = { reason };
+    outcomes.catalog_query_latency = { reason };
   }
 
   // Validación: un valor no finito, negativo o fuera de dominio se omite.

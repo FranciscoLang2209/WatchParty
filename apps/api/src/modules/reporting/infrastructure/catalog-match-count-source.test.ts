@@ -6,6 +6,7 @@ import {
   CatalogMatchCountSourceError,
   createPgClient,
   readCatalogMatchCount,
+  readCatalogMatchCountWithLatency,
   readCatalogSourceConfig,
   type CatalogMatchCountFailureReason,
   type CatalogSqlClient,
@@ -543,5 +544,205 @@ describe('createPgClient: desconexión con el driver real', () => {
     } finally {
       spied.restore();
     }
+  });
+});
+
+// Latencia de la consulta del catálogo (`catalog_query_latency`): la misma consulta
+// real del conteo, medida con un reloj monotónico controlado por el test.
+describe('readCatalogMatchCountWithLatency: latencia de la consulta', () => {
+  interface TimedOptions extends FakeClientOptions {
+    connectMs?: number;
+    queryMs?: number;
+  }
+
+  /** Cliente cuyas operaciones hacen avanzar un reloj monotónico controlado. */
+  function timed(options: TimedOptions = {}) {
+    const clock = { ms: 1_000 };
+    const client = fakeClient(options);
+
+    client.connect.mockImplementation(async () => {
+      clock.ms += options.connectMs ?? 0;
+      if (options.connectError !== undefined) throw options.connectError;
+    });
+    client.query.mockImplementation(async () => {
+      clock.ms += options.queryMs ?? 0;
+      if (options.queryError !== undefined) throw options.queryError;
+      return { rows: options.rows ?? [{ value: '12' }] };
+    });
+
+    const createClient = vi.fn<CatalogSqlClientFactory>(() => client);
+    const result = readCatalogMatchCountWithLatency(CUTOFF, {
+      env: VALID_ENV,
+      createClient,
+      now: () => NOW,
+      monotonicMs: () => clock.ms,
+    });
+
+    return { client, createClient, clock, result };
+  }
+
+  it('mide una duración conocida con el reloj monotónico, junto con el conteo', async () => {
+    const { result } = timed({ queryMs: 42 });
+
+    await expect(result).resolves.toEqual({
+      count: { value: 12, unit: '{match}' },
+      queryDurationMs: 42,
+    });
+  });
+
+  it('mide hasta recibir el resultado y no incluye el tiempo de conexión', async () => {
+    const { result } = timed({ connectMs: 800, queryMs: 42 });
+
+    expect((await result).queryDurationMs).toBe(42);
+  });
+
+  it('una consulta instantánea da 0, que es una latencia válida', async () => {
+    const { result } = timed({ queryMs: 0 });
+
+    expect((await result).queryDurationMs).toBe(0);
+  });
+
+  it('reutiliza la consulta real del conteo: una sola consulta, la misma, al corte T', async () => {
+    const { client, result } = timed({ queryMs: 5 });
+
+    await result;
+
+    expect(client.query).toHaveBeenCalledTimes(1);
+
+    const [sql, values] = client.query.mock.calls[0]!;
+
+    expect(sql).toContain('reporting.catalog_match_count($1::timestamptz)');
+    expect(sql).not.toMatch(/\bfrom\b/i);
+    expect(values).toEqual([CUTOFF.toISOString()]);
+  });
+
+  it('no depende del reloj de pared: solo del monotónico', async () => {
+    const clock = { ms: 0 };
+    const client = fakeClient({ rows: [{ value: '3' }] });
+
+    client.query.mockImplementation(async () => {
+      clock.ms += 7;
+      return { rows: [{ value: '3' }] };
+    });
+
+    // El reloj de pared salta hacia atrás: no cambia la duración.
+    const wall = [NOW, new Date(NOW.getTime() - 3_600_000)];
+
+    const result = await readCatalogMatchCountWithLatency(CUTOFF, {
+      env: VALID_ENV,
+      createClient: () => client,
+      now: () => wall.shift() ?? NOW,
+      monotonicMs: () => clock.ms,
+    });
+
+    expect(result.queryDurationMs).toBe(7);
+  });
+
+  it('sin reloj inyectado usa uno monotónico real: la duración es finita y no negativa', async () => {
+    const client = fakeClient({ rows: [{ value: '1' }] });
+
+    const result = await readCatalogMatchCountWithLatency(CUTOFF, {
+      env: VALID_ENV,
+      createClient: () => client,
+      now: () => NOW,
+    });
+
+    expect(Number.isFinite(result.queryDurationMs)).toBe(true);
+    expect(result.queryDurationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it.each<[string, TimedOptions, CatalogMatchCountFailureReason]>([
+    ['la consulta falla', { queryError: sqlError('42883'), queryMs: 10 }, 'query-failed'],
+    [
+      'la consulta no tiene permiso',
+      { queryError: sqlError('42501'), queryMs: 10 },
+      'permission-denied',
+    ],
+    ['la conexión falla', { connectError: new Error('ECONNREFUSED') }, 'connection-failed'],
+    [
+      'la conexión es rechazada por permisos',
+      { connectError: sqlError('28P01') },
+      'permission-denied',
+    ],
+    ['el resultado es inválido', { rows: [{ value: null }], queryMs: 10 }, 'invalid-result'],
+    ['el resultado viene vacío', { rows: [], queryMs: 10 }, 'invalid-result'],
+  ])(
+    'si %s no hay latencia: se lanza el motivo y no se informa ninguna duración',
+    async (_label, options, reason) => {
+      const { client, result } = timed(options);
+      const error = await failureOf(result);
+
+      expect(error.reason).toBe(reason);
+      expect(client.end).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    ['sin configuración', {}, 'config-missing'],
+    ['con configuración inválida', { REPORTER_DATABASE_URL: 'no es una url' }, 'config-invalid'],
+  ] as const)('%s no abre ninguna conexión ni mide nada', async (_label, env, reason) => {
+    const createClient = vi.fn<CatalogSqlClientFactory>(() => fakeClient());
+    const monotonicMs = vi.fn(() => 0);
+
+    const error = await failureOf(
+      readCatalogMatchCountWithLatency(CUTOFF, { env, createClient, now: () => NOW, monotonicMs }),
+    );
+
+    expect(error.reason).toBe(reason);
+    expect(createClient).not.toHaveBeenCalled();
+    expect(monotonicMs).not.toHaveBeenCalled();
+  });
+
+  it('un corte inválido o futuro no abre ninguna conexión', async () => {
+    const createClient = vi.fn<CatalogSqlClientFactory>(() => fakeClient());
+
+    const error = await failureOf(
+      readCatalogMatchCountWithLatency(new Date(NOW.getTime() + 1), {
+        env: VALID_ENV,
+        createClient,
+        now: () => NOW,
+      }),
+    );
+
+    expect(error.reason).toBe('invalid-cutoff');
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it('el error no incluye credenciales ni host: la latencia usa el mismo aislamiento', async () => {
+    const message = `fallo en postgresql://watchparty_reporter:${PASSWORD}@db.example.test/postgres`;
+    const { result } = timed({ queryError: sqlError('XX000', message), queryMs: 3 });
+
+    const error = await failureOf(result);
+    const visible = `${error.message}${String(error)}${JSON.stringify(error)}${error.stack ?? ''}`;
+
+    expect(visible).not.toContain(PASSWORD);
+    expect(visible).not.toContain('db.example.test');
+  });
+});
+
+describe('readCatalogMatchCount: el conteo existente no cambia con la latencia', () => {
+  it('devuelve solo el conteo y su unidad, igual que antes', async () => {
+    const client = fakeClient({ rows: [{ value: '42' }] });
+
+    await expect(
+      readCatalogMatchCount(CUTOFF, { env: VALID_ENV, createClient: () => client, now: () => NOW }),
+    ).resolves.toEqual({ value: 42, unit: '{match}' });
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('cuenta lo mismo que la lectura con latencia', async () => {
+    const rows = [{ value: '7' }];
+    const deps = { env: VALID_ENV, now: () => NOW };
+
+    const solo = await readCatalogMatchCount(CUTOFF, {
+      ...deps,
+      createClient: () => fakeClient({ rows }),
+    });
+    const conLatencia = await readCatalogMatchCountWithLatency(CUTOFF, {
+      ...deps,
+      createClient: () => fakeClient({ rows }),
+    });
+
+    expect(conLatencia.count).toEqual(solo);
   });
 });
