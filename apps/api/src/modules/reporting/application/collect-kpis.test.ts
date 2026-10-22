@@ -25,6 +25,8 @@ interface Scenario {
   guardError?: Error;
   guardMs?: number;
   catalog?: () => Promise<CatalogQueryRead>;
+  /** Lectura mínima de la base (`database_up`): 1, 0 o un fallo con motivo. */
+  database?: () => Promise<0 | 1>;
   catalogMs?: number;
   /** GET /matches autenticado (cuenta técnica de lectura). */
   readStatus?: number;
@@ -75,6 +77,10 @@ function setup(scenario: Scenario = {}) {
     return scenario.catalog ? scenario.catalog() : catalogRead(12);
   });
 
+  const probeDatabase = vi.fn<CollectKpisDeps['probeDatabase']>(async () =>
+    scenario.database ? scenario.database() : 1,
+  );
+
   const withProbeToken = vi.fn(
     async <T>(use: (accessToken: string) => Promise<T>): Promise<ProbeTokenRun<T>> => {
       if (scenario.tokenThrows) throw scenario.tokenThrows;
@@ -89,6 +95,7 @@ function setup(scenario: Scenario = {}) {
   const deps: CollectKpisDeps = {
     apiBaseUrl: scenario.apiBaseUrl ?? { ok: true, baseUrl: BASE },
     readCatalog,
+    probeDatabase,
     // `vi.fn` pierde el genérico de la función: se vuelve a tipar para la dependencia.
     withProbeToken: withProbeToken as CollectKpisDeps['withProbeToken'],
     fetchFn,
@@ -96,7 +103,7 @@ function setup(scenario: Scenario = {}) {
     monotonicMs: () => clockMs,
   };
 
-  return { deps, fetchFn, readCatalog, withProbeToken, nowFn };
+  return { deps, fetchFn, readCatalog, probeDatabase, withProbeToken, nowFn };
 }
 
 function valueOf(artifact: Awaited<ReturnType<typeof collectKpis>>, kpi: string) {
@@ -123,6 +130,7 @@ describe('collectKpis: todas las fuentes válidas', () => {
       { kpi: 'health_response_latency', kind: 'technical', unit: 'ms', value: 120 },
       { kpi: 'catalog_query_latency', kind: 'technical', unit: 'ms', value: 35.123 },
       { kpi: 'health_up', kind: 'health', unit: '1', value: 1 },
+      { kpi: 'database_up', kind: 'health', unit: '1', value: 1 },
       { kpi: 'catalog_read_up', kind: 'health', unit: '1', value: 1 },
       { kpi: 'auth_guard_up', kind: 'health', unit: '1', value: 1 },
       // 120 ms + 80 ms de sondeos + 50 ms de consulta SQL = 0,25 s.
@@ -360,6 +368,9 @@ describe('collectKpis: report_collection_duration', () => {
       healthError: new TypeError('fetch failed'),
       guardError: new TypeError('fetch failed'),
       readError: new TypeError('fetch failed'),
+      database: async () => {
+        throw new CatalogMatchCountSourceError('connection-failed');
+      },
       catalog: async () => {
         throw new CatalogMatchCountSourceError('connection-failed');
       },
@@ -368,7 +379,7 @@ describe('collectKpis: report_collection_duration', () => {
     const artifact = await collectKpis(deps);
 
     expect(artifact.results.map((result) => result.kpi)).toEqual(['report_collection_duration']);
-    expect(artifact.omissions).toHaveLength(6);
+    expect(artifact.omissions).toHaveLength(7);
   });
 
   it('un reloj monotónico que retrocede produce una duración inválida y se omite', async () => {
@@ -499,7 +510,7 @@ describe('collectKpis: catálogo y lote del reporter', () => {
     });
 
     expect(batch.ok).toBe(true);
-    expect(batch.ok && batch.batch.rows).toHaveLength(7);
+    expect(batch.ok && batch.batch.rows).toHaveLength(8);
     expect(batch.ok && batch.batch.complete).toBe(true);
   });
 
@@ -516,7 +527,7 @@ describe('collectKpis: catálogo y lote del reporter', () => {
       simulated: true,
     });
 
-    expect(batch.ok && batch.batch.rows).toHaveLength(6);
+    expect(batch.ok && batch.batch.rows).toHaveLength(7);
     expect(batch.ok && batch.batch.complete).toBe(false);
     expect(batch.ok && batch.batch.visible_failure).toBe(true);
     expect(batch.ok && batch.batch.omissions).toEqual([
@@ -853,5 +864,139 @@ describe('collectKpis: catalog_query_latency', () => {
     expect(valueOf(artifact, 'health_up')).toBe(1);
     expect(valueOf(artifact, 'health_response_latency')).toBe(120);
     expect(valueOf(artifact, 'auth_guard_up')).toBe(1);
+  });
+});
+
+// `database_up`: lectura SQL mínima de la base, independiente de /health y del catálogo.
+describe('collectKpis: database_up', () => {
+  it('un 1 de la lectura mínima se informa como 1', async () => {
+    const { deps } = setup({ database: async () => 1 });
+
+    expect(valueOf(await collectKpis(deps), 'database_up')).toBe(1);
+  });
+
+  it('una indisponibilidad comprobada se informa como 0, que es un valor, no una omisión', async () => {
+    const { deps } = setup({ database: async () => 0 });
+
+    const artifact = await collectKpis(deps);
+
+    expect(artifact.results).toContainEqual({
+      kpi: 'database_up',
+      kind: 'health',
+      unit: '1',
+      value: 0,
+    });
+    expect(reasonOf(artifact, 'database_up')).toBeUndefined();
+  });
+
+  it('hace la lectura una sola vez por corrida', async () => {
+    const { deps, probeDatabase } = setup();
+
+    await collectKpis(deps);
+
+    expect(probeDatabase).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'config-missing',
+    'config-invalid',
+    'connection-failed',
+    'permission-denied',
+    'query-failed',
+    'invalid-result',
+  ] as const)(
+    'si el motivo no es una caída (%s) se omite con ese motivo y no se informa 0',
+    async (reason) => {
+      const { deps } = setup({
+        database: async () => {
+          throw new CatalogMatchCountSourceError(reason);
+        },
+      });
+
+      const artifact = await collectKpis(deps);
+
+      expect(valueOf(artifact, 'database_up')).toBeUndefined();
+      expect(reasonOf(artifact, 'database_up')).toBe(reason);
+    },
+  );
+
+  it('un error inesperado se omite sin filtrar su mensaje', async () => {
+    const { deps } = setup({
+      database: async () => {
+        throw new Error('password=secreta host=db.interno');
+      },
+    });
+
+    const artifact = await collectKpis(deps);
+
+    expect(reasonOf(artifact, 'database_up')).toBe('unexpected-error');
+    expect(JSON.stringify(artifact)).not.toContain('secreta');
+  });
+
+  it('/health no sustituye a la lectura: con /health caído la base puede seguir en 1', async () => {
+    const { deps } = setup({ healthStatus: 503, database: async () => 1 });
+
+    const artifact = await collectKpis(deps);
+
+    expect(valueOf(artifact, 'health_up')).toBe(0);
+    expect(valueOf(artifact, 'database_up')).toBe(1);
+  });
+
+  it('ni al revés: con /health sano la base puede estar en 0', async () => {
+    const { deps } = setup({ healthStatus: 200, database: async () => 0 });
+
+    const artifact = await collectKpis(deps);
+
+    expect(valueOf(artifact, 'health_up')).toBe(1);
+    expect(valueOf(artifact, 'database_up')).toBe(0);
+  });
+
+  it('un /health sin respuesta no cambia database_up', async () => {
+    const { deps } = setup({ healthError: new TypeError('fetch failed'), database: async () => 1 });
+
+    const artifact = await collectKpis(deps);
+
+    expect(valueOf(artifact, 'health_up')).toBeUndefined();
+    expect(valueOf(artifact, 'database_up')).toBe(1);
+  });
+
+  it('no depende de la consulta del catálogo: con el catálogo fallando sigue en 1', async () => {
+    const { deps } = setup({
+      database: async () => 1,
+      catalog: async () => {
+        throw new CatalogMatchCountSourceError('query-failed');
+      },
+    });
+
+    const artifact = await collectKpis(deps);
+
+    expect(valueOf(artifact, 'database_up')).toBe(1);
+    expect(reasonOf(artifact, 'catalog_match_count')).toBe('query-failed');
+  });
+
+  it('y su fallo no arrastra al conteo del catálogo ni a los sondeos HTTP', async () => {
+    const { deps } = setup({
+      database: async () => {
+        throw new CatalogMatchCountSourceError('permission-denied');
+      },
+    });
+
+    const artifact = await collectKpis(deps);
+
+    expect(valueOf(artifact, 'catalog_match_count')).toBe(12);
+    expect(valueOf(artifact, 'health_up')).toBe(1);
+    expect(valueOf(artifact, 'auth_guard_up')).toBe(1);
+  });
+
+  it('no depende de la configuración de la API: se lee igual sin REPORTER_API_BASE_URL', async () => {
+    const { deps, probeDatabase } = setup({
+      apiBaseUrl: { ok: false, reason: 'api-config-missing' },
+      database: async () => 1,
+    });
+
+    const artifact = await collectKpis(deps);
+
+    expect(probeDatabase).toHaveBeenCalledTimes(1);
+    expect(valueOf(artifact, 'database_up')).toBe(1);
   });
 });

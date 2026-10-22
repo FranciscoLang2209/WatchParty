@@ -21,6 +21,7 @@ const SIMULATED_RESULTS = [
   { kpi: 'health_response_latency', value: 312.456 },
   { kpi: 'catalog_query_latency', value: 41.5 },
   { kpi: 'health_up', value: 1 },
+  { kpi: 'database_up', value: 1 },
   { kpi: 'catalog_read_up', value: 1 },
   { kpi: 'auth_guard_up', value: 1 },
   { kpi: 'report_collection_duration', value: 1.591 },
@@ -164,7 +165,7 @@ describe('publishMeasurements: URL, headers y cuerpo del contrato', () => {
     const expected = serializeBatchPayload(rows);
 
     expect(expected.ok && server.requests[0]!.body).toBe(expected.ok && expected.json);
-    expect(sent).toHaveLength(7);
+    expect(sent).toHaveLength(8);
 
     for (const row of sent) {
       expect(Object.keys(row)).toEqual(['kpi_id', 'date', 'env', 'value', 'run_id']);
@@ -200,7 +201,7 @@ describe('publishMeasurements: URL, headers y cuerpo del contrato', () => {
       ok: true,
       run_id: SIMULATED_RUN_ID,
       env: 'dev',
-      rows: 7,
+      rows: 8,
       attempts: [{ attempt: 1, outcome: 'accepted', status: 201 }],
       verified: false,
     });
@@ -382,7 +383,7 @@ describe('publishMeasurements: inmutabilidad', () => {
     await publishMeasurements(corrected, { env, sleep: fakeSleep() });
 
     expect(stored.get('catalog_match_count|2026-10-14|dev')).toBe(4210);
-    expect(stored.size).toBe(7);
+    expect(stored.size).toBe(8);
     // Nunca hay un PATCH, PUT ni DELETE: solo POST con ignore-duplicates.
     expect(new Set(methods)).toEqual(new Set(['POST']));
     expect(server.requests.every((r) => r.headers.prefer === 'resolution=ignore-duplicates')).toBe(
