@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { enterRoom } from '@/features/rooms/api';
 import { RoomsApiError, isCancelled as isRoomCancelled } from '@/features/rooms/types';
+import { MatchRating } from '@/features/ratings/MatchRating';
 import { getWatched, setWatched } from '@/features/watched/api';
 import { WatchedApiError, isCancelled as isWatchedCancelled } from '@/features/watched/types';
 import { formatKickoff, matchStatusLabel } from './format';
@@ -20,6 +21,13 @@ type Estado =
 
 type ErrorSala = { message: string; expired: boolean };
 type ErrorVisto = { message: string; expired: boolean };
+
+/**
+ * Estado confirmado de «visto» tal como lo avisa `MarcarVisto`, atado a la
+ * clave `partido:usuario` que lo leyó: si cambia el usuario, el valor del
+ * anterior deja de valer aunque el estado todavía no se haya limpiado.
+ */
+type VistoConfirmado = { clave: string; visto: boolean };
 
 const TITULO_NEUTRO = 'Detalle del partido';
 const MENSAJE_INESPERADO = 'No pudimos cargar el partido. Intentá de nuevo.';
@@ -70,6 +78,13 @@ interface MarcarVistoProps {
   matchId: string;
   accessToken: string | null;
   onSessionExpired: () => void;
+  /**
+   * Avisa el estado CONFIRMADO de «visto»: `true`/`false` sólo con una lectura
+   * o una respuesta exitosa del servidor, y `null` mientras se desconoce (carga,
+   * error de lectura) y al desmontarse. Lo usa el detalle para decidir si
+   * ofrece la calificación (WAT-213).
+   */
+  onVistoChange?: (visto: boolean | null) => void;
 }
 
 type LecturaVisto =
@@ -91,7 +106,7 @@ type LecturaVisto =
  * de los dos arranca de cero; al desmontar se cancelan los pedidos y una
  * respuesta que igual llegue se descarta.
  */
-function MarcarVisto({ matchId, accessToken, onSessionExpired }: MarcarVistoProps) {
+function MarcarVisto({ matchId, accessToken, onSessionExpired, onVistoChange }: MarcarVistoProps) {
   const [lectura, setLectura] = useState<LecturaVisto>({ status: 'loading' });
   const [intentoLectura, setIntentoLectura] = useState(0);
   const [actualizando, setActualizando] = useState(false);
@@ -100,10 +115,14 @@ function MarcarVisto({ matchId, accessToken, onSessionExpired }: MarcarVistoProp
   // El token se renueva solo cada tanto: una renovación no vuelve a leer, por
   // eso la lectura toma el último token sin depender de él.
   const token = useRef(accessToken);
+  // El aviso al detalle se toma por ref: que cambie su identidad en cada render
+  // del padre no debe repetir el aviso ni volver a leer.
+  const avisarVisto = useRef(onVistoChange);
 
   useEffect(() => {
     token.current = accessToken;
-  }, [accessToken]);
+    avisarVisto.current = onVistoChange;
+  }, [accessToken, onVistoChange]);
 
   // Si la pantalla se desmonta mientras espera, la respuesta se descarta.
   useEffect(() => () => controller.current?.abort(), []);
@@ -136,6 +155,14 @@ function MarcarVisto({ matchId, accessToken, onSessionExpired }: MarcarVistoProp
   }, []);
 
   const visto = lectura.status === 'ready' ? lectura.visto : null;
+
+  useEffect(() => {
+    const avisar = avisarVisto.current;
+    avisar?.(visto);
+
+    // Al desmontar (otro usuario u otro partido) el estado deja de ser válido.
+    return () => avisar?.(null);
+  }, [visto]);
 
   const alternar = useCallback(() => {
     if (accessToken === null || actualizando || visto === null) return;
@@ -216,6 +243,54 @@ function MarcarVisto({ matchId, accessToken, onSessionExpired }: MarcarVistoProp
   );
 }
 
+interface CalificacionProps {
+  match: Match;
+  /** `partido:usuario` actual: con él se descarta un «visto» de otro usuario. */
+  clave: string;
+  vistoConfirmado: VistoConfirmado | null;
+  accessToken: string | null;
+  onSessionExpired: () => void;
+}
+
+/**
+ * Calificación del partido (WAT-213). Sólo se ofrece con el partido finalizado
+ * Y marcado como visto por esta persona, según el estado que confirmó el
+ * servidor: mientras «visto» se desconoce (carga, error) no se muestra nada, y
+ * un «visto» que leyó otro usuario no cuenta. Antes de finalizar no hay nada
+ * que decir; ya finalizado y sin marca, se indica el paso que falta.
+ *
+ * Se monta con `key` por partido y por usuario: si deja de ser elegible (por
+ * ejemplo, al deshacer «visto») se desmonta y cancela sus pedidos, y al volver
+ * a serlo lee de nuevo la nota persistida.
+ */
+function Calificacion({
+  match,
+  clave,
+  vistoConfirmado,
+  accessToken,
+  onSessionExpired,
+}: CalificacionProps) {
+  if (match.status !== 'finished') return null;
+  if (vistoConfirmado === null || vistoConfirmado.clave !== clave) return null;
+
+  if (!vistoConfirmado.visto) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Marcá el partido como visto para poder calificarlo.
+      </p>
+    );
+  }
+
+  return (
+    <MatchRating
+      key={clave}
+      matchId={match.id}
+      accessToken={accessToken}
+      onSessionExpired={onSessionExpired}
+    />
+  );
+}
+
 /**
  * Detalle mínimo de un partido.
  *
@@ -245,6 +320,7 @@ function DetallePartido({ matchId }: { matchId: string }) {
   const [intento, setIntento] = useState(0);
   const [entrando, setEntrando] = useState(false);
   const [errorSala, setErrorSala] = useState<ErrorSala | null>(null);
+  const [vistoConfirmado, setVistoConfirmado] = useState<VistoConfirmado | null>(null);
   const salaController = useRef<AbortController | null>(null);
 
   // Al desmontar (salir o cambiar de partido) se cancela el pedido de la sala.
@@ -360,6 +436,19 @@ function DetallePartido({ matchId }: { matchId: string }) {
             <MarcarVisto
               key={`${estado.match.id}:${userId}`}
               matchId={estado.match.id}
+              accessToken={accessToken}
+              onSessionExpired={() => void signOut()}
+              onVistoChange={(visto) =>
+                setVistoConfirmado(
+                  visto === null ? null : { clave: `${estado.match.id}:${userId}`, visto },
+                )
+              }
+            />
+
+            <Calificacion
+              match={estado.match}
+              clave={`${estado.match.id}:${userId}`}
+              vistoConfirmado={vistoConfirmado}
               accessToken={accessToken}
               onSessionExpired={() => void signOut()}
             />

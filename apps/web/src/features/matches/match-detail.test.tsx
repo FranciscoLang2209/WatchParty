@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Link, MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -951,5 +951,576 @@ describe('Cambio de partido (WAT-205)', () => {
 
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Fuera del detalle');
     expect(screen.queryByRole('heading', { name: /^Sala / })).not.toBeInTheDocument();
+  });
+  describe('calificación (WAT-213)', () => {
+    const finalizadoA = { ...partido, status: 'finished' };
+    const finalizadoB = { ...partidoB, status: 'finished' };
+
+    /** Abre A finalizado y visto, con la lectura de su nota todavía pendiente. */
+    async function abrirAConNotaPendiente() {
+      renderConNavegacion();
+      await responder(URL_A, { match: finalizadoA });
+      await responder(`${URL_A}/watched`, { watched: true });
+      await waitFor(() => expect(pendientes.get(`${URL_A}/rating`)).toHaveLength(1));
+    }
+
+    async function irABVistoSinNota() {
+      await responder(URL_B, { match: finalizadoB });
+      await responder(`${URL_B}/watched`, { watched: true });
+      await responder(`${URL_B}/rating`, { rating: null });
+      await screen.findByText('Todavía no calificaste este partido.');
+    }
+
+    it('la lectura tardía de la nota de A no pisa a B', async () => {
+      const user = userEvent.setup();
+      await abrirAConNotaPendiente();
+
+      await user.click(screen.getByRole('link', { name: 'Ir al partido B' }));
+      await irABVistoSinNota();
+
+      await responder(`${URL_A}/rating`, { rating: 5 });
+
+      expect(screen.getByRole('button', { name: '5 de 5' })).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      );
+      expect(screen.getByText('Todavía no calificaste este partido.')).toBeInTheDocument();
+    });
+
+    it('la respuesta tardía de guardar en A no cambia ni bloquea la calificación de B', async () => {
+      const user = userEvent.setup();
+      renderConNavegacion();
+      await responder(URL_A, { match: finalizadoA });
+      await responder(`${URL_A}/watched`, { watched: true });
+      await responder(`${URL_A}/rating`, { rating: null });
+      await user.click(await screen.findByRole('button', { name: '5 de 5' }));
+      await waitFor(() => expect(pendientes.get(`${URL_A}/rating`)).toHaveLength(1));
+
+      await user.click(screen.getByRole('link', { name: 'Ir al partido B' }));
+      await irABVistoSinNota();
+
+      await responder(`${URL_A}/rating`, { rating: 5 });
+
+      const cincoB = screen.getByRole('button', { name: '5 de 5' });
+      expect(cincoB).toHaveAttribute('aria-pressed', 'false');
+      expect(cincoB).toHaveAttribute('aria-disabled', 'false');
+      expect(screen.queryByText(/guardada/i)).not.toBeInTheDocument();
+    });
+
+    it('el error tardío de guardar en A no se muestra en B', async () => {
+      const user = userEvent.setup();
+      renderConNavegacion();
+      await responder(URL_A, { match: finalizadoA });
+      await responder(`${URL_A}/watched`, { watched: true });
+      await responder(`${URL_A}/rating`, { rating: null });
+      await user.click(await screen.findByRole('button', { name: '5 de 5' }));
+      await waitFor(() => expect(pendientes.get(`${URL_A}/rating`)).toHaveLength(1));
+
+      await user.click(screen.getByRole('link', { name: 'Ir al partido B' }));
+      await irABVistoSinNota();
+
+      await responder(`${URL_A}/rating`, { error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500);
+
+      expect(
+        screen.queryByText('No pudimos guardar tu calificación. Intentá de nuevo.'),
+      ).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe('Calificación del partido (WAT-213)', () => {
+  const URL_PARTIDO = `${API_BASE}/matches/match-001`;
+  const URL_VISTO = `${URL_PARTIDO}/watched`;
+  const URL_NOTA = `${URL_PARTIDO}/rating`;
+
+  interface OpcionesServidor {
+    status?: string;
+    visto?: boolean;
+    nota?: number | null;
+    /** Reemplaza la lectura del visto (por ejemplo, para dejarla pendiente o fallar). */
+    lecturaVisto?: (init?: RequestInit) => Promise<Response>;
+    lecturaNota?: (init?: RequestInit) => Promise<Response>;
+    guardadoNota?: (rating: number, init?: RequestInit) => Promise<Response>;
+  }
+
+  /**
+   * Servidor en memoria: el detalle, el visto (GET/PUT/DELETE) y la nota
+   * (GET/PUT) persisten como la API real, así las pruebas siguen el flujo
+   * completo sin acoplarse al orden de los pedidos.
+   */
+  function servidor({
+    status = 'finished',
+    visto: vistoInicial = true,
+    nota: notaInicial = null,
+    lecturaVisto,
+    lecturaNota,
+    guardadoNota,
+  }: OpcionesServidor = {}) {
+    let visto = vistoInicial;
+    let nota = notaInicial;
+
+    fetchSpy.mockImplementation((url: RequestInfo | URL, init?: RequestInit) => {
+      const destino = String(url);
+      const metodo = init?.method ?? 'GET';
+
+      if (destino === URL_PARTIDO) {
+        return Promise.resolve(jsonResponse({ match: { ...partido, status } }));
+      }
+
+      if (destino === URL_VISTO) {
+        if (metodo === 'GET') {
+          return lecturaVisto
+            ? lecturaVisto(init)
+            : Promise.resolve(jsonResponse({ watched: visto }));
+        }
+        visto = metodo === 'PUT';
+        return Promise.resolve(jsonResponse({ watched: visto }));
+      }
+
+      if (destino === URL_NOTA) {
+        if (metodo === 'GET') {
+          return lecturaNota ? lecturaNota(init) : Promise.resolve(jsonResponse({ rating: nota }));
+        }
+        const pedida = (JSON.parse(String(init?.body)) as { rating: number }).rating;
+        if (guardadoNota) return guardadoNota(pedida, init);
+        nota = pedida;
+        return Promise.resolve(jsonResponse({ rating: nota }));
+      }
+
+      return Promise.resolve(jsonResponse({ error: { code: 'NOT_FOUND', message: 'x' } }, 404));
+    });
+  }
+
+  function pedidosNota(): [string, RequestInit][] {
+    return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
+      ([url]) => String(url) === URL_NOTA,
+    );
+  }
+
+  function guardadosNota(): [string, RequestInit][] {
+    return pedidosNota().filter(([, init]) => init.method === 'PUT');
+  }
+
+  async function abrirDetalle() {
+    renderAt('/matches/match-001');
+    return detalle();
+  }
+
+  describe('elegibilidad', () => {
+    it('finalizado y visto: lee la nota con GET y bearer y ofrece el selector', async () => {
+      servidor({ nota: 4 });
+
+      const m = await abrirDetalle();
+
+      expect(await m.findByRole('button', { name: '4 de 5' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      expect(m.getByRole('heading', { level: 2, name: 'Calificá el partido' })).toBeInTheDocument();
+      const [url, init] = pedidosNota()[0]!;
+      expect(url).toBe(URL_NOTA);
+      expect(init.method).toBe('GET');
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-123');
+    });
+
+    it('finalizado y visto, sin nota: muestra el selector y el aviso de ausencia', async () => {
+      servidor({ nota: null });
+
+      const m = await abrirDetalle();
+
+      expect(await m.findByText('Todavía no calificaste este partido.')).toBeInTheDocument();
+      expect(m.getAllByRole('button', { name: /de 5$/ })).toHaveLength(5);
+    });
+
+    it('finalizado pero no visto: no ofrece calificar, indica el paso que falta y no pide la nota', async () => {
+      servidor({ visto: false });
+
+      const m = await abrirDetalle();
+
+      expect(
+        await m.findByText('Marcá el partido como visto para poder calificarlo.'),
+      ).toBeInTheDocument();
+      expect(m.queryByRole('button', { name: /de 5$/ })).not.toBeInTheDocument();
+      expect(pedidosNota()).toHaveLength(0);
+    });
+
+    it.each(['scheduled', 'live', 'postponed', 'cancelled'])(
+      'partido %s, aunque esté marcado como visto: no ofrece calificar ni pide la nota',
+      async (status) => {
+        servidor({ status, visto: true });
+
+        const m = await abrirDetalle();
+        await m.findByRole('button', { name: 'Deshacer visto' });
+
+        expect(m.queryByRole('button', { name: /de 5$/ })).not.toBeInTheDocument();
+        expect(m.queryByText(/calificar/i)).not.toBeInTheDocument();
+        expect(pedidosNota()).toHaveLength(0);
+      },
+    );
+
+    it('mientras se desconoce «visto» no ofrece calificar ni lo da por no visto', async () => {
+      servidor({ lecturaVisto: () => new Promise<Response>(() => {}) });
+
+      const m = await abrirDetalle();
+      await m.findByText('Consultando si ya viste este partido…');
+
+      expect(m.queryByRole('button', { name: /de 5$/ })).not.toBeInTheDocument();
+      expect(m.queryByText(/marcá el partido como visto/i)).not.toBeInTheDocument();
+      expect(pedidosNota()).toHaveLength(0);
+    });
+
+    it('si falla la lectura de «visto» no ofrece calificar', async () => {
+      servidor({
+        lecturaVisto: () =>
+          Promise.resolve(jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)),
+      });
+
+      const m = await abrirDetalle();
+      await m.findByRole('button', { name: 'Reintentar' });
+
+      expect(m.queryByRole('button', { name: /de 5$/ })).not.toBeInTheDocument();
+      expect(pedidosNota()).toHaveLength(0);
+    });
+
+    it('marcar como visto habilita calificar y deshacerlo lo retira', async () => {
+      servidor({ visto: false, nota: 3 });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await user.click(await m.findByRole('button', { name: 'Marcar como visto' }));
+
+      expect(await m.findByRole('button', { name: '3 de 5' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+
+      await user.click(m.getByRole('button', { name: 'Deshacer visto' }));
+
+      await waitFor(() =>
+        expect(m.queryByRole('button', { name: /de 5$/ })).not.toBeInTheDocument(),
+      );
+      expect(
+        m.getByText('Marcá el partido como visto para poder calificarlo.'),
+      ).toBeInTheDocument();
+    });
+
+    it('no agrega reseñas ni calificaciones de jugadores', async () => {
+      servidor({ nota: null });
+
+      const m = await abrirDetalle();
+      await m.findByText('Todavía no calificaste este partido.');
+
+      expect(m.queryByRole('textbox')).not.toBeInTheDocument();
+      expect(m.queryByText(/reseña|jugador/i)).not.toBeInTheDocument();
+      expect(m.getAllByRole('button', { name: /de 5$/ })).toHaveLength(5);
+    });
+  });
+
+  describe('estados', () => {
+    it('anuncia la carga de la nota y no ofrece ninguna acción mientras tanto', async () => {
+      servidor({ lecturaNota: () => new Promise<Response>(() => {}) });
+
+      const m = await abrirDetalle();
+
+      expect(await m.findByText('Consultando tu calificación…')).toBeInTheDocument();
+      expect(m.queryByRole('button', { name: /de 5$/ })).not.toBeInTheDocument();
+      expect(m.queryByText('Todavía no calificaste este partido.')).not.toBeInTheDocument();
+    });
+
+    it('un error al leer la nota avisa, no lo presenta como sin calificar y deja reintentar', async () => {
+      let intento = 0;
+      servidor({
+        nota: 2,
+        lecturaNota: () => {
+          intento += 1;
+          return Promise.resolve(
+            intento === 1
+              ? jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)
+              : jsonResponse({ rating: 2 }),
+          );
+        },
+      });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+
+      expect(
+        await m.findByText('No pudimos cargar tu calificación. Intentá de nuevo.'),
+      ).toBeInTheDocument();
+      expect(m.queryByText('Todavía no calificaste este partido.')).not.toBeInTheDocument();
+
+      const reintentos = m.getAllByRole('button', { name: 'Reintentar' });
+      await user.click(reintentos.at(-1)!);
+
+      expect(await m.findByRole('button', { name: '2 de 5' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    });
+  });
+
+  describe('guardar y editar', () => {
+    it('guarda con PUT, bearer y cuerpo { rating }, y anuncia el guardado', async () => {
+      servidor({ nota: null });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await user.click(await m.findByRole('button', { name: '5 de 5' }));
+
+      expect(await m.findByText('Calificación guardada: 5 de 5.')).toBeInTheDocument();
+      expect(m.getByRole('button', { name: '5 de 5' })).toHaveAttribute('aria-pressed', 'true');
+      const [url, init] = guardadosNota()[0]!;
+      expect(url).toBe(URL_NOTA);
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-123');
+      expect(JSON.parse(String(init.body))).toEqual({ rating: 5 });
+    });
+
+    it('edita la nota existente y deja la nueva como única marcada', async () => {
+      servidor({ nota: 4 });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await user.click(await m.findByRole('button', { name: '2 de 5' }));
+
+      expect(await m.findByText('Calificación guardada: 2 de 5.')).toBeInTheDocument();
+      expect(m.getByRole('button', { name: '2 de 5' })).toHaveAttribute('aria-pressed', 'true');
+      expect(m.getByRole('button', { name: '4 de 5' })).toHaveAttribute('aria-pressed', 'false');
+      expect(guardadosNota()).toHaveLength(1);
+    });
+
+    it('guardar, recargar y volver a abrir muestran la nota persistida', async () => {
+      servidor({ nota: null });
+      const user = userEvent.setup();
+
+      const primera = await abrirDetalle();
+      await user.click(await primera.findByRole('button', { name: '3 de 5' }));
+      await primera.findByText('Calificación guardada: 3 de 5.');
+      cleanup();
+
+      const recargada = await abrirDetalle();
+
+      expect(await recargada.findByRole('button', { name: '3 de 5' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      expect(recargada.getByText('Tu calificación: 3 de 5.')).toBeInTheDocument();
+    });
+
+    it('mientras guarda no acepta más envíos: doble clic y otra nota generan un único PUT', async () => {
+      let resolver!: (respuesta: Response) => void;
+      servidor({
+        nota: null,
+        guardadoNota: () => new Promise<Response>((resolve) => (resolver = resolve)),
+      });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await user.dblClick(await m.findByRole('button', { name: '5 de 5' }));
+      await user.click(m.getByRole('button', { name: '1 de 5' }));
+
+      expect(guardadosNota()).toHaveLength(1);
+      expect(m.getByText('Guardando tu calificación…')).toBeInTheDocument();
+
+      await act(async () => resolver(jsonResponse({ rating: 5 })));
+
+      expect(await m.findByText('Calificación guardada: 5 de 5.')).toBeInTheDocument();
+    });
+
+    it('muestra la nota que confirma el servidor, no la que se pidió', async () => {
+      servidor({ nota: null, guardadoNota: () => Promise.resolve(jsonResponse({ rating: 3 })) });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await user.click(await m.findByRole('button', { name: '5 de 5' }));
+
+      expect(await m.findByText('Calificación guardada: 3 de 5.')).toBeInTheDocument();
+      expect(m.getByRole('button', { name: '3 de 5' })).toHaveAttribute('aria-pressed', 'true');
+      expect(m.getByRole('button', { name: '5 de 5' })).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('un error de la API avisa, conserva la última nota confirmada y deja reintentar', async () => {
+      let intento = 0;
+      servidor({
+        nota: 4,
+        guardadoNota: (rating) => {
+          intento += 1;
+          return Promise.resolve(
+            intento === 1
+              ? jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)
+              : jsonResponse({ rating }),
+          );
+        },
+      });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await user.click(await m.findByRole('button', { name: '2 de 5' }));
+
+      expect(
+        await m.findByText('No pudimos guardar tu calificación. Intentá de nuevo.'),
+      ).toBeInTheDocument();
+      expect(m.getByRole('button', { name: '4 de 5' })).toHaveAttribute('aria-pressed', 'true');
+      expect(m.getByRole('button', { name: '2 de 5' })).toHaveAttribute('aria-pressed', 'false');
+
+      await user.click(m.getByRole('button', { name: '2 de 5' }));
+
+      expect(await m.findByText('Calificación guardada: 2 de 5.')).toBeInTheDocument();
+      expect(
+        m.queryByText('No pudimos guardar tu calificación. Intentá de nuevo.'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('un 409 (el partido dejó de ser calificable) se avisa con su propio mensaje', async () => {
+      servidor({
+        nota: null,
+        guardadoNota: () =>
+          Promise.resolve(jsonResponse({ error: { code: 'CONFLICT', message: 'x' } }, 409)),
+      });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await user.click(await m.findByRole('button', { name: '5 de 5' }));
+
+      expect(
+        await m.findByText('Sólo se puede calificar un partido finalizado y marcado como visto.'),
+      ).toBeInTheDocument();
+      expect(m.getByRole('button', { name: '5 de 5' })).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('una caída de red al guardar avisa y no cambia la nota', async () => {
+      servidor({ nota: 4, guardadoNota: () => Promise.reject(new TypeError('Failed to fetch')) });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await user.click(await m.findByRole('button', { name: '1 de 5' }));
+
+      expect(await m.findByText(/No pudimos conectarnos/)).toBeInTheDocument();
+      expect(m.getByRole('button', { name: '4 de 5' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('ante un 401 al guardar ofrece reingresar con el flujo de Auth existente', async () => {
+      servidor({
+        nota: null,
+        guardadoNota: () =>
+          Promise.resolve(jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401)),
+      });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await user.click(await m.findByRole('button', { name: '5 de 5' }));
+      const reingresar = await m.findAllByRole('button', { name: 'Iniciar sesión nuevamente' });
+      await user.click(reingresar.at(-1)!);
+
+      expect(authMock.signOut).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('teclado', () => {
+    it('se opera con el teclado: Tab llega al selector, Enter guarda y Espacio edita', async () => {
+      servidor({ nota: null });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      const uno = await m.findByRole('button', { name: '1 de 5' });
+      uno.focus();
+
+      await user.keyboard('{Enter}');
+      expect(await m.findByText('Calificación guardada: 1 de 5.')).toBeInTheDocument();
+
+      await user.tab();
+      await user.keyboard(' ');
+      expect(await m.findByText('Calificación guardada: 2 de 5.')).toBeInTheDocument();
+      expect(guardadosNota()).toHaveLength(2);
+    });
+  });
+
+  describe('cambio de usuario', () => {
+    it('vuelve a leer con su bearer y no conserva la nota del anterior', async () => {
+      const otraSesion = {
+        access_token: 'token-otro',
+        user: { id: 'user-2', email: 'c@d.com' },
+      } as Session;
+      servidor({
+        lecturaNota: (init) =>
+          Promise.resolve(
+            jsonResponse({
+              rating:
+                new Headers(init?.headers).get('Authorization') === 'Bearer token-123' ? 5 : null,
+            }),
+          ),
+      });
+
+      const m = await abrirDetalle();
+      expect(await m.findByRole('button', { name: '5 de 5' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+
+      const [[alCambiarSesion]] = authMock.onAuthStateChange.mock.calls as [
+        [(evento: string, sesion: Session | null) => void],
+      ];
+      act(() => alCambiarSesion('SIGNED_IN', otraSesion));
+
+      expect(await m.findByText('Todavía no calificaste este partido.')).toBeInTheDocument();
+      expect(m.getByRole('button', { name: '5 de 5' })).toHaveAttribute('aria-pressed', 'false');
+      const ultimaLectura = pedidosNota().at(-1)!;
+      expect(new Headers(ultimaLectura[1].headers).get('Authorization')).toBe('Bearer token-otro');
+    });
+
+    it('el «visto» del usuario anterior no habilita calificar al nuevo', async () => {
+      const otraSesion = {
+        access_token: 'token-otro',
+        user: { id: 'user-2', email: 'c@d.com' },
+      } as Session;
+      let resolverLecturaNuevoUsuario!: (respuesta: Response) => void;
+      servidor({
+        nota: 4,
+        lecturaVisto: (init) =>
+          new Promise<Response>((resolve) => {
+            const esNuevo = new Headers(init?.headers).get('Authorization') === 'Bearer token-otro';
+            if (esNuevo) resolverLecturaNuevoUsuario = resolve;
+            else resolve(jsonResponse({ watched: true }));
+          }),
+      });
+
+      const m = await abrirDetalle();
+      await m.findByRole('button', { name: '4 de 5' });
+
+      const [[alCambiarSesion]] = authMock.onAuthStateChange.mock.calls as [
+        [(evento: string, sesion: Session | null) => void],
+      ];
+      act(() => alCambiarSesion('SIGNED_IN', otraSesion));
+
+      await m.findByText('Consultando si ya viste este partido…');
+      expect(m.queryByRole('button', { name: /de 5$/ })).not.toBeInTheDocument();
+      // Ni siquiera se pide la nota con el bearer del usuario nuevo: el «visto»
+      // del anterior no cuenta, aunque el estado del detalle todavía lo tenga.
+      expect(
+        pedidosNota().filter(
+          ([, init]) => new Headers(init.headers).get('Authorization') === 'Bearer token-otro',
+        ),
+      ).toHaveLength(0);
+
+      await act(async () => resolverLecturaNuevoUsuario(jsonResponse({ watched: false })));
+
+      expect(
+        await m.findByText('Marcá el partido como visto para poder calificarlo.'),
+      ).toBeInTheDocument();
+      expect(m.queryByRole('button', { name: /de 5$/ })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('vista móvil', () => {
+    it('los botones miden 44 px (tamaño táctil) y el grupo permite que envuelvan', async () => {
+      servidor({ nota: null });
+
+      const m = await abrirDetalle();
+      const grupo = await m.findByRole('group', { name: 'Calificá el partido' });
+
+      expect(grupo).toHaveClass('flex', 'flex-wrap');
+      for (const boton of within(grupo).getAllByRole('button')) {
+        expect(boton).toHaveClass('size-11');
+      }
+    });
   });
 });
