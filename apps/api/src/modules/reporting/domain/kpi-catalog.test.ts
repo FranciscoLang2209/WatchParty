@@ -14,6 +14,7 @@ describe('KPI_CATALOG', () => {
     expect(KPI_CATALOG.map((kpi) => kpi.id)).toEqual([
       'catalog_match_count',
       'health_response_latency',
+      'catalog_query_latency',
       'health_up',
       'catalog_read_up',
       'auth_guard_up',
@@ -25,11 +26,22 @@ describe('KPI_CATALOG', () => {
     expect(KPI_CATALOG.map(({ id, kind, unit }) => ({ id, kind, unit }))).toEqual([
       { id: 'catalog_match_count', kind: 'technical', unit: '{match}' },
       { id: 'health_response_latency', kind: 'technical', unit: 'ms' },
+      { id: 'catalog_query_latency', kind: 'technical', unit: 'ms' },
       { id: 'health_up', kind: 'health', unit: '1' },
       { id: 'catalog_read_up', kind: 'health', unit: '1' },
       { id: 'auth_guard_up', kind: 'health', unit: '1' },
       { id: 'report_collection_duration', kind: 'technical', unit: 's' },
     ]);
+  });
+
+  it('catalog_query_latency es técnico, en milisegundos, y distinto de la duración total del reporte', () => {
+    const latencia = KPI_CATALOG.find((kpi) => kpi.id === 'catalog_query_latency');
+    const duracion = KPI_CATALOG.find((kpi) => kpi.id === 'report_collection_duration');
+
+    expect(latencia).toMatchObject({ kind: 'technical', unit: 'ms' });
+    expect(duracion).toMatchObject({ unit: 's' });
+    expect(latencia?.description).toMatch(/consulta SQL del catálogo/);
+    expect(isKpiId('catalog_query_latency')).toBe(true);
   });
 
   it('cada KPI tiene una descripción con su semántica', () => {
@@ -39,12 +51,7 @@ describe('KPI_CATALOG', () => {
   });
 
   it('no incluye los KPIs de negocio ni los que aún no tienen fuente verificada', () => {
-    for (const id of [
-      'rated_match_rate',
-      'monthly_interactions_avg',
-      'catalog_query_latency',
-      'database_up',
-    ]) {
+    for (const id of ['rated_match_rate', 'monthly_interactions_avg', 'database_up']) {
       expect(isKpiId(id)).toBe(false);
     }
   });
@@ -56,6 +63,8 @@ describe('isValidKpiValue: rangos y unidades', () => {
     ['catalog_match_count', 4210],
     ['health_response_latency', 0],
     ['health_response_latency', 312.456],
+    ['catalog_query_latency', 0],
+    ['catalog_query_latency', 41.5],
     ['health_up', 0],
     ['health_up', 1],
     ['catalog_read_up', 0],
@@ -72,6 +81,7 @@ describe('isValidKpiValue: rangos y unidades', () => {
     ['catalog_match_count', -1],
     ['catalog_match_count', 1.5],
     ['health_response_latency', -0.001],
+    ['catalog_query_latency', -0.001],
     ['health_up', 2],
     ['health_up', -1],
     ['health_up', 0.5],

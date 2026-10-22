@@ -51,6 +51,14 @@ export const KPI_CATALOG = [
     rule: { min: 0 },
   },
   {
+    id: 'catalog_query_latency',
+    kind: 'technical',
+    unit: 'ms',
+    description:
+      'Tiempo monotónico, en milisegundos, de la consulta SQL del catálogo hasta recibir su resultado, sin contar la conexión; solo si la consulta termina correctamente, si no se omite. Observa el tiempo de acceso a datos.',
+    rule: { min: 0 },
+  },
+  {
     id: 'health_up',
     kind: 'health',
     unit: '1',

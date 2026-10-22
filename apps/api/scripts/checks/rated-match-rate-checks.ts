@@ -1,12 +1,21 @@
-import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import type { CheckResult } from '../utils/db-checks.js';
+import {
+  MATCH_1,
+  MATCH_2,
+  MATCH_3,
+  actAsReporter,
+  comment,
+  describe,
+  errorCodeOf,
+  markTechnical,
+  rateMatch,
+  seedUser,
+  watch,
+  type Aggregate,
+} from '../utils/reporting-fixtures.js';
 
 const PERMISSION_DENIED = '42501';
-// Partidos sembrados por supabase/seed.sql (WAT-103).
-const MATCH_1 = 'a1111111-1111-1111-1111-111111111111';
-const MATCH_2 = 'a2222222-2222-2222-2222-222222222222';
-const MATCH_3 = 'a3333333-3333-3333-3333-333333333333';
 
 // Marzo de 2020 en Argentina (UTC-3): lejos de cualquier dato local real, así
 // el cálculo conocido no se contamina con filas de desarrollo.
@@ -17,79 +26,12 @@ const FUTURE_CUTOFF = '2999-01-01T00:00:00Z';
 // Rol que hace de reporter en los checks de permisos (ver más abajo).
 const REPORTER_STAND_IN = 'authenticated';
 
-interface Aggregate {
-  value: number | null;
-  omission_reason: string | null;
-}
-
 async function rate(client: pg.Client, cutoff: string): Promise<Aggregate> {
   const { rows } = await client.query<Aggregate>(
     'select value, omission_reason from reporting.rated_match_rate($1::timestamptz)',
     [cutoff],
   );
   return rows[0]!;
-}
-
-function describe(aggregate: Aggregate): string {
-  return `value=${aggregate.value}, omission_reason=${aggregate.omission_reason}`;
-}
-
-/** Ejecuta `sql` en un savepoint y devuelve el código de error, o null si no falló. */
-async function errorCodeOf(client: pg.Client, sql: string): Promise<string | null> {
-  await client.query('savepoint attempt');
-  try {
-    await client.query(sql);
-    await client.query('release savepoint attempt');
-    return null;
-  } catch (error) {
-    await client.query('rollback to savepoint attempt');
-    return (error as { code?: string }).code ?? 'unknown';
-  }
-}
-
-async function seedUser(client: pg.Client): Promise<string> {
-  const id = randomUUID();
-  await client.query('insert into auth.users (id) values ($1)', [id]);
-  return id;
-}
-
-async function roomOf(client: pg.Client, matchId: string): Promise<string> {
-  await client.query('insert into rooms (match_id) values ($1) on conflict (match_id) do nothing', [
-    matchId,
-  ]);
-  const { rows } = await client.query<{ id: string }>('select id from rooms where match_id = $1', [
-    matchId,
-  ]);
-  return rows[0]!.id;
-}
-
-async function watch(client: pg.Client, userId: string, matchId: string, at: string) {
-  await client.query(
-    'insert into watched_matches (user_id, match_id, created_at) values ($1, $2, $3)',
-    [userId, matchId, at],
-  );
-}
-
-async function comment(client: pg.Client, userId: string, matchId: string, at: string) {
-  await client.query(
-    `insert into room_comments (room_id, author_id, body, client_request_id, created_at)
-     values ($1, $2, 'comentario de prueba', gen_random_uuid(), $3)`,
-    [await roomOf(client, matchId), userId, at],
-  );
-}
-
-async function rateMatch(
-  client: pg.Client,
-  userId: string,
-  matchId: string,
-  createdAt: string,
-  updatedAt: string,
-) {
-  await client.query(
-    `insert into match_ratings (user_id, match_id, rating, created_at, updated_at)
-     values ($1, $2, 4, $3, $4)`,
-    [userId, matchId, createdAt, updatedAt],
-  );
 }
 
 /**
@@ -171,7 +113,7 @@ export async function checkRatedMatchRate(client: pg.Client): Promise<CheckResul
     detail: describe(unmarked),
   });
 
-  await client.query('insert into reporting.technical_accounts (user_id) values ($1)', [technical]);
+  await markTechnical(client, technical);
 
   // Cálculo conocido: u1–m1 y u2–m1 sobre 5 pares = 40 %.
   const known = await rate(client, CUTOFF);
@@ -200,14 +142,7 @@ export async function checkRatedMatchRate(client: pg.Client): Promise<CheckResul
   // authenticated solo USAGE y EXECUTE, y el rollback lo deshace. No crea un
   // rol propio porque en el Postgres de Supabase local `grant <rol> to
   // current_user` tira abajo el proceso (segfault).
-  // USAGE lo da el dueño del esquema, igual que la migración.
-  await client.query('set local role watchparty_reporter_source');
-  await client.query(`grant usage on schema reporting to ${REPORTER_STAND_IN}`);
-  await client.query('reset role');
-  await client.query(
-    `grant execute on function reporting.rated_match_rate(timestamptz) to ${REPORTER_STAND_IN}`,
-  );
-  await client.query(`set local role ${REPORTER_STAND_IN}`);
+  await actAsReporter(client, REPORTER_STAND_IN, 'reporting.rated_match_rate(timestamptz)');
 
   const asReporter = await rate(client, CUTOFF);
   results.push({

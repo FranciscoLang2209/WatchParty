@@ -1,6 +1,6 @@
 import {
   CatalogMatchCountSourceError,
-  type CatalogMatchCount,
+  type CatalogQueryRead,
 } from '../infrastructure/catalog-match-count-source.js';
 import {
   hasExpectedMatchesSchema,
@@ -85,8 +85,11 @@ export function readReporterApiBaseUrl(env: NodeJS.ProcessEnv = process.env): Ap
 
 export interface CollectKpisDeps {
   apiBaseUrl: ApiBaseUrlConfig;
-  /** Fuente SQL del conteo del catálogo (WAT-198). Falla con `CatalogMatchCountSourceError`. */
-  readCatalogMatchCount: (cutoff: Date) => Promise<CatalogMatchCount>;
+  /**
+   * Fuente SQL del catálogo (WAT-198): una sola consulta que trae el conteo y la
+   * duración de esa consulta. Falla con `CatalogMatchCountSourceError`.
+   */
+  readCatalog: (cutoff: Date) => Promise<CatalogQueryRead>;
   /**
    * Entrega a `use` el token de la cuenta técnica de lectura y lo descarta al
    * terminar. El colector nunca ve credenciales ni guarda el token. Si no hay
@@ -200,12 +203,20 @@ export async function collectKpis(deps: CollectKpisDeps): Promise<CollectionArti
     outcomes.catalog_read_up = { reason };
   }
 
+  // Una sola consulta alimenta `catalog_match_count` y `catalog_query_latency`. La
+  // latencia es la de esa consulta (no la duración total del reporter) y solo
+  // existe si terminó bien: ante cualquier fallo se omiten las dos con el mismo motivo.
   try {
-    outcomes.catalog_match_count = { value: (await deps.readCatalogMatchCount(cutoff)).value };
+    const { count, queryDurationMs } = await deps.readCatalog(cutoff);
+
+    outcomes.catalog_match_count = { value: count.value };
+    outcomes.catalog_query_latency = { value: round3(queryDurationMs) };
   } catch (error) {
-    outcomes.catalog_match_count = {
-      reason: error instanceof CatalogMatchCountSourceError ? error.reason : 'unexpected-error',
-    };
+    const reason =
+      error instanceof CatalogMatchCountSourceError ? error.reason : 'unexpected-error';
+
+    outcomes.catalog_match_count = { reason };
+    outcomes.catalog_query_latency = { reason };
   }
 
   // Validación: un valor no finito, negativo o fuera de dominio se omite.
