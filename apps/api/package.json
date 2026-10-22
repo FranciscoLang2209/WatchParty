@@ -22,6 +22,7 @@
     "verify:match-rating-api": "tsx --env-file-if-exists=.env scripts/verify-match-rating-api.ts",
     "verify:rated-match-rate": "tsx --env-file-if-exists=.env scripts/verify-rated-match-rate.ts",
     "verify:monthly-interactions-avg": "tsx --env-file-if-exists=.env scripts/verify-monthly-interactions-avg.ts",
+    "verify:watched-history-journey": "tsx --env-file-if-exists=.env scripts/verify-watched-history-journey.ts",
     "matches:sync": "tsx --env-file-if-exists=.env src/scripts/sync-matches.ts",
     "reporter:collect": "tsx --env-file-if-exists=.env src/scripts/collect-kpis.ts",
     "reporter:publish": "tsx --env-file-if-exists=.env src/scripts/publish-kpis.ts",
