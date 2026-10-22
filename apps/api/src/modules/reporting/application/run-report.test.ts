@@ -11,6 +11,13 @@ function artifact(overrides: Partial<CollectionArtifact> = {}): CollectionArtifa
     cutoff: '2026-10-14T04:00:00.000Z',
     localDate: '2026-10-14',
     results: [
+      { kpi: 'rated_match_rate', kind: 'business', unit: '%', value: 62.5 },
+      {
+        kpi: 'monthly_interactions_avg',
+        kind: 'business',
+        unit: '{interaction}/{user}',
+        value: 3.4,
+      },
       { kpi: 'catalog_match_count', kind: 'technical', unit: '{match}', value: 4210 },
       { kpi: 'health_response_latency', kind: 'technical', unit: 'ms', value: 312.456 },
       { kpi: 'catalog_query_latency', kind: 'technical', unit: 'ms', value: 41.5 },
@@ -45,7 +52,7 @@ describe('runReport: todas las fuentes válidas', () => {
     const { files } = await run(artifact());
     const rows = JSON.parse(files[PAYLOAD_FILE]!) as Record<string, unknown>[];
 
-    expect(rows).toHaveLength(8);
+    expect(rows).toHaveLength(10);
 
     for (const row of rows) {
       expect(Object.keys(row)).toEqual(['kpi_id', 'date', 'env', 'value', 'run_id']);
@@ -110,7 +117,7 @@ describe('runReport: falta de fuentes = fallo visible, pero los archivos se cons
 
     expect(exitCode).toBe(1);
     expect(Object.keys(files).sort()).toEqual([ARCHIVE_FILE, PAYLOAD_FILE, RESULT_FILE].sort());
-    expect(JSON.parse(files[PAYLOAD_FILE]!)).toHaveLength(7);
+    expect(JSON.parse(files[PAYLOAD_FILE]!)).toHaveLength(9);
   });
 
   it('el resultado y el archivo conservan el motivo y marcan el fallo visible', async () => {
@@ -131,6 +138,8 @@ describe('runReport: falta de fuentes = fallo visible, pero los archivos se cons
       artifact({
         results: [],
         omissions: [
+          { kpi: 'rated_match_rate', reason: 'config-missing' },
+          { kpi: 'monthly_interactions_avg', reason: 'config-missing' },
           { kpi: 'catalog_match_count', reason: 'config-missing' },
           { kpi: 'health_response_latency', reason: 'api-config-missing' },
           { kpi: 'catalog_query_latency', reason: 'config-missing' },
@@ -150,7 +159,7 @@ describe('runReport: falta de fuentes = fallo visible, pero los archivos se cons
 
     expect(result).toMatchObject({ ok: false, visible_failure: true });
     expect(result.issues).toEqual([{ row: null, code: 'empty-batch' }]);
-    expect(result.omissions).toHaveLength(8);
+    expect(result.omissions).toHaveLength(10);
     expect(result.omissions).toContainEqual({
       kpi_id: 'catalog_match_count',
       reason: 'config-missing',
@@ -162,7 +171,7 @@ describe('runReport: falta de fuentes = fallo visible, pero los archivos se cons
       artifact({
         results: [
           ...artifact().results,
-          { kpi: 'rated_match_rate' as never, kind: 'business' as never, unit: '%', value: 50 },
+          { kpi: 'active_users' as never, kind: 'business' as never, unit: '%', value: 50 },
         ],
       }),
     );
@@ -222,5 +231,71 @@ describe('runReport: los archivos no contienen secretos', () => {
     for (const content of Object.values(files)) {
       expect(content).not.toMatch(/apikey|x-project-key|service_role|password|secret|token/i);
     }
+  });
+});
+
+// Los diez KPIs de ADR-05 de punta a punta: del artefacto del colector a los archivos de la corrida.
+describe('runReport: diez KPIs', () => {
+  const BUSINESS = ['rated_match_rate', 'monthly_interactions_avg'];
+
+  it('con los diez valores válidos sale con 0 y el payload tiene diez filas finitas', async () => {
+    const { files, exitCode } = await run(artifact());
+    const rows = JSON.parse(files[PAYLOAD_FILE]!) as { kpi_id: string; value: number }[];
+
+    expect(exitCode).toBe(0);
+    expect(rows).toHaveLength(10);
+    expect(rows.every((row) => Number.isFinite(row.value))).toBe(true);
+    expect(rows.find((row) => row.kpi_id === 'rated_match_rate')?.value).toBe(62.5);
+    expect(rows.find((row) => row.kpi_id === 'monthly_interactions_avg')?.value).toBe(3.4);
+    expect(parsed(files, ARCHIVE_FILE)).toMatchObject({ complete: true, visible_failure: false });
+  });
+
+  it('sin denominador los de negocio se omiten con su motivo: salida 1, sin filas ni ceros inventados', async () => {
+    const { files, exitCode } = await run(
+      artifact({
+        results: artifact().results.filter((r) => !BUSINESS.includes(r.kpi)),
+        omissions: BUSINESS.map((kpi) => ({ kpi: kpi as never, reason: 'no-denominator' })),
+      }),
+    );
+    const rows = JSON.parse(files[PAYLOAD_FILE]!) as { kpi_id: string }[];
+
+    expect(exitCode).toBe(1);
+    expect(rows).toHaveLength(8);
+    expect(rows.map((row) => row.kpi_id)).not.toEqual(expect.arrayContaining(BUSINESS));
+    expect(parsed(files, RESULT_FILE)).toMatchObject({
+      ok: false,
+      visible_failure: true,
+      omissions: [
+        { kpi_id: 'rated_match_rate', reason: 'no-denominator' },
+        { kpi_id: 'monthly_interactions_avg', reason: 'no-denominator' },
+      ],
+    });
+  });
+
+  it('un porcentaje fuera de 0–100 no llega al lote: se omite como invalid-value', async () => {
+    const { files, exitCode } = await run(
+      artifact({
+        results: artifact().results.map((r) =>
+          r.kpi === 'rated_match_rate' ? { ...r, value: 140 } : r,
+        ),
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(files[PAYLOAD_FILE]).not.toContain('rated_match_rate');
+    expect(parsed(files, RESULT_FILE).omissions).toEqual([
+      { kpi_id: 'rated_match_rate', reason: 'invalid-value' },
+    ]);
+  });
+
+  it('el corte T y la fecha argentina son los mismos en las diez filas', async () => {
+    const { files } = await run(artifact({ cutoff: '2026-10-14T02:59:59.999Z' }));
+    const rows = JSON.parse(files[PAYLOAD_FILE]!) as { date: string }[];
+
+    expect(new Set(rows.map((row) => row.date))).toEqual(new Set(['2026-10-13']));
+    expect(parsed(files, ARCHIVE_FILE)).toMatchObject({
+      cutoff: '2026-10-14T02:59:59.999Z',
+      date: '2026-10-13',
+    });
   });
 });

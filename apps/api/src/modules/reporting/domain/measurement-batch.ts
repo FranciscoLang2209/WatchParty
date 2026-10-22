@@ -86,6 +86,8 @@ export const OMISSION_REASONS = [
   'network-error',
   'not-200',
   'unexpected-status',
+  // Agregados de negocio: el mes no tiene base para calcular el KPI.
+  'no-denominator',
   // Sondeo autenticado (cuenta técnica de lectura).
   'credentials-invalid',
   'auth-unavailable',

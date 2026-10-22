@@ -43,7 +43,7 @@ Códigos fijos: nunca incluyen la URL, el host, el usuario, la contraseña ni el
 | `invalid-result`    | Ese KPI     | Sin filas, valor no numérico o no finito, fuera de dominio, o motivo desconocido.     |
 | `no-denominator`    | Ese KPI     | El agregado respondió, pero el mes no tiene base para calcularlo.                     |
 
-`no-denominator` es nuevo respecto de la fuente de `catalog_match_count`. Para publicarlo como motivo, el colector (T4) tiene que sumarlo a `OMISSION_REASONS`; si no, el lote lo reemplaza por `unknown-reason`.
+`no-denominator` es nuevo respecto de la fuente de `catalog_match_count`. El colector lo incluye en `OMISSION_REASONS`, así que llega al lote como motivo propio y no como `unknown-reason`.
 
 ## Lectura real saneada
 

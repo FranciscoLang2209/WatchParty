@@ -78,7 +78,7 @@ El resultado se archiva con `JSON.stringify` y contiene solo códigos fijos, est
 pnpm --filter @watchparty/api reporter:publish
 ```
 
-El comando reutiliza `payload.json` y exige un `archive.json` completo, no simulado y del mismo ambiente. Antes del POST confirma por `current_project` que la clave pertenece a WatchParty (equipo 5) y al ambiente esperado. Después consulta las mediciones propias del día y compara los cinco identificadores, valores y `run_id`. Un HTTP exitoso con valores distintos o ausentes falla. Escribe el resultado sanitizado en `publication.json`; no modifica `result.json`, que sigue describiendo solamente la colecta.
+El comando reutiliza `payload.json` y exige un `archive.json` completo, no simulado y del mismo ambiente. Antes del POST confirma por `current_project` que la clave pertenece a WatchParty (equipo 5) y al ambiente esperado. Después consulta las mediciones propias del día y compara los identificadores, valores y `run_id` de todas las filas del lote. Un HTTP exitoso con valores distintos o ausentes falla. Escribe el resultado sanitizado en `publication.json`; no modifica `result.json`, que sigue describiendo solamente la colecta.
 
 Configurar en el GitHub Environment correspondiente:
 
@@ -88,7 +88,7 @@ Configurar en el GitHub Environment correspondiente:
 
 El cron requiere además la variable de **repositorio** `REPORTER_SCHEDULE_ENABLED=true`; el horario sigue siendo 04:00 UTC / 01:00 Argentina. `workflow_dispatch` permite probar la rama de integración antes del merge. La publicación programada usa el código de `main`.
 
-El catálogo se registra una vez por ambiente, antes del primer envío, con los registros que devuelve `prepareCatalogRegistration(env)`. El catálogo de dev no habilita prod. **Cada KPI nuevo del catálogo (por ejemplo `catalog_query_latency`, `catalog_read_up` o `database_up`) debe registrarse en el catálogo central de cada ambiente antes de que corra la publicación que lo incluye:** un lote con un KPI no registrado se rechaza completo (409), también los KPIs que ya estaban registrados. Las claves y URLs centrales no reemplazan las de la base propia de WatchParty.
+El catálogo se registra una vez por ambiente, antes del primer envío, con los registros que devuelve `prepareCatalogRegistration(env)`. El catálogo de dev no habilita prod. **Cada KPI nuevo del catálogo (por ejemplo `catalog_query_latency`, `catalog_read_up`, `database_up`, `rated_match_rate` o `monthly_interactions_avg`) debe registrarse en el catálogo central de cada ambiente antes de que corra la publicación que lo incluye:** un lote con un KPI no registrado se rechaza completo (409), también los KPIs que ya estaban registrados. Los dos de negocio se registran con `kind: business`, unidades `%` y `{interaction}/{user}`; el lote completo tiene hasta diez filas. Las claves y URLs centrales no reemplazan las de la base propia de WatchParty.
 
 Si el POST tuvo éxito y falló la verificación por red, conservar el artifact y reintentar **el mismo** `payload.json` y `archive.json`. Una nueva colecta genera otro UUID y latencias nuevas: si el primer lote ya existe, se conserva y la comparación del nuevo lote falla. No cambiar ni borrar las mediciones recibidas para forzar un resultado exitoso.
 

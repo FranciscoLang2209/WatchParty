@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { MAX_BATCH_ROWS } from './measurement-batch.js';
 import {
   KPI_CATALOG,
   REPORTER_ENVS,
@@ -10,8 +11,10 @@ import {
 } from './kpi-catalog.js';
 
 describe('KPI_CATALOG', () => {
-  it('contiene exactamente los ocho KPIs con fuente verificada, en orden', () => {
+  it('contiene exactamente los diez KPIs de ADR-05, en orden', () => {
     expect(KPI_CATALOG.map((kpi) => kpi.id)).toEqual([
+      'rated_match_rate',
+      'monthly_interactions_avg',
       'catalog_match_count',
       'health_response_latency',
       'catalog_query_latency',
@@ -25,6 +28,8 @@ describe('KPI_CATALOG', () => {
 
   it('cada KPI tiene el tipo y la unidad del ADR', () => {
     expect(KPI_CATALOG.map(({ id, kind, unit }) => ({ id, kind, unit }))).toEqual([
+      { id: 'rated_match_rate', kind: 'business', unit: '%' },
+      { id: 'monthly_interactions_avg', kind: 'business', unit: '{interaction}/{user}' },
       { id: 'catalog_match_count', kind: 'technical', unit: '{match}' },
       { id: 'health_response_latency', kind: 'technical', unit: 'ms' },
       { id: 'catalog_query_latency', kind: 'technical', unit: 'ms' },
@@ -52,8 +57,39 @@ describe('KPI_CATALOG', () => {
     }
   });
 
-  it('no incluye los KPIs de negocio ni los que aún no tienen fuente verificada', () => {
-    for (const id of ['rated_match_rate', 'monthly_interactions_avg']) {
+  it('son diez, que es justo el máximo de mediciones de un lote', () => {
+    expect(KPI_CATALOG).toHaveLength(10);
+    expect(KPI_CATALOG.length).toBeLessThanOrEqual(MAX_BATCH_ROWS);
+  });
+
+  it('los ids son únicos', () => {
+    expect(new Set(KPI_CATALOG.map((kpi) => kpi.id)).size).toBe(KPI_CATALOG.length);
+  });
+
+  it('usa los tres tipos del catálogo central: negocio, técnico y salud', () => {
+    const kinds = KPI_CATALOG.reduce<Record<string, number>>(
+      (count, { kind }) => ({ ...count, [kind]: (count[kind] ?? 0) + 1 }),
+      {},
+    );
+
+    expect(kinds).toEqual({ business: 2, technical: 4, health: 4 });
+  });
+
+  it('los KPIs de negocio son el porcentaje y el promedio, y omiten sin denominador', () => {
+    const business = KPI_CATALOG.filter((kpi) => kpi.kind === 'business');
+
+    expect(business.map((kpi) => [kpi.id, kpi.unit])).toEqual([
+      ['rated_match_rate', '%'],
+      ['monthly_interactions_avg', '{interaction}/{user}'],
+    ]);
+
+    for (const kpi of business) {
+      expect(kpi.description).toMatch(/se omite/);
+    }
+  });
+
+  it('no incluye KPIs que el ADR no define', () => {
+    for (const id of ['active_users', 'revenue', 'catalog_match_ratio', 'social_score']) {
       expect(isKpiId(id)).toBe(false);
     }
   });
@@ -61,6 +97,12 @@ describe('KPI_CATALOG', () => {
 
 describe('isValidKpiValue: rangos y unidades', () => {
   it.each<[KpiId, number]>([
+    ['rated_match_rate', 0],
+    ['rated_match_rate', 50.5],
+    ['rated_match_rate', 100],
+    ['monthly_interactions_avg', 0],
+    ['monthly_interactions_avg', 2.5],
+    ['monthly_interactions_avg', 1234.5678],
     ['catalog_match_count', 0],
     ['catalog_match_count', 4210],
     ['health_response_latency', 0],
@@ -82,6 +124,10 @@ describe('isValidKpiValue: rangos y unidades', () => {
   });
 
   it.each<[KpiId, unknown]>([
+    ['rated_match_rate', -0.01],
+    ['rated_match_rate', 100.01],
+    ['rated_match_rate', 150],
+    ['monthly_interactions_avg', -0.1],
     ['catalog_match_count', -1],
     ['catalog_match_count', 1.5],
     ['health_response_latency', -0.001],
