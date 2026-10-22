@@ -209,6 +209,47 @@ describe('ProfilePage: la carga', () => {
   });
 });
 
+describe('ProfilePage: encabezado', () => {
+  it('presenta el perfil guardado arriba del formulario', async () => {
+    renderPage();
+
+    const encabezado = await screen.findByRole('heading', { level: 2, name: 'Martina' });
+
+    expect(screen.getByText('River Plate', { selector: 'span' })).toBeInTheDocument();
+    expect(
+      encabezado.compareDocumentPosition(nombre()) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('refleja lo guardado recién cuando la API lo confirma, no lo que se tipea', async () => {
+    stubApi({ saved: { displayName: 'Martina C.', bio: '', favoriteTeamId: null } });
+
+    const { user } = renderPage();
+    await screen.findByRole('heading', { level: 2, name: 'Martina' });
+
+    await user.clear(nombre());
+    await user.type(nombre(), 'Otra');
+    expect(screen.getByRole('heading', { level: 2, name: 'Martina' })).toBeInTheDocument();
+
+    await user.click(guardar());
+
+    expect(
+      await screen.findByRole('heading', { level: 2, name: 'Martina C.' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Sin equipo favorito', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getByText('Sin biografía')).toBeInTheDocument();
+  });
+
+  it('sin perfil guardado no muestra encabezado', async () => {
+    stubApi({ profile: null });
+    renderPage();
+
+    await screen.findByText(/Todavía no completaste tu perfil/);
+    expect(screen.queryByRole('heading', { level: 2, name: 'Martina' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Sin equipo favorito', { selector: 'p' })).not.toBeInTheDocument();
+  });
+});
+
 describe('ProfilePage: todavía no hay perfil', () => {
   beforeEach(() => {
     stubApi({ profile: null });

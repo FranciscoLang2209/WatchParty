@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { getOwnProfile, listTeams, saveOwnProfile } from '@/features/profiles/api';
 import { ProfileFields, type ProfileFieldErrors } from '@/features/profiles/ProfileFields';
+import { ProfileHeader } from '@/features/profiles/ProfileHeader';
 import {
   ProfilesApiError,
   isCancelled,
@@ -45,8 +46,9 @@ function toEstadoError(error: unknown): Estado {
 }
 
 /**
- * Perfil propio: nombre visible, biografía y equipo favorito, y debajo el
- * historial de partidos vistos (WAT-219).
+ * Perfil propio: el encabezado con lo guardado (WAT-234), el formulario de
+ * nombre visible, biografía y equipo favorito, y debajo el historial de
+ * partidos vistos (WAT-219).
  *
  * Consume sólo la Node API autenticada — la sesión aporta el bearer y nada más.
  * Carga, ausencia de perfil, error y sesión vencida son estados distintos: un
@@ -174,6 +176,11 @@ export function ProfilePage() {
               </Button>
             )}
           </div>
+        ) : null}
+
+        {estado.status === 'ready' && estado.profile !== null ? (
+          // Lo guardado, no el borrador: cambia recién cuando la API confirma.
+          <ProfileHeader profile={estado.profile} teams={estado.teams} />
         ) : null}
 
         {estado.status === 'ready' ? (
