@@ -6,6 +6,12 @@ import {
   type CollectKpisDeps,
 } from './collect-kpis.js';
 import {
+  BUSINESS_AGGREGATES,
+  type BusinessAggregateFailureReason,
+  type BusinessAggregateOutcome,
+  type BusinessAggregates,
+} from '../infrastructure/business-aggregates-source.js';
+import {
   CatalogMatchCountSourceError,
   type CatalogQueryRead,
 } from '../infrastructure/catalog-match-count-source.js';
@@ -25,6 +31,9 @@ interface Scenario {
   guardError?: Error;
   guardMs?: number;
   catalog?: () => Promise<CatalogQueryRead>;
+  /** Agregados de negocio: un desenlace por KPI (valor u omisión con motivo). */
+  business?: () => Promise<BusinessAggregates>;
+  businessMs?: number;
   /** Lectura mínima de la base (`database_up`): 1, 0 o un fallo con motivo. */
   database?: () => Promise<0 | 1>;
   catalogMs?: number;
@@ -42,6 +51,22 @@ interface Scenario {
 /** Una lectura del catálogo: el conteo y cuánto tardó la consulta que lo trajo. */
 function catalogRead(value: number, queryDurationMs = 35.1234): CatalogQueryRead {
   return { count: { value, unit: '{match}' }, queryDurationMs };
+}
+
+/** Los dos KPIs de negocio con valores válidos, salvo lo que se pida distinto. */
+function businessOutcomes(overrides: Partial<BusinessAggregates> = {}): BusinessAggregates {
+  return {
+    rated_match_rate: { ok: true, value: 62.5, unit: '%' },
+    monthly_interactions_avg: { ok: true, value: 3.4, unit: '{interaction}/{user}' },
+    ...overrides,
+  };
+}
+
+/** Ambos KPIs de negocio omitidos con el mismo motivo (fallo de configuración, conexión, etc.). */
+function allBusinessFailed(reason: BusinessAggregateFailureReason): BusinessAggregates {
+  const failed: BusinessAggregateOutcome = { ok: false, reason };
+
+  return { rated_match_rate: failed, monthly_interactions_avg: failed };
 }
 
 function setup(scenario: Scenario = {}) {
@@ -77,6 +102,12 @@ function setup(scenario: Scenario = {}) {
     return scenario.catalog ? scenario.catalog() : catalogRead(12);
   });
 
+  const readBusinessAggregates = vi.fn<CollectKpisDeps['readBusinessAggregates']>(async () => {
+    clockMs += scenario.businessMs ?? 0;
+
+    return scenario.business ? scenario.business() : businessOutcomes();
+  });
+
   const probeDatabase = vi.fn<CollectKpisDeps['probeDatabase']>(async () =>
     scenario.database ? scenario.database() : 1,
   );
@@ -95,6 +126,7 @@ function setup(scenario: Scenario = {}) {
   const deps: CollectKpisDeps = {
     apiBaseUrl: scenario.apiBaseUrl ?? { ok: true, baseUrl: BASE },
     readCatalog,
+    readBusinessAggregates,
     probeDatabase,
     // `vi.fn` pierde el genérico de la función: se vuelve a tipar para la dependencia.
     withProbeToken: withProbeToken as CollectKpisDeps['withProbeToken'],
@@ -103,7 +135,15 @@ function setup(scenario: Scenario = {}) {
     monotonicMs: () => clockMs,
   };
 
-  return { deps, fetchFn, readCatalog, probeDatabase, withProbeToken, nowFn };
+  return {
+    deps,
+    fetchFn,
+    readCatalog,
+    readBusinessAggregates,
+    probeDatabase,
+    withProbeToken,
+    nowFn,
+  };
 }
 
 function valueOf(artifact: Awaited<ReturnType<typeof collectKpis>>, kpi: string) {
@@ -126,6 +166,13 @@ describe('collectKpis: todas las fuentes válidas', () => {
 
     expect(artifact.omissions).toEqual([]);
     expect(artifact.results).toEqual([
+      { kpi: 'rated_match_rate', kind: 'business', unit: '%', value: 62.5 },
+      {
+        kpi: 'monthly_interactions_avg',
+        kind: 'business',
+        unit: '{interaction}/{user}',
+        value: 3.4,
+      },
       { kpi: 'catalog_match_count', kind: 'technical', unit: '{match}', value: 12 },
       { kpi: 'health_response_latency', kind: 'technical', unit: 'ms', value: 120 },
       { kpi: 'catalog_query_latency', kind: 'technical', unit: 'ms', value: 35.123 },
@@ -368,6 +415,7 @@ describe('collectKpis: report_collection_duration', () => {
       healthError: new TypeError('fetch failed'),
       guardError: new TypeError('fetch failed'),
       readError: new TypeError('fetch failed'),
+      business: async () => allBusinessFailed('connection-failed'),
       database: async () => {
         throw new CatalogMatchCountSourceError('connection-failed');
       },
@@ -379,7 +427,7 @@ describe('collectKpis: report_collection_duration', () => {
     const artifact = await collectKpis(deps);
 
     expect(artifact.results.map((result) => result.kpi)).toEqual(['report_collection_duration']);
-    expect(artifact.omissions).toHaveLength(7);
+    expect(artifact.omissions).toHaveLength(9);
   });
 
   it('un reloj monotónico que retrocede produce una duración inválida y se omite', async () => {
@@ -510,7 +558,7 @@ describe('collectKpis: catálogo y lote del reporter', () => {
     });
 
     expect(batch.ok).toBe(true);
-    expect(batch.ok && batch.batch.rows).toHaveLength(8);
+    expect(batch.ok && batch.batch.rows).toHaveLength(10);
     expect(batch.ok && batch.batch.complete).toBe(true);
   });
 
@@ -527,7 +575,7 @@ describe('collectKpis: catálogo y lote del reporter', () => {
       simulated: true,
     });
 
-    expect(batch.ok && batch.batch.rows).toHaveLength(7);
+    expect(batch.ok && batch.batch.rows).toHaveLength(9);
     expect(batch.ok && batch.batch.complete).toBe(false);
     expect(batch.ok && batch.batch.visible_failure).toBe(true);
     expect(batch.ok && batch.batch.omissions).toEqual([
@@ -998,5 +1046,266 @@ describe('collectKpis: database_up', () => {
 
     expect(probeDatabase).toHaveBeenCalledTimes(1);
     expect(valueOf(artifact, 'database_up')).toBe(1);
+  });
+});
+
+// Integración de las cinco fuentes nuevas con las cinco existentes: los diez KPIs de ADR-05.
+describe('collectKpis: diez KPIs con los de negocio', () => {
+  const BUSINESS_IDS = BUSINESS_AGGREGATES.map(({ kpi }) => kpi);
+
+  it('con las diez fuentes válidas devuelve diez resultados finitos y ninguna omisión', async () => {
+    const { deps } = setup();
+
+    const artifact = await collectKpis(deps);
+
+    expect(artifact.results).toHaveLength(10);
+    expect(artifact.omissions).toEqual([]);
+    expect(artifact.results.every((result) => Number.isFinite(result.value))).toBe(true);
+    expect(artifact.results.map((r) => r.kpi)).toEqual(KPI_CATALOG.map((kpi) => kpi.id));
+  });
+
+  it('los resultados de negocio llevan su tipo, su unidad y su valor tal cual los calculó la base', async () => {
+    const { deps } = setup({
+      business: async () =>
+        businessOutcomes({
+          rated_match_rate: { ok: true, value: 62.5, unit: '%' },
+          monthly_interactions_avg: { ok: true, value: 2.75, unit: '{interaction}/{user}' },
+        }),
+    });
+
+    const artifact = await collectKpis(deps);
+
+    expect(artifact.results).toContainEqual({
+      kpi: 'rated_match_rate',
+      kind: 'business',
+      unit: '%',
+      value: 62.5,
+    });
+    expect(artifact.results).toContainEqual({
+      kpi: 'monthly_interactions_avg',
+      kind: 'business',
+      unit: '{interaction}/{user}',
+      value: 2.75,
+    });
+  });
+
+  it('los KPIs de negocio se piden una sola vez y con el MISMO corte T que el resto', async () => {
+    const { deps, readBusinessAggregates, readCatalog, nowFn } = setup();
+
+    const artifact = await collectKpis(deps);
+
+    expect(nowFn).toHaveBeenCalledTimes(1);
+    expect(readBusinessAggregates).toHaveBeenCalledTimes(1);
+    expect(readBusinessAggregates.mock.calls[0]![0].toISOString()).toBe(artifact.cutoff);
+    expect(readBusinessAggregates.mock.calls[0]![0].getTime()).toBe(
+      readCatalog.mock.calls[0]![0].getTime(),
+    );
+  });
+
+  it('el corte común fija también la fecha argentina de los diez', async () => {
+    const { deps } = setup({ now: new Date('2026-10-14T02:30:00Z') });
+
+    const artifact = await collectKpis(deps);
+    const batch = buildMeasurementBatch({
+      env: 'dev',
+      cutoff: new Date(artifact.cutoff),
+      runId: '11111111-1111-4111-8111-111111111111',
+      results: artifact.results,
+      omissions: artifact.omissions,
+      simulated: true,
+    });
+
+    expect(artifact.localDate).toBe('2026-10-13');
+    expect(batch.ok && new Set(batch.batch.rows.map((r) => r.date))).toEqual(
+      new Set(['2026-10-13']),
+    );
+    expect(batch.ok && batch.batch.rows).toHaveLength(10);
+  });
+
+  it.each([0, 37.5, 100])('el porcentaje acepta %d', async (value) => {
+    const { deps } = setup({
+      business: async () => businessOutcomes({ rated_match_rate: { ok: true, value, unit: '%' } }),
+    });
+
+    expect(valueOf(await collectKpis(deps), 'rated_match_rate')).toBe(value);
+  });
+
+  it.each([100.01, 250, -0.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'un porcentaje fuera de 0–100 (%s) se omite como invalid-value, aunque la fuente lo entregue',
+    async (value) => {
+      const { deps } = setup({
+        business: async () =>
+          businessOutcomes({ rated_match_rate: { ok: true, value, unit: '%' } }),
+      });
+
+      const artifact = await collectKpis(deps);
+
+      expect(valueOf(artifact, 'rated_match_rate')).toBeUndefined();
+      expect(reasonOf(artifact, 'rated_match_rate')).toBe('invalid-value');
+    },
+  );
+
+  it.each([0, 0.4, 3.14159, 87])('el promedio acepta el decimal no negativo %s', async (value) => {
+    const { deps } = setup({
+      business: async () =>
+        businessOutcomes({
+          monthly_interactions_avg: { ok: true, value, unit: '{interaction}/{user}' },
+        }),
+    });
+
+    expect(valueOf(await collectKpis(deps), 'monthly_interactions_avg')).toBe(value);
+  });
+
+  it.each([-0.1, Number.NaN, Number.NEGATIVE_INFINITY])(
+    'un promedio inválido (%s) se omite como invalid-value',
+    async (value) => {
+      const { deps } = setup({
+        business: async () =>
+          businessOutcomes({
+            monthly_interactions_avg: { ok: true, value, unit: '{interaction}/{user}' },
+          }),
+      });
+
+      const artifact = await collectKpis(deps);
+
+      expect(valueOf(artifact, 'monthly_interactions_avg')).toBeUndefined();
+      expect(reasonOf(artifact, 'monthly_interactions_avg')).toBe('invalid-value');
+    },
+  );
+
+  it('sin denominador cada KPI de negocio se omite con su motivo y no se rellena con 0', async () => {
+    const { deps } = setup({
+      business: async () =>
+        businessOutcomes({
+          rated_match_rate: { ok: false, reason: 'no-denominator' },
+          monthly_interactions_avg: { ok: false, reason: 'no-denominator' },
+        }),
+    });
+
+    const artifact = await collectKpis(deps);
+
+    for (const kpi of BUSINESS_IDS) {
+      expect(valueOf(artifact, kpi)).toBeUndefined();
+      expect(reasonOf(artifact, kpi)).toBe('no-denominator');
+    }
+
+    expect(artifact.results).toHaveLength(8);
+    expect(artifact.results.some((r) => BUSINESS_IDS.includes(r.kpi as never))).toBe(false);
+  });
+
+  it('un KPI de negocio sin base no arrastra al otro: cada uno se decide por separado', async () => {
+    const { deps } = setup({
+      business: async () =>
+        businessOutcomes({
+          rated_match_rate: { ok: false, reason: 'no-denominator' },
+          monthly_interactions_avg: { ok: true, value: 4.5, unit: '{interaction}/{user}' },
+        }),
+    });
+
+    const artifact = await collectKpis(deps);
+
+    expect(reasonOf(artifact, 'rated_match_rate')).toBe('no-denominator');
+    expect(valueOf(artifact, 'monthly_interactions_avg')).toBe(4.5);
+  });
+
+  it.each([
+    'config-missing',
+    'config-invalid',
+    'invalid-cutoff',
+    'connection-failed',
+    'permission-denied',
+    'query-failed',
+    'invalid-result',
+  ] as const)(
+    'si la fuente de negocio falla (%s) ambos KPIs se omiten con ese motivo y el resto sigue',
+    async (reason) => {
+      const { deps } = setup({ business: async () => allBusinessFailed(reason) });
+
+      const artifact = await collectKpis(deps);
+
+      for (const kpi of BUSINESS_IDS) {
+        expect(valueOf(artifact, kpi)).toBeUndefined();
+        expect(reasonOf(artifact, kpi)).toBe(reason);
+      }
+
+      expect(artifact.results).toHaveLength(8);
+      expect(valueOf(artifact, 'catalog_match_count')).toBe(12);
+      expect(valueOf(artifact, 'health_up')).toBe(1);
+    },
+  );
+
+  it('un error inesperado de la fuente omite los dos sin filtrar su mensaje', async () => {
+    const { deps } = setup({
+      business: async () => {
+        throw new Error('password=secreta host=db.interno');
+      },
+    });
+
+    const artifact = await collectKpis(deps);
+
+    for (const kpi of BUSINESS_IDS) {
+      expect(reasonOf(artifact, kpi)).toBe('unexpected-error');
+    }
+
+    expect(JSON.stringify(artifact)).not.toContain('secreta');
+  });
+
+  it('los KPIs de negocio no dependen de la API ni de los sondeos HTTP', async () => {
+    const { deps } = setup({
+      apiBaseUrl: { ok: false, reason: 'api-config-missing' },
+      healthError: new TypeError('fetch failed'),
+    });
+
+    const artifact = await collectKpis(deps);
+
+    expect(valueOf(artifact, 'rated_match_rate')).toBe(62.5);
+    expect(valueOf(artifact, 'monthly_interactions_avg')).toBe(3.4);
+  });
+
+  it('con todas las fuentes fallando solo queda la duración y se conservan los motivos de las demás', async () => {
+    const { deps } = setup({
+      apiBaseUrl: { ok: false, reason: 'api-config-missing' },
+      business: async () => allBusinessFailed('config-missing'),
+      database: async () => {
+        throw new CatalogMatchCountSourceError('config-missing');
+      },
+      catalog: async () => {
+        throw new CatalogMatchCountSourceError('config-missing');
+      },
+    });
+
+    const artifact = await collectKpis(deps);
+
+    expect(artifact.results.map((r) => r.kpi)).toEqual(['report_collection_duration']);
+    expect(artifact.omissions).toHaveLength(9);
+    expect(artifact.omissions.every((o) => o.reason.length > 0)).toBe(true);
+  });
+
+  it('la duración de colecta cubre también la lectura de negocio y excluye la publicación', async () => {
+    const { deps } = setup({ businessMs: 400 });
+
+    // 120 + 80 de sondeos + 50 de consulta SQL + 400 de negocio = 0,65 s; no hay publicación.
+    expect(valueOf(await collectKpis(deps), 'report_collection_duration')).toBe(0.65);
+  });
+
+  it('los motivos de negocio, incluido no-denominator, son códigos conocidos del lote', () => {
+    for (const reason of ['no-denominator', 'invalid-value', 'invalid-result']) {
+      expect(OMISSION_REASONS as readonly string[]).toContain(reason);
+    }
+  });
+
+  it('las unidades y rangos de la fuente de negocio coinciden con los del catálogo', () => {
+    for (const aggregate of BUSINESS_AGGREGATES) {
+      const entry = KPI_CATALOG.find((kpi) => kpi.id === aggregate.kpi);
+
+      expect(entry?.kind).toBe('business');
+      expect(entry?.unit).toBe(aggregate.unit);
+
+      if (Number.isFinite(aggregate.max)) {
+        expect(entry?.rule).toMatchObject({ max: aggregate.max });
+      } else {
+        expect(entry?.rule).not.toHaveProperty('max');
+      }
+    }
   });
 });

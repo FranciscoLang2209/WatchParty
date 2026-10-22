@@ -7,12 +7,14 @@ export function isReporterEnv(value: unknown): value is ReporterEnv {
   return typeof value === 'string' && (REPORTER_ENVS as readonly string[]).includes(value);
 }
 
-/** Tipo de KPI del catálogo central. Los de negocio aún no tienen fuentes verificadas. */
-export type KpiKind = 'technical' | 'health';
+/** Tipo de KPI del catálogo central (ADR-05): de negocio, técnico o de salud. */
+export type KpiKind = 'business' | 'technical' | 'health';
 
 /** Dominio numérico válido de un KPI. Todo valor además debe ser un número finito. */
 interface ValueRule {
   readonly min: number;
+  /** Si está, el valor no puede superarlo (el porcentaje llega a 100). */
+  readonly max?: number;
   readonly integer?: boolean;
   /** Si está, el valor debe ser uno de estos (indicadores 0/1). */
   readonly allowed?: readonly number[];
@@ -28,12 +30,28 @@ interface KpiDefinition {
 }
 
 /**
- * Catálogo: los KPIs con fuentes verificadas (ADR-05 rev. 2.0). Ampliarlo hasta
- * los diez objetivo se hace de a uno, y cada KPI nuevo debe registrarse además
- * en el catálogo central de cada ambiente antes de publicar. El orden es el de
- * los artefactos.
+ * Catálogo: los diez KPIs de ADR-05 rev. 2.0, cada uno con su fuente (SQL,
+ * sondeo HTTP o medición propia). Son el máximo de mediciones de un lote
+ * (`MAX_BATCH_ROWS`). Cada KPI nuevo debe registrarse además en el catálogo
+ * central de cada ambiente antes de publicar. El orden es el de los artefactos.
  */
 export const KPI_CATALOG = [
+  {
+    id: 'rated_match_rate',
+    kind: 'business',
+    unit: '%',
+    description:
+      'Porcentaje, entre 0 y 100, de los pares usuario-partido vistos en el mes local hasta el corte T que además tienen una nota o un comentario del mismo usuario en ese mes; cada par cuenta una vez y las cuentas técnicas se excluyen. Sin pares vistos en el mes se omite (no hay denominador).',
+    rule: { min: 0, max: 100 },
+  },
+  {
+    id: 'monthly_interactions_avg',
+    kind: 'business',
+    unit: '{interaction}/{user}',
+    description:
+      'Promedio de interacciones (notas y comentarios) por usuario activo en el mes local hasta el corte T, con decimales; usuario activo es quien tiene un visto, una nota o un comentario en el mes, y las cuentas técnicas se excluyen. Sin usuarios activos se omite (no hay denominador).',
+    rule: { min: 0 },
+  },
   {
     id: 'catalog_match_count',
     kind: 'technical',
@@ -117,6 +135,7 @@ export function isValidKpiValue(id: KpiId, value: unknown): value is number {
   const { min } = rule;
 
   if (value < min) return false;
+  if ('max' in rule && value > rule.max) return false;
   if ('integer' in rule && rule.integer && !Number.isInteger(value)) return false;
   if ('allowed' in rule && !(rule.allowed as readonly number[]).includes(value)) return false;
 

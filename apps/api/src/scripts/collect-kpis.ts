@@ -7,6 +7,7 @@ import {
 } from '../modules/reporting/application/collect-kpis.js';
 import { runReport, RESULT_FILE } from '../modules/reporting/application/run-report.js';
 import { isReporterEnv } from '../modules/reporting/domain/kpi-catalog.js';
+import { readBusinessAggregates } from '../modules/reporting/infrastructure/business-aggregates-source.js';
 import { probeDatabaseAvailability } from '../modules/reporting/infrastructure/database-availability-probe.js';
 import { withProbeAccessToken } from '../modules/reporting/infrastructure/probe-auth.js';
 import { readCatalogMatchCountWithLatency } from '../modules/reporting/infrastructure/catalog-match-count-source.js';
@@ -38,6 +39,7 @@ async function main(): Promise<void> {
       collectKpis({
         apiBaseUrl: readReporterApiBaseUrl(),
         readCatalog: (cutoff) => readCatalogMatchCountWithLatency(cutoff),
+        readBusinessAggregates: (cutoff) => readBusinessAggregates(cutoff),
         probeDatabase: () => probeDatabaseAvailability(),
         withProbeToken: (use) => withProbeAccessToken(use),
         fetchFn: fetch,

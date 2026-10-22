@@ -22,6 +22,8 @@ const SIMULATED_CUTOFF = new Date('2026-10-14T15:00:00Z');
 const FORBIDDEN_FIELDS = ['project_id', 'reported_at', 'team_id', 'status', 'measured_at'];
 
 const SIMULATED_RESULTS = [
+  { kpi: 'rated_match_rate', value: 62.5 },
+  { kpi: 'monthly_interactions_avg', value: 3.4 },
   { kpi: 'catalog_match_count', value: 4210 },
   { kpi: 'health_response_latency', value: 312.456 },
   { kpi: 'catalog_query_latency', value: 41.5 },
@@ -94,13 +96,15 @@ describe('buildMeasurementBatch: todas las fuentes válidas', () => {
   it('arma una fila por KPI con exactamente los campos del contrato', () => {
     const batch = built(buildMeasurementBatch(input()));
 
-    expect(batch.rows).toHaveLength(8);
+    expect(batch.rows).toHaveLength(10);
 
     for (const row of batch.rows) {
       expect(Object.keys(row)).toEqual(['kpi_id', 'date', 'env', 'value', 'run_id']);
     }
 
     expect(batch.rows.map((r) => [r.kpi_id, r.value])).toEqual([
+      ['rated_match_rate', 62.5],
+      ['monthly_interactions_avg', 3.4],
       ['catalog_match_count', 4210],
       ['health_response_latency', 312.456],
       ['catalog_query_latency', 41.5],
@@ -201,7 +205,7 @@ describe('buildMeasurementBatch: fuente inválida se omite con motivo', () => {
     );
 
     expect(batch.omissions).toEqual([{ kpi_id: kpi, reason: 'invalid-value' }]);
-    expect(batch.rows).toHaveLength(7);
+    expect(batch.rows).toHaveLength(9);
   });
 
   it('un KPI omitido por el colector conserva su motivo y no se vuelve cero', () => {
@@ -255,8 +259,8 @@ describe('buildMeasurementBatch: fuente inválida se omite con motivo', () => {
 
     expect(result.ok).toBe(false);
     expect(codes(result)).toEqual(['empty-batch']);
-    expect(!result.ok && result.omissions).toHaveLength(8);
-    expect(!result.ok && result.omissions[0]).toEqual({
+    expect(!result.ok && result.omissions).toHaveLength(10);
+    expect(!result.ok && result.omissions.find((o) => o.kpi_id === 'catalog_match_count')).toEqual({
       kpi_id: 'catalog_match_count',
       reason: 'config-missing',
     });
@@ -278,7 +282,7 @@ describe('buildMeasurementBatch: lote inválido', () => {
 
   it('un KPI fuera del catálogo impide armar todo el lote', () => {
     const result = buildMeasurementBatch(
-      input({ results: [...SIMULATED_RESULTS, { kpi: 'rated_match_rate', value: 50 }] }),
+      input({ results: [...SIMULATED_RESULTS, { kpi: 'active_users', value: 50 }] }),
     );
 
     expect(result.ok).toBe(false);
@@ -363,7 +367,7 @@ describe('validateMeasurementBatch', () => {
   });
 
   it('rechaza un KPI fuera del catálogo y uno repetido', () => {
-    expect(codes(validateMeasurementBatch([row({ kpi_id: 'rated_match_rate' })]))).toEqual([
+    expect(codes(validateMeasurementBatch([row({ kpi_id: 'active_users' })]))).toEqual([
       'unknown-kpi',
     ]);
     expect(
@@ -505,7 +509,7 @@ describe('serializeBatchPayload: revalida siempre antes de serializar', () => {
   it('serializa un lote válido con una fila por KPI', () => {
     const rows = built(buildMeasurementBatch(input())).rows;
 
-    expect(JSON.parse(jsonOf(serializeBatchPayload(rows)))).toHaveLength(8);
+    expect(JSON.parse(jsonOf(serializeBatchPayload(rows)))).toHaveLength(10);
   });
 
   it.each<[string, unknown]>([
@@ -562,7 +566,7 @@ describe('serializeBatchPayload: revalida siempre antes de serializar', () => {
     expect(() => {
       (batch.rows as MeasurementRow[]).push(row() as unknown as MeasurementRow);
     }).toThrow(TypeError);
-    expect(JSON.parse(jsonOf(serializeBatchPayload(batch.rows)))[0].value).toBe(4210);
+    expect(JSON.parse(jsonOf(serializeBatchPayload(batch.rows)))[0].value).toBe(62.5);
   });
 
   it('un lote validado devuelve copias: modificar la entrada después no lo cambia', () => {
@@ -763,5 +767,197 @@ describe('arrays con posiciones vacías (huecos)', () => {
 
     expect(() => serializeArchive(sparse)).not.toThrow();
     expect(serializeArchive(sparse).ok).toBe(false);
+  });
+});
+
+// Los diez KPIs de ADR-05: lote máximo, rangos de los de negocio y omisiones sin inventar datos.
+describe('buildMeasurementBatch: los diez KPIs', () => {
+  const BUSINESS = ['rated_match_rate', 'monthly_interactions_avg'];
+
+  it('diez resultados válidos arman un lote completo de diez filas, el máximo permitido', () => {
+    const batch = built(buildMeasurementBatch(input()));
+
+    expect(batch.rows).toHaveLength(10);
+    expect(batch.rows.length).toBeLessThanOrEqual(MAX_BATCH_ROWS);
+    expect(batch.complete).toBe(true);
+    expect(batch.visible_failure).toBe(false);
+    expect(batch.omissions).toEqual([]);
+    expect(new Set(batch.rows.map((r) => r.kpi_id)).size).toBe(10);
+  });
+
+  it('todas las filas comparten el run_id, el ambiente y la fecha argentina del mismo corte T', () => {
+    const batch = built(
+      buildMeasurementBatch(input({ env: 'prod', cutoff: new Date('2026-10-14T02:59:59.999Z') })),
+    );
+
+    expect(new Set(batch.rows.map((r) => r.run_id))).toEqual(new Set([SIMULATED_RUN_ID]));
+    expect(new Set(batch.rows.map((r) => r.env))).toEqual(new Set(['prod']));
+    // 02:59 UTC todavía es el día anterior en Argentina, para los diez por igual.
+    expect(new Set(batch.rows.map((r) => r.date))).toEqual(new Set(['2026-10-13']));
+  });
+
+  it('el payload de los diez son números finitos y conserva los decimales de los KPIs de negocio', () => {
+    const batch = built(buildMeasurementBatch(input()));
+    const payload = JSON.parse(jsonOf(serializeBatchPayload(batch.rows))) as {
+      kpi_id: string;
+      value: unknown;
+    }[];
+
+    expect(payload).toHaveLength(10);
+
+    for (const { value } of payload) {
+      expect(typeof value).toBe('number');
+      expect(Number.isFinite(value)).toBe(true);
+    }
+
+    expect(payload.find((r) => r.kpi_id === 'rated_match_rate')?.value).toBe(62.5);
+    expect(payload.find((r) => r.kpi_id === 'monthly_interactions_avg')?.value).toBe(3.4);
+  });
+
+  it.each([0, 100])('el porcentaje acepta el borde %d', (value) => {
+    const batch = built(
+      buildMeasurementBatch(
+        input({
+          results: SIMULATED_RESULTS.map((r) =>
+            r.kpi === 'rated_match_rate' ? { ...r, value } : r,
+          ),
+        }),
+      ),
+    );
+
+    expect(batch.rows.find((r) => r.kpi_id === 'rated_match_rate')?.value).toBe(value);
+    expect(batch.omissions).toEqual([]);
+  });
+
+  it.each([100.01, 150, -0.01, Number.NaN, Number.POSITIVE_INFINITY])(
+    'un porcentaje fuera de 0–100 (%s) se omite como invalid-value',
+    (value) => {
+      const batch = built(
+        buildMeasurementBatch(
+          input({
+            results: SIMULATED_RESULTS.map((r) =>
+              r.kpi === 'rated_match_rate' ? { ...r, value } : r,
+            ),
+          }),
+        ),
+      );
+
+      expect(batch.rows.map((r) => r.kpi_id)).not.toContain('rated_match_rate');
+      expect(batch.omissions).toEqual([{ kpi_id: 'rated_match_rate', reason: 'invalid-value' }]);
+      expect(batch.complete).toBe(false);
+    },
+  );
+
+  it.each([0, 0.5, 2.75, 1234.5678])('el promedio acepta el decimal no negativo %s', (value) => {
+    const batch = built(
+      buildMeasurementBatch(
+        input({
+          results: SIMULATED_RESULTS.map((r) =>
+            r.kpi === 'monthly_interactions_avg' ? { ...r, value } : r,
+          ),
+        }),
+      ),
+    );
+
+    expect(batch.rows.find((r) => r.kpi_id === 'monthly_interactions_avg')?.value).toBe(value);
+  });
+
+  it.each([-0.1, Number.NaN, Number.POSITIVE_INFINITY, '3.4'])(
+    'un promedio inválido (%s) se omite como invalid-value',
+    (value) => {
+      const batch = built(
+        buildMeasurementBatch(
+          input({
+            results: SIMULATED_RESULTS.map((r) =>
+              r.kpi === 'monthly_interactions_avg' ? { ...r, value } : r,
+            ),
+          }),
+        ),
+      );
+
+      expect(batch.omissions).toEqual([
+        { kpi_id: 'monthly_interactions_avg', reason: 'invalid-value' },
+      ]);
+    },
+  );
+
+  it('sin denominador los dos KPIs de negocio se omiten con su motivo y no se inventa ningún dato', () => {
+    const batch = built(
+      buildMeasurementBatch(
+        input({
+          results: SIMULATED_RESULTS.filter((r) => !BUSINESS.includes(r.kpi)),
+          omissions: BUSINESS.map((kpi) => ({ kpi, reason: 'no-denominator' })),
+        }),
+      ),
+    );
+
+    expect(batch.omissions).toEqual([
+      { kpi_id: 'rated_match_rate', reason: 'no-denominator' },
+      { kpi_id: 'monthly_interactions_avg', reason: 'no-denominator' },
+    ]);
+    expect(batch.rows).toHaveLength(8);
+    expect(batch.rows.map((r) => r.kpi_id)).not.toEqual(expect.arrayContaining(BUSINESS));
+    // Ni un cero ni un null en lugar de lo que falta.
+    expect(jsonOf(serializeBatchPayload(batch.rows))).not.toMatch(
+      /rated_match_rate|monthly_interactions_avg|null/,
+    );
+    expect(batch.complete).toBe(false);
+    expect(batch.visible_failure).toBe(true);
+  });
+
+  it('un cero real de los KPIs de negocio es un valor y se envía', () => {
+    const batch = built(
+      buildMeasurementBatch(
+        input({
+          results: SIMULATED_RESULTS.map((r) =>
+            BUSINESS.includes(r.kpi) ? { ...r, value: 0 } : r,
+          ),
+        }),
+      ),
+    );
+
+    expect(batch.rows.filter((r) => BUSINESS.includes(r.kpi_id)).map((r) => r.value)).toEqual([
+      0, 0,
+    ]);
+    expect(batch.complete).toBe(true);
+  });
+
+  it('sin ninguna fuente válida de los diez no hay lote y se conservan los diez motivos', () => {
+    const result = buildMeasurementBatch(
+      input({
+        results: [],
+        omissions: SIMULATED_RESULTS.map((r) => ({ kpi: r.kpi, reason: 'config-missing' })),
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(codes(result)).toEqual(['empty-batch']);
+    expect(!result.ok && result.omissions).toHaveLength(10);
+  });
+
+  it('un lote validado con un KPI de negocio repetido se rechaza completo', () => {
+    const result = validateMeasurementBatch([
+      row({ kpi_id: 'rated_match_rate', value: 50 }),
+      row({ kpi_id: 'rated_match_rate', value: 60 }),
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(codes(result)).toEqual(['duplicate-kpi']);
+  });
+
+  it('una fila de negocio fuera de rango invalida todo el lote enviado', () => {
+    const result = validateMeasurementBatch([
+      row({ kpi_id: 'health_up', value: 1 }),
+      row({ kpi_id: 'rated_match_rate', value: 100.5 }),
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.issues).toEqual([{ row: 1, code: 'invalid-value' }]);
+  });
+
+  it('un lote de más de diez filas no se acepta', () => {
+    const rows = Array.from({ length: MAX_BATCH_ROWS + 1 }, () => row());
+
+    expect(codes(validateMeasurementBatch(rows))).toEqual(['too-many-rows']);
   });
 });

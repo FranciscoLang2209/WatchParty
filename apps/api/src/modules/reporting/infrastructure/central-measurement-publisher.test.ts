@@ -17,6 +17,8 @@ const SIMULATED_PROJECT_KEY = 'SIMULATED_PROJECT_KEY_abc123';
 const SIMULATED_SERVICE_ROLE_KEY = 'sb_secret_SIMULATED_SERVICE_ROLE_KEY';
 
 const SIMULATED_RESULTS = [
+  { kpi: 'rated_match_rate', value: 62.5 },
+  { kpi: 'monthly_interactions_avg', value: 3.4 },
   { kpi: 'catalog_match_count', value: 4210 },
   { kpi: 'health_response_latency', value: 312.456 },
   { kpi: 'catalog_query_latency', value: 41.5 },
@@ -165,7 +167,7 @@ describe('publishMeasurements: URL, headers y cuerpo del contrato', () => {
     const expected = serializeBatchPayload(rows);
 
     expect(expected.ok && server.requests[0]!.body).toBe(expected.ok && expected.json);
-    expect(sent).toHaveLength(8);
+    expect(sent).toHaveLength(10);
 
     for (const row of sent) {
       expect(Object.keys(row)).toEqual(['kpi_id', 'date', 'env', 'value', 'run_id']);
@@ -201,7 +203,7 @@ describe('publishMeasurements: URL, headers y cuerpo del contrato', () => {
       ok: true,
       run_id: SIMULATED_RUN_ID,
       env: 'dev',
-      rows: 8,
+      rows: 10,
       attempts: [{ attempt: 1, outcome: 'accepted', status: 201 }],
       verified: false,
     });
@@ -383,7 +385,7 @@ describe('publishMeasurements: inmutabilidad', () => {
     await publishMeasurements(corrected, { env, sleep: fakeSleep() });
 
     expect(stored.get('catalog_match_count|2026-10-14|dev')).toBe(4210);
-    expect(stored.size).toBe(8);
+    expect(stored.size).toBe(10);
     // Nunca hay un PATCH, PUT ni DELETE: solo POST con ignore-duplicates.
     expect(new Set(methods)).toEqual(new Set(['POST']));
     expect(server.requests.every((r) => r.headers.prefer === 'resolution=ignore-duplicates')).toBe(
@@ -513,7 +515,7 @@ describe('publishMeasurements: lote inválido', () => {
     ['con un valor NaN', [{ ...simulatedRows()[2]!, value: Number.NaN }]],
     ['con un campo prohibido', [{ ...simulatedRows()[2]!, project_id: 'x' }]],
     ['con posiciones vacías', new Array(1)],
-    ['con un KPI fuera del catálogo', [{ ...simulatedRows()[2]!, kpi_id: 'rated_match_rate' }]],
+    ['con un KPI fuera del catálogo', [{ ...simulatedRows()[2]!, kpi_id: 'active_users' }]],
   ];
 
   it.each(invalidBatches)('%s: no se envía nada (invalid-batch)', async (_label, rows) => {

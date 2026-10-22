@@ -1,4 +1,8 @@
 import {
+  BUSINESS_AGGREGATES,
+  type BusinessAggregates,
+} from '../infrastructure/business-aggregates-source.js';
+import {
   CatalogMatchCountSourceError,
   type CatalogQueryRead,
 } from '../infrastructure/catalog-match-count-source.js';
@@ -90,6 +94,12 @@ export interface CollectKpisDeps {
    * duración de esa consulta. Falla con `CatalogMatchCountSourceError`.
    */
   readCatalog: (cutoff: Date) => Promise<CatalogQueryRead>;
+  /**
+   * Agregados de negocio (`rated_match_rate` y `monthly_interactions_avg`) al
+   * mismo corte T. No lanza: devuelve un desenlace por KPI, con el valor o con el
+   * motivo por el que se omite.
+   */
+  readBusinessAggregates: (cutoff: Date) => Promise<BusinessAggregates>;
   /**
    * Lectura SQL mínima de la base (`database_up`): `1` ante éxito y `0` solo ante
    * una indisponibilidad comprobada. Falla con `CatalogMatchCountSourceError`
@@ -207,6 +217,24 @@ export async function collectKpis(deps: CollectKpisDeps): Promise<CollectionArti
     outcomes.health_response_latency = { reason };
     outcomes.auth_guard_up = { reason };
     outcomes.catalog_read_up = { reason };
+  }
+
+  // KPIs de negocio: los calcula la base con fórmulas propias (ADR-05) y el colector
+  // solo los toma, al mismo corte T que todo lo demás. Un KPI sin base de cálculo
+  // (`no-denominator`) o con una fuente que falla se omite con su motivo: ningún
+  // valor se inventa ni se rellena con 0.
+  try {
+    const aggregates = await deps.readBusinessAggregates(cutoff);
+
+    for (const { kpi } of BUSINESS_AGGREGATES) {
+      const outcome = aggregates[kpi];
+
+      outcomes[kpi] = outcome.ok ? { value: outcome.value } : { reason: outcome.reason };
+    }
+  } catch {
+    for (const { kpi } of BUSINESS_AGGREGATES) {
+      outcomes[kpi] = { reason: 'unexpected-error' };
+    }
   }
 
   // `database_up`: su propia lectura mínima, independiente de `/health` y de la
