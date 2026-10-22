@@ -67,13 +67,13 @@ interface CentralConfig {
   projectKey: string;
 }
 
-function isLoopbackHost(hostname: string): boolean {
+export function isLoopbackHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
 }
 
 // Cualquier clave de rol de servicio, sea del formato nuevo (`sb_secret_…`) o un
 // JWT legado con `role: service_role`, jamás se envía a la plataforma central.
-function looksLikeServiceRoleKey(value: string): boolean {
+export function looksLikeServiceRoleKey(value: string): boolean {
   if (/^sb_secret_/i.test(value)) return true;
 
   const parts = value.split('.');

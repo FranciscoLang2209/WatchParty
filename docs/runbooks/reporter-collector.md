@@ -1,6 +1,6 @@
 # Runbook: colector de los cinco KPIs iniciales del reporter (WAT-199)
 
-El colector extrae, sondea, calcula y valida los cinco KPIs técnicos y de salud de ADR-05 rev. 2.0 y devuelve un artefacto de resultados y motivos de omisión. No publica nada, no escribe en la base y no activa los diez KPIs: publicar es otra tarea.
+El colector extrae, sondea, calcula y valida los KPIs técnicos y de salud de ADR-05 rev. 2.0 y devuelve un artefacto de resultados y motivos de omisión. No publica nada, no escribe en la base y no activa los diez KPIs: publicar es otra tarea.
 
 ## Cómo ejecutarlo
 
@@ -22,7 +22,7 @@ Códigos de salida:
 
 | Código | Significado                                                                                                                 |
 | ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `0`    | Los cinco KPIs tienen valor.                                                                                                |
+| `0`    | Todos los KPIs del catálogo tienen valor.                                                                                   |
 | `1`    | Falta alguna fuente o no se pudo armar el lote (fallo visible). Los archivos se escriben igual, con los motivos de omisión. |
 | `2`    | `REPORTER_ENV` no es `dev` ni `prod`. No se colecta nada.                                                                   |
 
@@ -30,41 +30,55 @@ Este comando no publica: `published` es siempre `false`.
 
 ## Configuración por ambiente
 
-| Variable                    | Obligatoria                    | Para qué                                                                     |
-| --------------------------- | ------------------------------ | ---------------------------------------------------------------------------- |
-| `REPORTER_ENV`              | Sí                             | Ambiente de la corrida: `dev` o `prod`. Es el `env` de las filas.            |
-| `REPORTER_OUTPUT_DIR`       | No                             | Directorio de salida de los archivos (por defecto `reporter-output`).        |
-| `REPORTER_API_BASE_URL`     | Sí, para los tres KPIs HTTP    | Base de la API a sondear en ese ambiente (sin ruta, sin query ni fragmento). |
-| `REPORTER_DATABASE_URL`     | Sí, para `catalog_match_count` | Fuente SQL de solo lectura, ver `reporter-sql-source.md`.                    |
-| `REPORTER_DATABASE_CA_CERT` | No                             | CA del servidor SQL, ver `reporter-sql-source.md`.                           |
+| Variable                    | Obligatoria                    | Para qué                                                                                                       |
+| --------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `REPORTER_ENV`              | Sí                             | Ambiente de la corrida: `dev` o `prod`. Es el `env` de las filas.                                              |
+| `REPORTER_OUTPUT_DIR`       | No                             | Directorio de salida de los archivos (por defecto `reporter-output`).                                          |
+| `REPORTER_API_BASE_URL`     | Sí, para los cuatro KPIs HTTP  | Base de la API a sondear en ese ambiente (sin ruta, sin query ni fragmento).                                   |
+| `REPORTER_DATABASE_URL`     | Sí, para `catalog_match_count` | Fuente SQL de solo lectura, ver `reporter-sql-source.md`.                                                      |
+| `REPORTER_DATABASE_CA_CERT` | No                             | CA del servidor SQL, ver `reporter-sql-source.md`.                                                             |
+| `REPORTER_PROBE_AUTH_URL`   | Sí, para `catalog_read_up`     | URL del proyecto Supabase de WatchParty donde vive la cuenta técnica (solo el origen). Pública.                |
+| `REPORTER_PROBE_ANON_KEY`   | Sí, para `catalog_read_up`     | Clave anónima (publicable) de ese proyecto, la misma que usa la web. Pública; no puede ser de rol de servicio. |
+| `REPORTER_PROBE_EMAIL`      | Sí, para `catalog_read_up`     | Correo de la cuenta técnica de lectura de ese ambiente.                                                        |
+| `REPORTER_PROBE_PASSWORD`   | Sí, para `catalog_read_up`     | Contraseña de esa cuenta. Es un secreto.                                                                       |
 
-Sin valor por defecto: lo que falte se omite con motivo. Los sondeos no usan cuentas ni tokens.
+Sin valor por defecto: lo que falte se omite con motivo. Los sondeos de `/health` y de `GET /matches` sin token no usan cuentas ni tokens; solo `catalog_read_up` usa la cuenta técnica.
 
-## Los cinco KPIs
+### Cuenta técnica de lectura (`catalog_read_up`)
+
+- Es **una cuenta propia del reporter, por ambiente**, ya creada en Supabase Auth del proyecto de WatchParty. Nunca una cuenta personal. El comando **no crea usuarios**: inicia sesión con la contraseña (`signInWithPassword`) y, a diferencia de `smoke:auth-matches`, no hace `signUp`.
+- Debe estar registrada en `reporting.technical_accounts` (WAT-220) para que los KPIs de negocio la excluyan.
+- En cada corrida se inicia sesión de nuevo, el token vive solo lo que dura el sondeo (nunca se imprime ni se guarda) y al terminar se cierra solo esa sesión (`scope: local`). No hace falta renovarlo.
+- Crear la cuenta, cargar sus secretos en el Environment y registrarla es coordinación de accesos (WAT-193 y WAT-194), no de este código. Hasta contar con ella, el KPI se omite con `config-missing`.
+
+## Los KPIs
 
 Todos comparten el corte T y la fecha local (`America/Argentina/Buenos_Aires`), fijados una sola vez por corrida. Sus ids, tipos (`kind`), unidades y rangos salen del catálogo de `modules/reporting/domain/kpi-catalog.ts` (WAT-200), y la fecha local se calcula con `toArgentinaDate`: el colector no tiene copias propias.
 
-| KPI                          | Tipo (`kind`) / unidad  | Valor                                                                                                                          |
-| ---------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `catalog_match_count`        | `technical` / `{match}` | Partidos distintos del catálogo al corte T (fuente SQL, WAT-198). Cero es válido solo si la consulta tuvo éxito.               |
-| `health_response_latency`    | `technical` / `ms`      | Tiempo monotónico de `GET /health` hasta leer el cuerpo completo. Solo con respuesta 200.                                      |
-| `health_up`                  | `health` / `1`          | `1` ante 200; `0` ante un 5xx comprobado. Otros estados (404, 429...) y la falta de respuesta se omiten: no prueban una caída. |
-| `auth_guard_up`              | `health` / `1`          | `GET /matches` sin token: `1` ante 401, `0` ante cualquier otro estado recibido. Sin respuesta se omite.                       |
-| `report_collection_duration` | `technical` / `s`       | Tiempo monotónico de extracción, sondeos, cálculo y validación. Excluye la publicación.                                        |
+| KPI                          | Tipo (`kind`) / unidad  | Valor                                                                                                                                                                                                                                                                                                         |
+| ---------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `catalog_match_count`        | `technical` / `{match}` | Partidos distintos del catálogo al corte T (fuente SQL, WAT-198). Cero es válido solo si la consulta tuvo éxito.                                                                                                                                                                                              |
+| `health_response_latency`    | `technical` / `ms`      | Tiempo monotónico de `GET /health` hasta leer el cuerpo completo. Solo con respuesta 200.                                                                                                                                                                                                                     |
+| `health_up`                  | `health` / `1`          | `1` ante 200; `0` ante un 5xx comprobado. Otros estados (404, 429...) y la falta de respuesta se omiten: no prueban una caída.                                                                                                                                                                                |
+| `catalog_read_up`            | `health` / `1`          | `GET /matches` con el token de la cuenta técnica: `1` ante un 200 con el esquema esperado (también con la lista vacía); `0` ante un 5xx o un 200 cuya respuesta no cumple el contrato. Un 401/403 con el token recién emitido, otros estados, la falta de respuesta o la falta de token se omiten con motivo. |
+| `auth_guard_up`              | `health` / `1`          | `GET /matches` sin token: `1` ante 401, `0` ante cualquier otro estado recibido. Sin respuesta se omite.                                                                                                                                                                                                      |
+| `report_collection_duration` | `technical` / `s`       | Tiempo monotónico de extracción, sondeos, cálculo y validación. Excluye la publicación.                                                                                                                                                                                                                       |
 
 Las duraciones salen solo del reloj monotónico; el reloj de pared se usa únicamente para fijar el corte T y la fecha local. Cada sondeo tiene un timeout de 10 s.
 
 ## Motivos de omisión
 
-| `reason`                                                                                                                         | Significado                                                            |
-| -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `api-config-missing`, `api-config-invalid`                                                                                       | `REPORTER_API_BASE_URL` falta o no es una URL `http(s)` válida.        |
-| `timeout`, `network-error`                                                                                                       | El sondeo no recibió una respuesta completa.                           |
-| `not-200`                                                                                                                        | `/health` respondió pero no con 200: no hay latencia.                  |
-| `unexpected-status`                                                                                                              | `/health` respondió un estado que no prueba una caída (no 200 ni 5xx). |
-| `invalid-value`                                                                                                                  | El valor no es finito o está fuera de dominio.                         |
-| `config-missing`, `config-invalid`, `invalid-cutoff`, `connection-failed`, `permission-denied`, `query-failed`, `invalid-result` | Motivos de la fuente SQL (ver `reporter-sql-source.md`).               |
-| `unexpected-error`                                                                                                               | Error no previsto de la fuente SQL; su mensaje no se informa.          |
+| `reason`                                                                                                                         | Significado                                                                                                     |
+| -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `api-config-missing`, `api-config-invalid`                                                                                       | `REPORTER_API_BASE_URL` falta o no es una URL `http(s)` válida.                                                 |
+| `timeout`, `network-error`                                                                                                       | El sondeo no recibió una respuesta completa.                                                                    |
+| `not-200`                                                                                                                        | `/health` respondió pero no con 200: no hay latencia.                                                           |
+| `unauthorized`                                                                                                                   | `GET /matches` respondió 401/403 a un token recién emitido (credencial o permisos, no una caída).               |
+| `credentials-invalid`, `auth-unavailable`                                                                                        | Supabase Auth rechazó las credenciales de la cuenta técnica, o no estaba disponible (429, 5xx o sin respuesta). |
+| `unexpected-status`                                                                                                              | `/health` respondió un estado que no prueba una caída (no 200 ni 5xx).                                          |
+| `invalid-value`                                                                                                                  | El valor no es finito o está fuera de dominio.                                                                  |
+| `config-missing`, `config-invalid`, `invalid-cutoff`, `connection-failed`, `permission-denied`, `query-failed`, `invalid-result` | Motivos de la fuente SQL (ver `reporter-sql-source.md`).                                                        |
+| `unexpected-error`                                                                                                               | Error no previsto de la fuente SQL; su mensaje no se informa.                                                   |
 
 Los motivos son fijos y sanitizados: nunca incluyen URLs, hosts, credenciales ni texto de los drivers.
 
@@ -79,7 +93,7 @@ El artefacto (`results` y `omissions`) tiene la forma que espera `buildMeasureme
 - **Disparo:** todos los días a las **04:00 UTC (01:00 de Argentina)** y manualmente (Actions → Reporter collect → Run workflow, eligiendo `dev` o `prod`). GitHub no garantiza puntualidad exacta del schedule.
 - **Programado = prod, e inerte hasta activarlo:** la corrida programada es siempre de producción y no corre hasta que exista la variable de repositorio `REPORTER_SCHEDULE_ENABLED` con valor `true`, cuando las fuentes G1/G2 estén operativas. La corrida manual está siempre disponible.
 - **Ambientes aislados:** cada corrida usa el GitHub Environment `reporter-dev` o `reporter-prod` (nombres propuestos, su existencia no está confirmada) con sus propios secretos y variables. Hay **una sola corrida activa por ambiente**: una nueva espera a la que está en curso.
-- **Configuración por Environment:** el secret `REPORTER_DATABASE_URL` (y opcional `REPORTER_DATABASE_CA_CERT`) y la variable `REPORTER_API_BASE_URL`. La credencial de producción no se copia a dev.
+- **Configuración por Environment:** el secret `REPORTER_DATABASE_URL` (y opcional `REPORTER_DATABASE_CA_CERT`) y las variables `REPORTER_API_BASE_URL`, `REPORTER_PROBE_AUTH_URL` y `REPORTER_PROBE_ANON_KEY`, más los secretos `REPORTER_PROBE_EMAIL` y `REPORTER_PROBE_PASSWORD` de la cuenta técnica. La credencial de producción no se copia a dev.
 - **Fallo visible:** si falta cualquier fuente el comando sale con 1 y la corrida queda en rojo, sin `continue-on-error` ni `|| true`.
 - **Artifacts:** `reporter-collection-<ambiente>-<run id>`, con los archivos de `reporter-output/` y `publication.json` cuando se publica, se suben **siempre** (también si la colección o publicación falla) y se conservan 30 días. No contienen secretos.
 

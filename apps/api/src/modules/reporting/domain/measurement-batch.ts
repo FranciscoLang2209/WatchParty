@@ -86,6 +86,10 @@ export const OMISSION_REASONS = [
   'network-error',
   'not-200',
   'unexpected-status',
+  // Sondeo autenticado (cuenta técnica de lectura).
+  'credentials-invalid',
+  'auth-unavailable',
+  'unauthorized',
   // Error no previsto del colector.
   'unexpected-error',
 ] as const;
@@ -287,7 +291,7 @@ export interface ReportBatch {
   readonly rows: readonly MeasurementRow[];
   /** KPIs omitidos con su motivo. Nunca se envían como null ni como cero. */
   readonly omissions: readonly KpiOmission[];
-  /** `true` solo si están los cinco KPIs. Con menos, el día no está completo. */
+  /** `true` solo si están todos los KPIs del catálogo. Con menos, el día no está completo. */
   readonly complete: boolean;
   /** `true` si se omitió algún KPI: el workflow debe marcar el fallo de forma visible. */
   readonly visible_failure: boolean;

@@ -28,7 +28,7 @@ export interface ReportRun {
   /** Nombre de archivo → contenido. `result.json` está siempre; los otros solo si hay lote. */
   files: Record<string, string>;
   /**
-   * `0` solo con los cinco KPIs. `1` si falta cualquier fuente o no se pudo
+   * `0` solo con todos los KPIs del catálogo. `1` si falta cualquier fuente o no se pudo
    * armar el lote: una fuente omitida es un fallo VISIBLE, no un éxito parcial.
    */
   exitCode: 0 | 1;

@@ -7,6 +7,7 @@ import {
 } from '../modules/reporting/application/collect-kpis.js';
 import { runReport, RESULT_FILE } from '../modules/reporting/application/run-report.js';
 import { isReporterEnv } from '../modules/reporting/domain/kpi-catalog.js';
+import { withProbeAccessToken } from '../modules/reporting/infrastructure/probe-auth.js';
 import { readCatalogMatchCount } from '../modules/reporting/infrastructure/catalog-match-count-source.js';
 
 const DEFAULT_OUTPUT_DIR = 'reporter-output';
@@ -16,7 +17,7 @@ const DEFAULT_OUTPUT_DIR = 'reporter-output';
  * `reporter-output`) el JSON del lote, el corte T y el resultado con los motivos
  * de omisión. No publica nada y no escribe en la base.
  *
- * Códigos de salida: `0` con los cinco KPIs; `1` si falta cualquier fuente o no
+ * Códigos de salida: `0` con todos los KPIs; `1` si falta cualquier fuente o no
  * se pudo armar el lote (fallo visible; los archivos igual quedan escritos); `2`
  * si `REPORTER_ENV` no es `dev` ni `prod`.
  */
@@ -36,6 +37,7 @@ async function main(): Promise<void> {
       collectKpis({
         apiBaseUrl: readReporterApiBaseUrl(),
         readCatalogMatchCount: (cutoff) => readCatalogMatchCount(cutoff),
+        withProbeToken: (use) => withProbeAccessToken(use),
         fetchFn: fetch,
         now: () => new Date(),
         monotonicMs: () => performance.now(),

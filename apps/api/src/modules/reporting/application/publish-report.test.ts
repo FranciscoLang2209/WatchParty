@@ -31,7 +31,7 @@ function setup(
 }
 
 describe('publishReport', () => {
-  it('verifica el equipo y ambiente antes de publicar y confirma los cinco valores por GET', async () => {
+  it('verifica el equipo y ambiente antes de publicar y confirma todos los valores por GET', async () => {
     const deps = setup();
     expect(await publishReport(rows, 'prod', deps)).toMatchObject({ ok: true, verified: true });
     expect(deps.fetchFn.mock.calls.map(([url]) => String(url))).toEqual([

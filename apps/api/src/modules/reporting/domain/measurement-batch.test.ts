@@ -25,6 +25,7 @@ const SIMULATED_RESULTS = [
   { kpi: 'catalog_match_count', value: 4210 },
   { kpi: 'health_response_latency', value: 312.456 },
   { kpi: 'health_up', value: 1 },
+  { kpi: 'catalog_read_up', value: 1 },
   { kpi: 'auth_guard_up', value: 1 },
   { kpi: 'report_collection_duration', value: 1.591 },
 ];
@@ -87,11 +88,11 @@ describe('toArgentinaDate: fecha local del corte T', () => {
   });
 });
 
-describe('buildMeasurementBatch: cinco fuentes válidas', () => {
-  it('arma cinco filas con exactamente los campos del contrato', () => {
+describe('buildMeasurementBatch: todas las fuentes válidas', () => {
+  it('arma una fila por KPI con exactamente los campos del contrato', () => {
     const batch = built(buildMeasurementBatch(input()));
 
-    expect(batch.rows).toHaveLength(5);
+    expect(batch.rows).toHaveLength(6);
 
     for (const row of batch.rows) {
       expect(Object.keys(row)).toEqual(['kpi_id', 'date', 'env', 'value', 'run_id']);
@@ -101,6 +102,7 @@ describe('buildMeasurementBatch: cinco fuentes válidas', () => {
       ['catalog_match_count', 4210],
       ['health_response_latency', 312.456],
       ['health_up', 1],
+      ['catalog_read_up', 1],
       ['auth_guard_up', 1],
       ['report_collection_duration', 1.591],
     ]);
@@ -195,7 +197,7 @@ describe('buildMeasurementBatch: fuente inválida se omite con motivo', () => {
     );
 
     expect(batch.omissions).toEqual([{ kpi_id: kpi, reason: 'invalid-value' }]);
-    expect(batch.rows).toHaveLength(4);
+    expect(batch.rows).toHaveLength(5);
   });
 
   it('un KPI omitido por el colector conserva su motivo y no se vuelve cero', () => {
@@ -224,7 +226,7 @@ describe('buildMeasurementBatch: fuente inválida se omite con motivo', () => {
     expect(batch.omissions).toEqual([{ kpi_id: 'auth_guard_up', reason: 'not-collected' }]);
   });
 
-  it('con menos de cinco fuentes válidas el lote sale, pero incompleto y con fallo visible', () => {
+  it('con menos fuentes válidas que KPIs el lote sale, pero incompleto y con fallo visible', () => {
     const batch = built(
       buildMeasurementBatch(
         input({
@@ -249,7 +251,7 @@ describe('buildMeasurementBatch: fuente inválida se omite con motivo', () => {
 
     expect(result.ok).toBe(false);
     expect(codes(result)).toEqual(['empty-batch']);
-    expect(!result.ok && result.omissions).toHaveLength(5);
+    expect(!result.ok && result.omissions).toHaveLength(6);
     expect(!result.ok && result.omissions[0]).toEqual({
       kpi_id: 'catalog_match_count',
       reason: 'config-missing',
@@ -496,10 +498,10 @@ describe('serializeArchive: JSON y corte archivables', () => {
 });
 
 describe('serializeBatchPayload: revalida siempre antes de serializar', () => {
-  it('serializa un lote válido con las cinco filas', () => {
+  it('serializa un lote válido con una fila por KPI', () => {
     const rows = built(buildMeasurementBatch(input())).rows;
 
-    expect(JSON.parse(jsonOf(serializeBatchPayload(rows)))).toHaveLength(5);
+    expect(JSON.parse(jsonOf(serializeBatchPayload(rows)))).toHaveLength(6);
   });
 
   it.each<[string, unknown]>([

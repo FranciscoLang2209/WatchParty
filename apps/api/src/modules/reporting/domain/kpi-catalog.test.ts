@@ -10,11 +10,12 @@ import {
 } from './kpi-catalog.js';
 
 describe('KPI_CATALOG', () => {
-  it('contiene exactamente los cinco KPIs iniciales, en orden', () => {
+  it('contiene exactamente los seis KPIs con fuente verificada, en orden', () => {
     expect(KPI_CATALOG.map((kpi) => kpi.id)).toEqual([
       'catalog_match_count',
       'health_response_latency',
       'health_up',
+      'catalog_read_up',
       'auth_guard_up',
       'report_collection_duration',
     ]);
@@ -25,6 +26,7 @@ describe('KPI_CATALOG', () => {
       { id: 'catalog_match_count', kind: 'technical', unit: '{match}' },
       { id: 'health_response_latency', kind: 'technical', unit: 'ms' },
       { id: 'health_up', kind: 'health', unit: '1' },
+      { id: 'catalog_read_up', kind: 'health', unit: '1' },
       { id: 'auth_guard_up', kind: 'health', unit: '1' },
       { id: 'report_collection_duration', kind: 'technical', unit: 's' },
     ]);
@@ -42,7 +44,6 @@ describe('KPI_CATALOG', () => {
       'monthly_interactions_avg',
       'catalog_query_latency',
       'database_up',
-      'catalog_read_up',
     ]) {
       expect(isKpiId(id)).toBe(false);
     }
@@ -57,6 +58,8 @@ describe('isValidKpiValue: rangos y unidades', () => {
     ['health_response_latency', 312.456],
     ['health_up', 0],
     ['health_up', 1],
+    ['catalog_read_up', 0],
+    ['catalog_read_up', 1],
     ['auth_guard_up', 0],
     ['auth_guard_up', 1],
     ['report_collection_duration', 0],
@@ -72,6 +75,9 @@ describe('isValidKpiValue: rangos y unidades', () => {
     ['health_up', 2],
     ['health_up', -1],
     ['health_up', 0.5],
+    ['catalog_read_up', 2],
+    ['catalog_read_up', -1],
+    ['catalog_read_up', 0.5],
     ['auth_guard_up', 2],
     ['auth_guard_up', 0.5],
     ['report_collection_duration', -0.1],
@@ -100,7 +106,7 @@ describe('prepareCatalogRegistration', () => {
     const registration = prepareCatalogRegistration(env);
 
     expect(registration.env).toBe(env);
-    expect(registration.records).toHaveLength(5);
+    expect(registration.records).toHaveLength(KPI_CATALOG.length);
 
     for (const record of registration.records) {
       expect(Object.keys(record)).toEqual(['id', 'kind', 'unit', 'description']);
@@ -118,10 +124,10 @@ describe('prepareCatalogRegistration', () => {
     dev.records[0]!.description = 'modificado solo en dev';
     dev.records.pop();
 
-    expect(prod.records).toHaveLength(5);
+    expect(prod.records).toHaveLength(KPI_CATALOG.length);
     expect(prod.records[0]!.description).not.toBe('modificado solo en dev');
     expect(KPI_CATALOG[0].description).not.toBe('modificado solo en dev');
-    expect(prepareCatalogRegistration('dev').records).toHaveLength(5);
+    expect(prepareCatalogRegistration('dev').records).toHaveLength(KPI_CATALOG.length);
   });
 
   it('rechaza un ambiente desconocido', () => {

@@ -14,7 +14,7 @@ export interface PublicationReceipt {
   publication?: PublishResult;
 }
 
-/** Publica los cinco KPIs y comprueba identidad y valores mediante lecturas propias. */
+/** Publica todos los KPIs del catálogo y comprueba identidad y valores mediante lecturas propias. */
 export async function publishReport(
   rows: unknown,
   env: ReporterEnv,

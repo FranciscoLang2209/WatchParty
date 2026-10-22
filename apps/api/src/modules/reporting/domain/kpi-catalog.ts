@@ -28,9 +28,10 @@ interface KpiDefinition {
 }
 
 /**
- * Catálogo inicial: exactamente los cinco KPIs con fuentes verificadas (ADR-05
- * rev. 2.0). Ampliarlo a los diez objetivo es una decisión posterior; el orden
- * es el de los artefactos.
+ * Catálogo: los KPIs con fuentes verificadas (ADR-05 rev. 2.0). Ampliarlo hasta
+ * los diez objetivo se hace de a uno, y cada KPI nuevo debe registrarse además
+ * en el catálogo central de cada ambiente antes de publicar. El orden es el de
+ * los artefactos.
  */
 export const KPI_CATALOG = [
   {
@@ -55,6 +56,14 @@ export const KPI_CATALOG = [
     unit: '1',
     description:
       'GET /health: 1 ante una respuesta 200 y 0 ante un fallo comprobado del servicio; un fallo del reporter se omite. Disponibilidad del backend al corte T.',
+    rule: { min: 0, allowed: [0, 1] },
+  },
+  {
+    id: 'catalog_read_up',
+    kind: 'health',
+    unit: '1',
+    description:
+      'GET /matches autenticado con la cuenta técnica de lectura del reporter: 1 ante un 200 con el esquema esperado (también con la lista vacía) y 0 ante un fallo comprobado del servicio; credenciales o configuración inválidas y fallos del reporter se omiten. Verifica la lectura autenticada.',
     rule: { min: 0, allowed: [0, 1] },
   },
   {

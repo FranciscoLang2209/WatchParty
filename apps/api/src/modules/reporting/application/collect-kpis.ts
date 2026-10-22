@@ -3,15 +3,19 @@ import {
   type CatalogMatchCount,
 } from '../infrastructure/catalog-match-count-source.js';
 import {
+  hasExpectedMatchesSchema,
   probeAuthGuard,
+  probeCatalogRead,
   probeHealth,
+  type CatalogReadProbe,
   type ProbeDeps,
   type ProbeOutcome,
 } from '../infrastructure/api-probes.js';
+import type { ProbeTokenRun } from '../infrastructure/probe-auth.js';
 import { KPI_CATALOG, isValidKpiValue, type KpiId, type KpiKind } from '../domain/kpi-catalog.js';
 import { toArgentinaDate } from '../domain/measurement-batch.js';
 
-// Los cinco KPIs, sus tipos, unidades y rangos salen del catálogo (WAT-200): el
+// Los KPIs, sus tipos, unidades y rangos salen del catálogo (WAT-200): el
 // colector no tiene una copia propia. El orden del catálogo es el del artefacto.
 const KPI_ORDER: readonly KpiId[] = KPI_CATALOG.map((kpi) => kpi.id);
 
@@ -75,6 +79,12 @@ export interface CollectKpisDeps {
   apiBaseUrl: ApiBaseUrlConfig;
   /** Fuente SQL del conteo del catálogo (WAT-198). Falla con `CatalogMatchCountSourceError`. */
   readCatalogMatchCount: (cutoff: Date) => Promise<CatalogMatchCount>;
+  /**
+   * Entrega a `use` el token de la cuenta técnica de lectura y lo descarta al
+   * terminar. El colector nunca ve credenciales ni guarda el token. Si no hay
+   * token, informa el motivo y `use` no corre.
+   */
+  withProbeToken: <T>(use: (accessToken: string) => Promise<T>) => Promise<ProbeTokenRun<T>>;
   fetchFn: typeof fetch;
   /** Reloj de pared: solo para fijar el corte T y la fecha local. */
   now: () => Date;
@@ -116,8 +126,30 @@ function interpretAuthGuard(probe: ProbeOutcome, outcomes: Partial<Record<KpiId,
     probe.kind === 'failed' ? { reason: probe.reason } : { value: probe.status === 401 ? 1 : 0 };
 }
 
+// `catalog_read_up`: con un 200 y el esquema esperado, la lectura autenticada
+// funciona = 1, aunque la lista venga vacía. Un 5xx, o un 200 con una respuesta que
+// no cumple el contrato, es un fallo comprobado del servicio = 0. Un 401/403 con un
+// token recién emitido, otros estados y la falta de respuesta no prueban una caída
+// del servicio (credencial, configuración o red del reporter): se omiten con motivo.
+function interpretCatalogRead(
+  probe: CatalogReadProbe,
+  outcomes: Partial<Record<KpiId, Outcome>>,
+): void {
+  if (probe.kind === 'failed') {
+    outcomes.catalog_read_up = { reason: probe.reason };
+  } else if (probe.status === 200) {
+    outcomes.catalog_read_up = { value: hasExpectedMatchesSchema(probe.body) ? 1 : 0 };
+  } else if (probe.status >= 500) {
+    outcomes.catalog_read_up = { value: 0 };
+  } else if (probe.status === 401 || probe.status === 403) {
+    outcomes.catalog_read_up = { reason: 'unauthorized' };
+  } else {
+    outcomes.catalog_read_up = { reason: 'unexpected-status' };
+  }
+}
+
 /**
- * Colector determinista de los cinco KPIs iniciales. No publica nada: solo
+ * Colector determinista de los KPIs del catálogo. No publica nada: solo
  * extrae, sondea, calcula y valida. Un KPI sin fuente válida se omite con su
  * motivo; ningún fallo se convierte en cero.
  */
@@ -135,12 +167,29 @@ export async function collectKpis(deps: CollectKpisDeps): Promise<CollectionArti
 
     interpretHealth(await probeHealth(deps.apiBaseUrl.baseUrl, probeDeps), outcomes);
     interpretAuthGuard(await probeAuthGuard(deps.apiBaseUrl.baseUrl, probeDeps), outcomes);
+
+    const { baseUrl } = deps.apiBaseUrl;
+
+    try {
+      const run = await deps.withProbeToken((accessToken) =>
+        probeCatalogRead(baseUrl, accessToken, probeDeps),
+      );
+
+      if (run.ok) {
+        interpretCatalogRead(run.value, outcomes);
+      } else {
+        outcomes.catalog_read_up = { reason: run.reason };
+      }
+    } catch {
+      outcomes.catalog_read_up = { reason: 'unexpected-error' };
+    }
   } else {
     const reason = deps.apiBaseUrl.reason;
 
     outcomes.health_up = { reason };
     outcomes.health_response_latency = { reason };
     outcomes.auth_guard_up = { reason };
+    outcomes.catalog_read_up = { reason };
   }
 
   try {
