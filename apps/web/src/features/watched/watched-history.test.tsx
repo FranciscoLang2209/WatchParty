@@ -115,6 +115,41 @@ describe('WatchedHistory: estados', () => {
     expect(within(segundo!).getByText('Postergado')).toBeInTheDocument();
   });
 
+  it('ordena cada tarjeta como estado → equipos → marcador → fecha → acción', async () => {
+    fetchMock.mockReturnValueOnce(page([item(1, 'finished', { home: 2, away: 1 })]));
+    renderHistory();
+
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+    const tarjeta = screen.getByRole('listitem');
+    const enOrden = [
+      within(tarjeta).getByText('Finalizado'),
+      within(tarjeta).getByRole('heading', { level: 3 }),
+      within(tarjeta).getByText('2 – 1'),
+      within(tarjeta).getByText(/sáb.*10.*oct.*18:00/),
+      within(tarjeta).getByText(/^Visto el /),
+      within(tarjeta).getByRole('link'),
+    ];
+
+    for (let i = 1; i < enOrden.length; i += 1) {
+      expect(
+        enOrden[i - 1]!.compareDocumentPosition(enOrden[i]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+  });
+
+  it('el enlace al detalle muestra texto y flecha, y su nombre accesible no incluye el icono', async () => {
+    fetchMock.mockReturnValueOnce(page([item(1)]));
+    renderHistory();
+
+    const enlace = await screen.findByRole('link', {
+      name: 'Ver partido: Local 1 vs. Visitante 1',
+    });
+
+    expect(enlace).toHaveTextContent('Ver partido');
+    expect(enlace.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(enlace).toHaveClass('min-h-11');
+  });
+
   it('muestra el marcador real cuando existe y «Sin resultado» cuando no, sin inventar 0–0', async () => {
     fetchMock.mockReturnValueOnce(
       page([
