@@ -6,7 +6,10 @@ KPI de negocio de ADR-05 rev. 2.0: porcentaje de pares usuario–partido vistos 
 
 `supabase/migrations/20261022120000_reporting_rated_match_rate.sql`:
 
-- `create schema if not exists reporting`: en producción el esquema ya existe (WAT-192, junto con `catalog_match_count`); en local se crea vacío.
+- Preparación de permisos sobre el esquema `reporting`. En producción ya existe (WAT-192, junto con `catalog_match_count`) y su dueño es `watchparty_reporter_source`, así que `postgres` no puede crear objetos ahí. La migración:
+  1. crea `watchparty_reporter_source` (`NOLOGIN`) solo si no existe, para que local reproduzca el escenario de producción;
+  2. le da a `postgres` membresía con `SET` y sin `INHERIT` sobre ese rol (requiere el `ADMIN` que `postgres` tiene por haberlo creado);
+  3. crea el esquema con ese dueño si no existe y, actuando como dueño, le da `USAGE, CREATE` a `postgres` y revoca todo a `public`, `anon` y `authenticated`. El dueño del esquema no cambia.
 - `reporting.technical_accounts (user_id)`: cuentas técnicas que se excluyen de los KPIs de negocio. Sin acceso para `anon`, `authenticated` ni el reporter.
 - `reporting.rated_match_rate(cutoff timestamptz)`: `SECURITY DEFINER`, devuelve una fila `(value, omission_reason)` y nunca filas personales.
 - `USAGE` sobre `reporting` y `EXECUTE` sobre el agregado para el rol `watchparty_reporter`, solo si ese rol existe (en local no). Se revoca todo a `public`, `anon` y `authenticated`.

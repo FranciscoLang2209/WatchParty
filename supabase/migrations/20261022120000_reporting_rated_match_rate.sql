@@ -3,12 +3,36 @@
 -- personales. Es aditiva: crea objetos nuevos en el esquema reporting y no
 -- modifica ninguna tabla existente.
 --
--- El esquema reporting y el rol del reporter ya existen en producción
--- (WAT-192, fuera del repo, junto con reporting.catalog_match_count); en
--- local se crea vacío.
-create schema if not exists reporting;
+-- En producción el esquema reporting ya existe (WAT-192, fuera del repo,
+-- junto con reporting.catalog_match_count) y su dueño es
+-- watchparty_reporter_source, no postgres: postgres no puede crear objetos
+-- ahí. En local se reproduce el mismo escenario creando ese rol y el esquema
+-- con ese dueño, para que la migración se pruebe igual que en producción.
+do $$
+begin
+    if not exists (select 1 from pg_roles where rolname = 'watchparty_reporter_source') then
+        create role watchparty_reporter_source nologin;
+    end if;
+end
+$$;
+
+-- postgres tiene ADMIN sobre el rol dueño (lo creó), pero no SET: se da la
+-- membresía solo para poder actuar como dueño, sin heredar sus privilegios.
+-- Va con el nombre explícito: `to current_user` tira abajo el Postgres de
+-- Supabase (segfault).
+grant watchparty_reporter_source to postgres with inherit false, set true;
+
+create schema if not exists reporting authorization watchparty_reporter_source;
+
+-- Como dueño, permite a postgres crear el agregado en el esquema y cierra el
+-- esquema al resto. El dueño del esquema no cambia.
+set role watchparty_reporter_source;
+
+grant usage, create on schema reporting to postgres;
 
 revoke all on schema reporting from public, anon, authenticated;
+
+reset role;
 
 -- Cuentas técnicas (pruebas, demos, smoke): se excluyen de todas las
 -- fuentes de los KPIs de negocio. Se cargan a mano con un rol privilegiado;
@@ -110,10 +134,14 @@ revoke all on function reporting.rated_match_rate(timestamptz) from public, anon
 -- Mismo patrón que catalog_match_count: el rol del reporter solo recibe
 -- USAGE sobre el esquema y EXECUTE sobre el agregado. El rol se crea fuera
 -- del repo, así que el grant solo se aplica donde ya existe (en local no).
+-- USAGE lo da el dueño del esquema: si lo intentara postgres, Postgres solo
+-- avisaría "no privileges were granted" y el reporter quedaría sin acceso.
 do $$
 begin
     if exists (select 1 from pg_roles where rolname = 'watchparty_reporter') then
+        set role watchparty_reporter_source;
         grant usage on schema reporting to watchparty_reporter;
+        reset role;
         grant execute on function reporting.rated_match_rate(timestamptz) to watchparty_reporter;
     end if;
 end

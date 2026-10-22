@@ -100,6 +100,19 @@ async function rateMatch(
 export async function checkRatedMatchRate(client: pg.Client): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
 
+  // Mismo escenario que producción: el esquema es de otro rol y postgres solo
+  // crea ahí porque ese dueño se lo permite.
+  const { rows: schema } = await client.query<{ owner: string; postgres_create: boolean }>(
+    `select pg_get_userbyid(nspowner) as owner,
+            has_schema_privilege('postgres', 'reporting', 'CREATE') as postgres_create
+     from pg_namespace where nspname = 'reporting'`,
+  );
+  results.push({
+    label: 'El esquema reporting es de watchparty_reporter_source, como en producción',
+    passed: schema[0]?.owner === 'watchparty_reporter_source' && schema[0].postgres_create,
+    detail: `dueño=${schema[0]?.owner}, postgres CREATE=${schema[0]?.postgres_create}`,
+  });
+
   const empty = await rate(client, EMPTY_MONTH_CUTOFF);
   results.push({
     label: 'Sin pares vistos en el mes: value null con motivo "no-denominator", nunca cero',
@@ -187,7 +200,10 @@ export async function checkRatedMatchRate(client: pg.Client): Promise<CheckResul
   // authenticated solo USAGE y EXECUTE, y el rollback lo deshace. No crea un
   // rol propio porque en el Postgres de Supabase local `grant <rol> to
   // current_user` tira abajo el proceso (segfault).
+  // USAGE lo da el dueño del esquema, igual que la migración.
+  await client.query('set local role watchparty_reporter_source');
   await client.query(`grant usage on schema reporting to ${REPORTER_STAND_IN}`);
+  await client.query('reset role');
   await client.query(
     `grant execute on function reporting.rated_match_rate(timestamptz) to ${REPORTER_STAND_IN}`,
   );
