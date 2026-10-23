@@ -250,6 +250,68 @@ describe('ProfilePage: encabezado', () => {
   });
 });
 
+describe('ProfilePage: formulario separado del resumen', () => {
+  it('el formulario tiene su propio título y va después del resumen', async () => {
+    renderPage();
+
+    const resumen = await screen.findByRole('heading', { level: 2, name: 'Martina' });
+    const formulario = screen.getByRole('form', { name: 'Editar perfil' });
+
+    expect(
+      resumen.compareDocumentPosition(formulario) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(resumen.closest('form')).toBeNull();
+  });
+
+  it('ordena nombre, biografía y equipo favorito, y deja Guardar cambios al final', async () => {
+    renderPage();
+    await screen.findByLabelText('Nombre visible');
+
+    const enOrden = [nombre(), biografia(), favorito(), guardar()];
+
+    for (let i = 1; i < enOrden.length; i += 1) {
+      expect(
+        enOrden[i - 1]!.compareDocumentPosition(enOrden[i]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+    expect(within(screen.getByRole('form', { name: 'Editar perfil' })).getByRole('button')).toBe(
+      guardar(),
+    );
+  });
+
+  it('el aviso de guardado desaparece al volver a editar', async () => {
+    const { user } = renderPage();
+    await screen.findByLabelText('Nombre visible');
+
+    await user.click(guardar());
+    expect(await screen.findByText('Guardamos tu perfil.')).toBeInTheDocument();
+
+    await user.type(biografia(), ' Y más.');
+
+    expect(screen.queryByText('Guardamos tu perfil.')).not.toBeInTheDocument();
+  });
+
+  it('si falla el guardado conserva todo el borrador, incluido lo editado', async () => {
+    stubApi({ saveStatus: 500 });
+    const { user } = renderPage();
+    await screen.findByLabelText('Nombre visible');
+
+    await user.clear(nombre());
+    await user.type(nombre(), 'Martu');
+    await user.clear(biografia());
+    await user.type(biografia(), 'Nueva bio.');
+    await user.selectOptions(favorito(), BOCA);
+    await user.click(guardar());
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(nombre()).toHaveValue('Martu');
+    expect(biografia()).toHaveValue('Nueva bio.');
+    expect(favorito()).toHaveValue(BOCA);
+    // El resumen sigue mostrando lo guardado, no el borrador que falló.
+    expect(screen.getByRole('heading', { level: 2, name: 'Martina' })).toBeInTheDocument();
+  });
+});
+
 describe('ProfilePage: todavía no hay perfil', () => {
   beforeEach(() => {
     stubApi({ profile: null });
