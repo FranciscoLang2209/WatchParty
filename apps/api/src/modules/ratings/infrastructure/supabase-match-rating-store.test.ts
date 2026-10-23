@@ -191,3 +191,78 @@ describe('SupabaseMatchRatingStore.saveRating', () => {
     expect((error as Error).message).not.toContain('postgres://');
   });
 });
+
+/** Doble de Supabase para la función SQL `match_rating_summary` (`client.rpc`). */
+function makeRpcClient(result: { data?: unknown; error?: FakeError | null }) {
+  const rpc = vi.fn(async () => ({ data: result.data ?? null, error: result.error ?? null }));
+  return { rpc } as unknown as SupabaseClient & { rpc: typeof rpc };
+}
+
+describe('SupabaseMatchRatingStore.getSummary', () => {
+  it('llama a match_rating_summary solo con el id del partido y mapea la fila', async () => {
+    const client = makeRpcClient({ data: [{ rating_count: 3, rating_average: 3.67 }] });
+
+    const summary = await new SupabaseMatchRatingStore(client).getSummary(MATCH_ID);
+
+    expect(summary).toEqual({ average: 3.67, count: 3 });
+    expect(client.rpc).toHaveBeenCalledTimes(1);
+    expect(client.rpc).toHaveBeenCalledWith('match_rating_summary', { p_match_id: MATCH_ID });
+  });
+
+  it('sin votos devuelve { average: null, count: 0 }', async () => {
+    const client = makeRpcClient({ data: [{ rating_count: 0, rating_average: null }] });
+
+    expect(await new SupabaseMatchRatingStore(client).getSummary(MATCH_ID)).toEqual({
+      average: null,
+      count: 0,
+    });
+  });
+
+  it.each([1, 5])('acepta promedio en los extremos del rango (%s)', async (average) => {
+    const client = makeRpcClient({ data: [{ rating_count: 2, rating_average: average }] });
+
+    expect(await new SupabaseMatchRatingStore(client).getSummary(MATCH_ID)).toEqual({
+      average,
+      count: 2,
+    });
+  });
+
+  it('un fallo de la base se lanza sanitizado, nunca se convierte en "sin votos"', async () => {
+    const client = makeRpcClient({ error: { message: 'password=secreto host=db.interno' } });
+
+    const error = await new SupabaseMatchRatingStore(client)
+      .getSummary(MATCH_ID)
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(MatchRatingPersistenceError);
+    expect((error as Error).message).not.toContain('secreto');
+  });
+
+  it.each([
+    ['data nulo', null],
+    ['arreglo vacío', []],
+    [
+      'más de una fila',
+      [
+        { rating_count: 1, rating_average: 4 },
+        { rating_count: 1, rating_average: 4 },
+      ],
+    ],
+    ['fila vacía', [{}]],
+    ['cuenta negativa', [{ rating_count: -1, rating_average: null }]],
+    ['cuenta decimal', [{ rating_count: 1.5, rating_average: 4 }]],
+    ['cuenta como texto', [{ rating_count: '3', rating_average: 4 }]],
+    ['votos sin promedio', [{ rating_count: 2, rating_average: null }]],
+    ['promedio con cero votos', [{ rating_count: 0, rating_average: 3 }]],
+    ['promedio cero con cero votos', [{ rating_count: 0, rating_average: 0 }]],
+    ['promedio menor a 1', [{ rating_count: 2, rating_average: 0.99 }]],
+    ['promedio mayor a 5', [{ rating_count: 2, rating_average: 5.01 }]],
+    ['promedio como texto', [{ rating_count: 2, rating_average: '4' }]],
+  ])('resumen incoherente (%s) se rechaza como fallo de persistencia', async (_name, data) => {
+    const client = makeRpcClient({ data });
+
+    await expect(new SupabaseMatchRatingStore(client).getSummary(MATCH_ID)).rejects.toBeInstanceOf(
+      MatchRatingPersistenceError,
+    );
+  });
+});
