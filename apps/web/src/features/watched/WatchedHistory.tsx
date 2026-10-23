@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef } from 'react';
+import { ChevronRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
@@ -18,8 +19,10 @@ interface WatchedHistoryProps {
 const MENSAJE_VACIO = 'Todavía no marcaste partidos como vistos.';
 
 /**
- * Un partido del historial: el marcador real cuando existe (WAT-230) y el
- * estado del partido como dato aparte.
+ * Un partido del historial, en el orden de lectura del sistema de diseño:
+ * estado → equipos → marcador → fecha → acción. El marcador real (WAT-230)
+ * queda alineado a la derecha en todas las tarjetas; sin marcador se dice
+ * «Sin resultado», nunca un 0–0. El estado del partido es un dato aparte.
  */
 function HistoryItem({ item }: { item: WatchedHistoryItem }) {
   const { match, watchedAt } = item;
@@ -27,38 +30,46 @@ function HistoryItem({ item }: { item: WatchedHistoryItem }) {
 
   return (
     <Card className="gap-3 p-4">
-      {/* `min-w-0` y el quiebre de palabra evitan que un nombre largo desborde. */}
-      <h3 className="min-w-0 text-base leading-snug font-semibold break-words">
-        {match.homeTeam} <span className="text-muted-foreground">vs.</span> {match.awayTeam}
-      </h3>
+      <div className="flex min-w-0 items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-col items-start gap-2">
+          <span
+            className={cn(
+              'rounded-sm px-2 py-1 text-xs font-semibold',
+              // El rojo del sistema se reserva para LIVE; el resto usa el fondo sutil.
+              enVivo ? 'bg-live/10 text-live' : 'bg-muted text-muted-foreground',
+            )}
+          >
+            {matchStatusLabel(match.status)}
+          </span>
 
-      <MatchResult match={match} />
+          {/* `min-w-0` y el quiebre de palabra evitan que un nombre largo desborde. */}
+          <h3 className="min-w-0 text-base leading-snug font-semibold break-words">
+            {match.homeTeam} <span className="text-muted-foreground">vs.</span> {match.awayTeam}
+          </h3>
+        </div>
 
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-        <p className="min-w-0 text-sm text-muted-foreground">{formatKickoff(match.kickoffAt)}</p>
-
-        <span
-          className={cn(
-            'rounded-sm px-2 py-1 text-xs font-semibold',
-            // El rojo del sistema se reserva para LIVE; el resto usa el fondo sutil.
-            enVivo ? 'bg-live/10 text-live' : 'bg-muted text-muted-foreground',
-          )}
-        >
-          {matchStatusLabel(match.status)}
-        </span>
+        <MatchResult match={match} className="shrink-0 text-right" />
       </div>
 
-      <p className="min-w-0 text-sm text-muted-foreground">
-        Visto el {formatKickoffDate(watchedAt)}
+      <p className="min-w-0 text-sm text-muted-foreground tabular-nums">
+        {formatKickoff(match.kickoffAt)}
       </p>
 
-      <Link
-        to={`/matches/${match.id}`}
-        aria-label={`Ver partido: ${match.homeTeam} vs. ${match.awayTeam}`}
-        className="self-start rounded-sm text-sm font-semibold text-primary underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-      >
-        Ver partido
-      </Link>
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border pt-2">
+        <p className="min-w-0 text-sm text-muted-foreground">
+          Visto el {formatKickoffDate(watchedAt)}
+        </p>
+
+        {/* Área táctil de 44 px; el texto y la flecha la identifican sin depender del color. */}
+        <Link
+          to={`/matches/${match.id}`}
+          aria-label={`Ver partido: ${match.homeTeam} vs. ${match.awayTeam}`}
+          className="inline-flex min-h-11 items-center gap-1 rounded-md px-2 text-sm font-semibold text-primary transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none motion-reduce:transition-none"
+        >
+          Ver partido
+          <ChevronRight aria-hidden="true" className="size-4" />
+        </Link>
+      </div>
     </Card>
   );
 }
