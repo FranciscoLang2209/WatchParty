@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useState, type FormEvent } from 'react';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { getOwnProfile, listTeams, saveOwnProfile } from '@/features/profiles/api';
 import { ProfileFields, type ProfileFieldErrors } from '@/features/profiles/ProfileFields';
@@ -62,6 +63,7 @@ export function ProfilePage() {
 
   const favoriteId = useId();
   const feedbackId = useId();
+  const formTitleId = useId();
 
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
@@ -107,6 +109,13 @@ export function ProfilePage() {
     setEstado({ status: 'loading' });
     setIntento((valor) => valor + 1);
   }, []);
+
+  // Un cambio nuevo deja de estar guardado: el aviso de éxito no puede quedar
+  // a la vista. Un error, en cambio, sigue explicando por qué no se guardó.
+  function editar(cambio: Partial<Borrador>) {
+    setBorrador((actual) => ({ ...actual, ...cambio }));
+    setMensajeGuardado(null);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -184,83 +193,95 @@ export function ProfilePage() {
         ) : null}
 
         {estado.status === 'ready' ? (
-          <form
-            className="flex w-full min-w-0 flex-col gap-4"
-            onSubmit={handleSubmit}
-            aria-busy={guardando}
-            aria-describedby={feedbackId}
-            noValidate
-          >
-            {estado.profile === null ? (
-              // No es un fallo: es alguien que todavía no lo completó.
+          // Tarjeta propia, separada del resumen de arriba: lo que se edita no
+          // se confunde con lo que ya está guardado (WAT-235).
+          <Card className="min-w-0 gap-4 p-4 sm:p-6">
+            <div className="flex min-w-0 flex-col gap-1">
+              <h2 id={formTitleId} className="font-display text-xl leading-tight font-semibold">
+                Editar perfil
+              </h2>
               <p className="text-sm text-muted-foreground">
-                Todavía no completaste tu perfil. Contá quién sos para que te reconozcan en la
-                tribuna.
+                Los cambios se ven arriba recién cuando los guardás.
               </p>
-            ) : null}
+            </div>
 
-            <ProfileFields
-              displayName={borrador.displayName}
-              bio={borrador.bio}
-              onDisplayNameChange={(displayName) =>
-                setBorrador((actual) => ({ ...actual, displayName }))
-              }
-              onBioChange={(bio) => setBorrador((actual) => ({ ...actual, bio }))}
-              errors={errores}
-              disabled={guardando}
-            />
+            <form
+              className="flex w-full min-w-0 flex-col gap-4"
+              onSubmit={handleSubmit}
+              aria-labelledby={formTitleId}
+              aria-busy={guardando}
+              aria-describedby={feedbackId}
+              noValidate
+            >
+              {estado.profile === null ? (
+                // No es un fallo: es alguien que todavía no lo completó.
+                <p className="text-sm text-muted-foreground">
+                  Todavía no completaste tu perfil. Contá quién sos para que te reconozcan en la
+                  tribuna.
+                </p>
+              ) : null}
 
-            <div className="flex w-full min-w-0 flex-col gap-2">
-              <Label htmlFor={favoriteId}>Equipo favorito</Label>
-
-              <select
-                id={favoriteId}
-                className="flex h-11 w-full min-w-0 rounded-md border border-input bg-card px-3 py-2 text-base text-foreground transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
-                value={borrador.favoriteTeamId ?? SIN_FAVORITO}
+              <ProfileFields
+                displayName={borrador.displayName}
+                bio={borrador.bio}
+                onDisplayNameChange={(displayName) => editar({ displayName })}
+                onBioChange={(bio) => editar({ bio })}
+                errors={errores}
                 disabled={guardando}
-                onChange={(event) =>
-                  setBorrador((actual) => ({
-                    ...actual,
-                    // Elegir la opción vacía es, exactamente, quitar el favorito.
-                    favoriteTeamId: event.target.value === SIN_FAVORITO ? null : event.target.value,
-                  }))
-                }
-              >
-                <option value={SIN_FAVORITO}>Sin equipo favorito</option>
-                {estado.teams.map((team) => (
-                  <option key={team.id} value={team.id}>
-                    {team.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+              />
 
-            <div id={feedbackId} className="empty:hidden">
-              {errorGuardado !== null ? (
-                <p
-                  role="alert"
-                  aria-live="assertive"
-                  className="rounded-sm border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              <div className="flex w-full min-w-0 flex-col gap-2">
+                <Label htmlFor={favoriteId}>Equipo favorito</Label>
+
+                <select
+                  id={favoriteId}
+                  className="flex h-11 w-full min-w-0 rounded-md border border-input bg-card px-3 py-2 text-base text-foreground transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+                  value={borrador.favoriteTeamId ?? SIN_FAVORITO}
+                  disabled={guardando}
+                  onChange={(event) =>
+                    editar({
+                      // Elegir la opción vacía es, exactamente, quitar el favorito.
+                      favoriteTeamId:
+                        event.target.value === SIN_FAVORITO ? null : event.target.value,
+                    })
+                  }
                 >
-                  {errorGuardado}
-                </p>
-              ) : null}
+                  <option value={SIN_FAVORITO}>Sin equipo favorito</option>
+                  {estado.teams.map((team) => (
+                    <option key={team.id} value={team.id}>
+                      {team.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              {mensajeGuardado !== null ? (
-                <p
-                  role="status"
-                  aria-live="polite"
-                  className="rounded-sm border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-foreground"
-                >
-                  {mensajeGuardado}
-                </p>
-              ) : null}
-            </div>
+              <div id={feedbackId} className="empty:hidden">
+                {errorGuardado !== null ? (
+                  <p
+                    role="alert"
+                    aria-live="assertive"
+                    className="rounded-sm border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                  >
+                    {errorGuardado}
+                  </p>
+                ) : null}
 
-            <Button type="submit" size="lg" className="w-full font-semibold" disabled={guardando}>
-              {guardando ? 'Guardando…' : 'Guardar cambios'}
-            </Button>
-          </form>
+                {mensajeGuardado !== null ? (
+                  <p
+                    role="status"
+                    aria-live="polite"
+                    className="rounded-sm border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-foreground"
+                  >
+                    {mensajeGuardado}
+                  </p>
+                ) : null}
+              </div>
+
+              <Button type="submit" size="lg" className="w-full font-semibold" disabled={guardando}>
+                {guardando ? 'Guardando…' : 'Guardar cambios'}
+              </Button>
+            </form>
+          </Card>
         ) : null}
 
         {/* Independiente del formulario: su carga o su fallo no bloquean la edición. */}
