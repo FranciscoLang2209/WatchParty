@@ -28,6 +28,9 @@ import { createMatchRatingsRouter } from './modules/ratings/http/match-ratings-r
 import { MatchRatingService } from './modules/ratings/application/match-rating-service.js';
 import type { MatchRatingStore } from './modules/ratings/domain/match-rating-store.js';
 import { SupabaseMatchRatingStore } from './modules/ratings/infrastructure/supabase-match-rating-store.js';
+import { createStatisticsRouter } from './modules/statistics/http/statistics-router.js';
+import type { UserStatisticsStore } from './modules/statistics/domain/user-statistics-store.js';
+import { SupabaseUserStatisticsStore } from './modules/statistics/infrastructure/supabase-user-statistics-store.js';
 
 /**
  * Cambio del ticket WAT-106: la app ya no crea su propio MatchCatalog de
@@ -48,6 +51,7 @@ export function createApp(
   reactionStore: RoomCommentReactionStore,
   watchedStore: WatchedMatchStore,
   ratingStore: MatchRatingStore,
+  statisticsStore: UserStatisticsStore,
 ): Express {
   const app = express();
 
@@ -76,6 +80,7 @@ export function createApp(
   );
   app.use(createProfilesRouter(profileStore));
   app.use('/me', createWatchedHistoryRouter(watchedStore));
+  app.use('/me', createStatisticsRouter(statisticsStore));
   app.use(createRoomsRouter(roomStore));
   app.use('/rooms', createCommentsRouter(commentStore, reactionStore));
   app.use(notFoundHandler);
@@ -105,6 +110,7 @@ const roomStore = new SupabasePublicRoomStore(sportsDataClient, matchCatalog);
 const reactionStore = new SupabaseRoomCommentReactionStore(sportsDataClient);
 const watchedStore = new SupabaseWatchedMatchStore(sportsDataClient, matchCatalog);
 const ratingStore = new SupabaseMatchRatingStore(sportsDataClient);
+const statisticsStore = new SupabaseUserStatisticsStore(sportsDataClient);
 
 export default createApp(
   matchCatalog,
@@ -114,4 +120,5 @@ export default createApp(
   reactionStore,
   watchedStore,
   ratingStore,
+  statisticsStore,
 );
