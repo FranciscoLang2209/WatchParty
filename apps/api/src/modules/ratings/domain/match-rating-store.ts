@@ -18,7 +18,22 @@ export function isValidMatchRating(value: unknown): value is number {
 }
 
 /**
- * Puerto mínimo para leer y guardar la nota propia de un partido (WAT-212).
+ * Resumen público de las notas de un partido (WAT-214). Solo agregados: no
+ * incluye ni identidades ni notas individuales.
+ *
+ * - `count`: votos distintos (un usuario cuenta una vez aunque edite).
+ * - `average`: promedio de 1 a 5 con 2 decimales, o `null` si no hay votos.
+ *   Las notas nunca bajan de 1, así que "sin votos" (`null`) no se confunde
+ *   con un promedio cero.
+ */
+export interface MatchRatingSummary {
+  average: number | null;
+  count: number;
+}
+
+/**
+ * Puerto mínimo para leer y guardar la nota propia de un partido (WAT-212) y
+ * para leer el resumen agregado del partido (WAT-214).
  * Sobre la tabla `match_ratings` de WAT-211: PK `(user_id, match_id)`.
  *
  * No conoce bearer ni HTTP, y tampoco decide elegibilidad (partido
@@ -36,4 +51,12 @@ export interface MatchRatingStore {
    * es un entero 1–5.
    */
   saveRating(userId: string, matchId: string, rating: number): Promise<number>;
+
+  /**
+   * Cantidad de votos y promedio de `matchId`, calculados por la persistencia
+   * (no sobre una lista traída a memoria). Un partido sin votos devuelve
+   * `{ average: null, count: 0 }`. No valida que el partido exista: eso es
+   * del `MatchRatingService`.
+   */
+  getSummary(matchId: string): Promise<MatchRatingSummary>;
 }

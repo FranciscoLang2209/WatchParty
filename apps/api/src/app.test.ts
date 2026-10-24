@@ -25,6 +25,7 @@ const noopWatchedStore: WatchedMatchStore = {
 const noopRatingStore: MatchRatingStore = {
   findRating: async () => null,
   saveRating: async (_userId, _matchId, rating) => rating,
+  getSummary: async () => ({ average: null, count: 0 }),
 };
 
 process.env.SUPABASE_URL = 'https://example.supabase.co';
