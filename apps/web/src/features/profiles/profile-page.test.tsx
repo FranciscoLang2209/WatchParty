@@ -62,6 +62,9 @@ interface Escenario {
   /** Lo que responde el historial de vistos (WAT-219). */
   history?: unknown;
   historyStatus?: number;
+  /** Lo que responde el resumen de actividad (WAT-233). */
+  statistics?: unknown;
+  statisticsStatus?: number;
 }
 
 function jsonResponse(body: unknown, status: number) {
@@ -82,6 +85,8 @@ function stubApi(escenario: Escenario = {}) {
     saveStatus = 200,
     history = { items: [], nextCursor: null },
     historyStatus = 200,
+    statistics = { watchedMatches: 0, ratings: 0, comments: 0 },
+    statisticsStatus = 200,
   } = escenario;
 
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
@@ -96,6 +101,16 @@ function stubApi(escenario: Escenario = {}) {
             ? { error: { code: saveStatus === 400 ? 'VALIDATION_ERROR' : 'INTERNAL_ERROR' } }
             : { profile: saved ?? enviado },
           saveStatus,
+        ),
+      );
+    }
+
+    // El resumen de actividad (WAT-233) se consulta aparte: no es parte del perfil.
+    if (String(url).endsWith('/me/statistics')) {
+      return Promise.resolve(
+        jsonResponse(
+          statisticsStatus >= 400 ? { error: { code: 'INTERNAL_ERROR' } } : { statistics },
+          statisticsStatus,
         ),
       );
     }
@@ -561,5 +576,40 @@ describe('ProfilePage: historial de partidos vistos', () => {
 
     expect(await screen.findByText('Guardamos tu perfil.')).toBeInTheDocument();
     expect(guardado()).toMatchObject({ displayName: 'Martu' });
+  });
+});
+
+describe('ProfilePage: resumen de actividad', () => {
+  it('muestra los tres indicadores propios, con el bearer de la sesión', async () => {
+    stubApi({ statistics: { watchedMatches: 5, ratings: 3, comments: 8 } });
+    renderPage();
+
+    const seccion = await screen.findByRole('region', { name: 'Tu actividad' });
+    const valor = (label: string) =>
+      within(seccion).getByText(label).closest('dt')?.nextElementSibling?.textContent;
+
+    await within(seccion).findByText('Partidos vistos');
+    expect(valor('Partidos vistos')).toBe('5');
+    expect(valor('Calificaciones')).toBe('3');
+    expect(valor('Comentarios')).toBe('8');
+
+    const pedido = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/me/statistics'));
+    expect(new Headers(pedido![1].headers).get('Authorization')).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('un fallo del resumen no bloquea la edición del perfil', async () => {
+    stubApi({ statisticsStatus: 500 });
+    const { user } = renderPage();
+
+    const seccion = await screen.findByRole('region', { name: 'Tu actividad' });
+    expect(await within(seccion).findByRole('alert')).toHaveTextContent(
+      'No pudimos cargar tu actividad',
+    );
+
+    await user.clear(nombre());
+    await user.type(nombre(), 'Martu');
+    await user.click(guardar());
+
+    expect(await screen.findByText('Guardamos tu perfil.')).toBeInTheDocument();
   });
 });
