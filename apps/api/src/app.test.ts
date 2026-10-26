@@ -10,6 +10,7 @@ import type { RoomCommentStore } from './modules/comments/domain/room-comment-st
 import type { RoomCommentReactionStore } from './modules/comments/domain/room-comment-reaction-store.js';
 import type { WatchedMatchStore } from './modules/watched/domain/watched-match-store.js';
 import type { MatchRatingStore } from './modules/ratings/domain/match-rating-store.js';
+import type { UserStatisticsStore } from './modules/statistics/domain/user-statistics-store.js';
 
 const noopReactionStore: RoomCommentReactionStore = {
   setReaction: async () => null,
@@ -60,6 +61,10 @@ const noopCommentStore: RoomCommentStore = {
   }),
 };
 
+const noopStatisticsStore: UserStatisticsStore = {
+  getUserStatistics: async () => ({ watchedMatches: 0, ratings: 0, comments: 0 }),
+};
+
 const app = createApp(
   new LocalMatchCatalog(),
   noopProfileStore,
@@ -68,6 +73,7 @@ const app = createApp(
   noopReactionStore,
   noopWatchedStore,
   noopRatingStore,
+  noopStatisticsStore,
 );
 
 describe('GET /health', () => {
