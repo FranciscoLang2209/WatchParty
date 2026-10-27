@@ -12,6 +12,7 @@ import {
   type Profile,
   type TeamOption,
 } from '@/features/profiles/types';
+import { OwnStatistics } from '@/features/statistics/OwnStatistics';
 import { WatchedHistory } from '@/features/watched/WatchedHistory';
 
 type Estado =
@@ -47,7 +48,8 @@ function toEstadoError(error: unknown): Estado {
 }
 
 /**
- * Perfil propio: el encabezado con lo guardado (WAT-234), el formulario de
+ * Perfil propio: el encabezado con lo guardado (WAT-234), el resumen de
+ * actividad (WAT-233), el formulario de
  * nombre visible, biografía y equipo favorito, y debajo el historial de
  * partidos vistos (WAT-219).
  *
@@ -191,6 +193,13 @@ export function ProfilePage() {
           // Lo guardado, no el borrador: cambia recién cuando la API confirma.
           <ProfileHeader profile={estado.profile} teams={estado.teams} />
         ) : null}
+
+        {/* Independiente del perfil: se consulta en cada entrada y su fallo no bloquea la edición. */}
+        <OwnStatistics
+          userId={userId}
+          accessToken={accessToken}
+          onSessionExpired={() => void signOut()}
+        />
 
         {estado.status === 'ready' ? (
           // Tarjeta propia, separada del resumen de arriba: lo que se edita no
