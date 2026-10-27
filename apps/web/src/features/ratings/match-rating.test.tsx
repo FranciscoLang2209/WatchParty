@@ -30,6 +30,7 @@ interface ElementOptions {
   userId?: string;
   accessToken?: string;
   onSessionExpired?: () => void;
+  onSaved?: () => void;
 }
 
 /** Mismo `key` que en el detalle: por partido y por usuario. */
@@ -38,6 +39,7 @@ function element({
   userId = 'user-1',
   accessToken = TOKEN,
   onSessionExpired = () => {},
+  onSaved,
 }: ElementOptions = {}) {
   return (
     <MatchRating
@@ -45,6 +47,7 @@ function element({
       matchId={matchId}
       accessToken={accessToken}
       onSessionExpired={onSessionExpired}
+      onSaved={onSaved}
     />
   );
 }
@@ -571,5 +574,113 @@ describe('Cambio de partido, de usuario y desmontaje', () => {
     await waitFor(() => expect(errores).not.toHaveBeenCalled());
 
     errores.mockRestore();
+  });
+});
+
+describe('Aviso de guardado confirmado (WAT-215)', () => {
+  it('avisa una sola vez por cada guardado que el servidor confirma, y recién entonces', async () => {
+    getRatingMock.mockResolvedValue(null);
+    const pedido = deferred<RatingValue>();
+    saveRatingMock.mockReturnValue(pedido.promise);
+    const onSaved = vi.fn();
+
+    const { user } = renderRating({ onSaved });
+    await user.click(await nota(4));
+
+    expect(onSaved).not.toHaveBeenCalled();
+
+    await act(async () => pedido.resolve(4));
+
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it('avisa también al editar una nota existente: cada guardado confirmado cuenta', async () => {
+    getRatingMock.mockResolvedValue(2);
+    saveRatingMock.mockResolvedValueOnce(5);
+    saveRatingMock.mockResolvedValueOnce(3);
+    const onSaved = vi.fn();
+
+    const { user } = renderRating({ onSaved });
+    await user.click(await nota(5));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    await user.click(await nota(3));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(2));
+  });
+
+  it('leer la nota no avisa', async () => {
+    getRatingMock.mockResolvedValue(4);
+    const onSaved = vi.fn();
+
+    renderRating({ onSaved });
+    await nota(4);
+
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it('un guardado que falla no avisa', async () => {
+    getRatingMock.mockResolvedValue(3);
+    saveRatingMock.mockRejectedValue(apiError('server'));
+    const onSaved = vi.fn();
+
+    const { user } = renderRating({ onSaved });
+    await user.click(await nota(5));
+    await screen.findByRole('alert');
+
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it('elegir la nota que ya tiene no guarda y por lo tanto no avisa', async () => {
+    getRatingMock.mockResolvedValue(3);
+    const onSaved = vi.fn();
+
+    const { user } = renderRating({ onSaved });
+    await user.click(await nota(3));
+
+    expect(saveRatingMock).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it('un guardado confirmado después de desmontar no avisa', async () => {
+    getRatingMock.mockResolvedValue(null);
+    const guardado = deferred<RatingValue>();
+    saveRatingMock.mockReturnValue(guardado.promise);
+    const onSaved = vi.fn();
+
+    const { user, ...view } = renderRating({ onSaved });
+    await user.click(await nota(5));
+
+    view.unmount();
+    await act(async () => guardado.resolve(5));
+
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it('avisa con la última función recibida, sin volver a leer ni a guardar', async () => {
+    getRatingMock.mockResolvedValue(null);
+    const pedido = deferred<RatingValue>();
+    saveRatingMock.mockReturnValue(pedido.promise);
+    const primera = vi.fn();
+    const segunda = vi.fn();
+
+    const { user, rerender } = renderRating({ onSaved: primera });
+    await user.click(await nota(2));
+    rerender(element({ onSaved: segunda }));
+    await act(async () => pedido.resolve(2));
+
+    expect(primera).not.toHaveBeenCalled();
+    expect(segunda).toHaveBeenCalledTimes(1);
+    expect(getRatingMock).toHaveBeenCalledTimes(1);
+    expect(saveRatingMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sin función de aviso el guardado funciona igual', async () => {
+    getRatingMock.mockResolvedValue(null);
+    saveRatingMock.mockResolvedValue(4);
+
+    const { user } = renderRating();
+    await user.click(await nota(4));
+
+    expect(await screen.findByText('Calificación guardada: 4 de 5.')).toBeInTheDocument();
   });
 });

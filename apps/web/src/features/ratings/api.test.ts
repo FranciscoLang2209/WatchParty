@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getRating, saveRating } from './api';
+import { getRating, getRatingSummary, saveRating } from './api';
 import { RatingsApiError, isCancelled, isRatingValue, type RatingValue } from './types';
 
 const API_BASE = 'https://api.watchparty.test';
@@ -244,5 +244,138 @@ describe('saveRating', () => {
     fetchMock.mockRejectedValue(abortError());
 
     expect(isCancelled(await failureOf(saveRating(MATCH_ID, 4, TOKEN)))).toBe(true);
+  });
+});
+
+describe('getRatingSummary', () => {
+  it('manda GET /matches/:matchId/rating-summary con bearer y sin cuerpo', async () => {
+    respondWith({ average: 4, count: 2 });
+
+    await getRatingSummary(MATCH_ID, TOKEN);
+
+    expect(requestUrl()).toBe(`${API_BASE}/matches/${MATCH_ID}/rating-summary`);
+    expect(requestInit().method).toBe('GET');
+    expect(new Headers(requestInit().headers).get('Authorization')).toBe(`Bearer ${TOKEN}`);
+    expect(requestInit().body).toBeUndefined();
+  });
+
+  it('codifica el id sin interpretarlo y tolera barras finales en la base', async () => {
+    envMock.mockReturnValue({ apiBaseUrl: `${API_BASE}///` });
+    respondWith({ average: null, count: 0 });
+
+    await getRatingSummary('id con/espacios', TOKEN);
+
+    expect(requestUrl()).toBe(`${API_BASE}/matches/id%20con%2Fespacios/rating-summary`);
+  });
+
+  it('pasa la señal de cancelación a fetch', async () => {
+    respondWith({ average: null, count: 0 });
+    const controller = new AbortController();
+
+    await getRatingSummary(MATCH_ID, TOKEN, controller.signal);
+
+    expect(requestInit().signal).toBe(controller.signal);
+  });
+
+  it.each([[{ average: 3.67, count: 3 }], [{ average: 1, count: 1 }], [{ average: 5, count: 12 }]])(
+    'devuelve el resumen con votos %j',
+    async (body) => {
+      respondWith(body);
+
+      expect(await getRatingSummary(MATCH_ID, TOKEN)).toEqual(body);
+    },
+  );
+
+  it('sin votos devuelve average null y count 0', async () => {
+    respondWith({ average: null, count: 0 });
+
+    expect(await getRatingSummary(MATCH_ID, TOKEN)).toEqual({ average: null, count: 0 });
+  });
+
+  it('devuelve solo average y count: descarta cualquier otro dato del cuerpo', async () => {
+    respondWith({ average: 4, count: 2, userId: 'ajeno', ratings: [5, 3] });
+
+    const resumen = await getRatingSummary(MATCH_ID, TOKEN);
+
+    expect(Object.keys(resumen).sort()).toEqual(['average', 'count']);
+  });
+
+  it.each([
+    ['sin cuerpo', null],
+    ['un texto', 'hola'],
+    ['un objeto vacío', {}],
+    ['sin la cuenta', { average: 4 }],
+    ['cuenta negativa', { average: null, count: -1 }],
+    ['cuenta decimal', { average: 4, count: 1.5 }],
+    ['cuenta como texto', { average: 4, count: '3' }],
+    ['votos sin promedio', { average: null, count: 2 }],
+    ['promedio con cero votos', { average: 3, count: 0 }],
+    ['promedio cero con cero votos', { average: 0, count: 0 }],
+    ['promedio menor a 1', { average: 0.99, count: 2 }],
+    ['promedio mayor a 5', { average: 5.01, count: 2 }],
+    ['promedio como texto', { average: '4', count: 2 }],
+  ])('un cuerpo incoherente (%s) falla como server, nunca como cero votos', async (_name, body) => {
+    respondWith(body);
+
+    const error = await failureOf(getRatingSummary(MATCH_ID, TOKEN));
+
+    expect(error).toBeInstanceOf(RatingsApiError);
+    expect(error.kind).toBe('server');
+    expect(error.message).toBe(
+      'No pudimos cargar el promedio de calificaciones. Intentá de nuevo.',
+    );
+  });
+
+  it.each([
+    ['UNAUTHORIZED', 401, 'unauthorized'],
+    ['NOT_FOUND', 404, 'not-found'],
+    ['VALIDATION_ERROR', 400, 'validation'],
+    ['INTERNAL_ERROR', 500, 'server'],
+  ] as const)('traduce el código %s (HTTP %i) a %s', async (code, status, kind) => {
+    respondWith({ error: { code, message: 'mensaje del servidor' } }, { status });
+
+    const error = await failureOf(getRatingSummary(MATCH_ID, TOKEN));
+
+    expect(error.kind).toBe(kind);
+    expect(error.message).not.toContain('mensaje del servidor');
+  });
+
+  it('si el cuerpo del error no es el esperado, cae al status HTTP', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => {
+        throw new SyntaxError('<html>');
+      },
+    } as unknown as Response);
+
+    expect((await failureOf(getRatingSummary(MATCH_ID, TOKEN))).kind).toBe('unauthorized');
+  });
+
+  it('un fallo de red es network y no resuelve nada', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    expect((await failureOf(getRatingSummary(MATCH_ID, TOKEN))).kind).toBe('network');
+  });
+
+  it('una cancelación es cancelled, no un fallo de red', async () => {
+    fetchMock.mockRejectedValue(abortError());
+
+    const error = await failureOf(getRatingSummary(MATCH_ID, TOKEN));
+
+    expect(error.kind).toBe('cancelled');
+    expect(isCancelled(error)).toBe(true);
+  });
+
+  it('una respuesta 200 con un cuerpo que no es JSON es server', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('no es JSON');
+      },
+    } as unknown as Response);
+
+    expect((await failureOf(getRatingSummary(MATCH_ID, TOKEN))).kind).toBe('server');
   });
 });

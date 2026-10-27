@@ -7,6 +7,12 @@ interface MatchRatingProps {
   matchId: string;
   accessToken: string | null;
   onSessionExpired: () => void;
+  /**
+   * Se avisa una sola vez por cada guardado que el servidor CONFIRMÓ (nunca por
+   * una lectura, un fallo ni una respuesta descartada), para que quien muestre
+   * datos derivados de la nota —como el promedio del partido— los actualice.
+   */
+  onSaved?: () => void;
 }
 
 type Lectura =
@@ -48,7 +54,7 @@ function toErrorGuardado(error: unknown): ErrorGuardado {
  * dispararía un guardado por cada una. Durante el guardado usa `aria-disabled`
  * en vez de `disabled` para no sacarle el foco a quien navega con teclado.
  */
-export function MatchRating({ matchId, accessToken, onSessionExpired }: MatchRatingProps) {
+export function MatchRating({ matchId, accessToken, onSessionExpired, onSaved }: MatchRatingProps) {
   const [lectura, setLectura] = useState<Lectura>({ status: 'loading' });
   const [intentoLectura, setIntentoLectura] = useState(0);
   const [guardando, setGuardando] = useState<RatingValue | null>(null);
@@ -58,11 +64,13 @@ export function MatchRating({ matchId, accessToken, onSessionExpired }: MatchRat
   // El token se renueva solo cada tanto: una renovación no vuelve a leer, por
   // eso la lectura y el guardado toman el último token sin depender de él.
   const token = useRef(accessToken);
+  const avisarGuardado = useRef(onSaved);
   const tituloId = useId();
 
   useEffect(() => {
     token.current = accessToken;
-  }, [accessToken]);
+    avisarGuardado.current = onSaved;
+  }, [accessToken, onSaved]);
 
   // Si la pantalla se desmonta mientras espera, la respuesta se descarta.
   useEffect(() => () => controller.current?.abort(), []);
@@ -125,6 +133,7 @@ export function MatchRating({ matchId, accessToken, onSessionExpired }: MatchRat
           setLectura({ status: 'ready', rating: confirmado });
           setGuardando(null);
           setGuardado(true);
+          avisarGuardado.current?.();
         })
         .catch((caught: unknown) => {
           if (abortController.signal.aborted || isCancelled(caught)) return;

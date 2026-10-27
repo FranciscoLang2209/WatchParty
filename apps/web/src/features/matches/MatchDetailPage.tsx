@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/card';
 import { enterRoom } from '@/features/rooms/api';
 import { RoomsApiError, isCancelled as isRoomCancelled } from '@/features/rooms/types';
 import { MatchRating } from '@/features/ratings/MatchRating';
+import { MatchRatingSummary } from '@/features/ratings/MatchRatingSummary';
 import { getWatched, setWatched } from '@/features/watched/api';
 import { WatchedApiError, isCancelled as isWatchedCancelled } from '@/features/watched/types';
 import { formatKickoff, matchStatusLabel } from './format';
@@ -250,6 +251,8 @@ interface CalificacionProps {
   vistoConfirmado: VistoConfirmado | null;
   accessToken: string | null;
   onSessionExpired: () => void;
+  /** Se avisa cuando la persona guarda o edita su nota y el servidor lo confirma. */
+  onGuardada: () => void;
 }
 
 /**
@@ -269,6 +272,7 @@ function Calificacion({
   vistoConfirmado,
   accessToken,
   onSessionExpired,
+  onGuardada,
 }: CalificacionProps) {
   if (match.status !== 'finished') return null;
   if (vistoConfirmado === null || vistoConfirmado.clave !== clave) return null;
@@ -287,6 +291,7 @@ function Calificacion({
       matchId={match.id}
       accessToken={accessToken}
       onSessionExpired={onSessionExpired}
+      onSaved={onGuardada}
     />
   );
 }
@@ -321,6 +326,9 @@ function DetallePartido({ matchId }: { matchId: string }) {
   const [entrando, setEntrando] = useState(false);
   const [errorSala, setErrorSala] = useState<ErrorSala | null>(null);
   const [vistoConfirmado, setVistoConfirmado] = useState<VistoConfirmado | null>(null);
+  // Cuenta los guardados de la nota propia que confirmó el servidor: cada uno
+  // hace que el resumen del partido se vuelva a pedir (WAT-215).
+  const [notasGuardadas, setNotasGuardadas] = useState(0);
   const salaController = useRef<AbortController | null>(null);
 
   // Al desmontar (salir o cambiar de partido) se cancela el pedido de la sala.
@@ -445,12 +453,23 @@ function DetallePartido({ matchId }: { matchId: string }) {
               }
             />
 
+            {estado.match.status === 'finished' ? (
+              <MatchRatingSummary
+                key={estado.match.id}
+                matchId={estado.match.id}
+                accessToken={accessToken}
+                onSessionExpired={() => void signOut()}
+                refreshKey={notasGuardadas}
+              />
+            ) : null}
+
             <Calificacion
               match={estado.match}
               clave={`${estado.match.id}:${userId}`}
               vistoConfirmado={vistoConfirmado}
               accessToken={accessToken}
               onSessionExpired={() => void signOut()}
+              onGuardada={() => setNotasGuardadas((valor) => valor + 1)}
             />
           </>
         ) : null}
