@@ -51,13 +51,25 @@ function esVisto(url: RequestInfo | URL): boolean {
   return String(url).endsWith('/watched');
 }
 
+/** El resumen de calificaciones (WAT-215) también corre aparte del detalle. */
+function esResumen(url: RequestInfo | URL): boolean {
+  return String(url).endsWith('/rating-summary');
+}
+
 /**
  * Cada llamada devuelve una `Response` nueva: el cuerpo se consume una sola vez.
- * La lectura de «visto» confirma que no hay marca, salvo que la prueba la redefina.
+ * La lectura de «visto» confirma que no hay marca y el resumen que no hay votos,
+ * salvo que la prueba lo redefina.
  */
 function responderCon(body: unknown, status = 200) {
   fetchSpy.mockImplementation((url: RequestInfo | URL) =>
-    Promise.resolve(esVisto(url) ? jsonResponse({ watched: false }) : jsonResponse(body, status)),
+    Promise.resolve(
+      esVisto(url)
+        ? jsonResponse({ watched: false })
+        : esResumen(url)
+          ? jsonResponse({ average: null, count: 0 })
+          : jsonResponse(body, status),
+    ),
   );
 }
 
@@ -79,9 +91,11 @@ async function detalle() {
   return within(await screen.findByRole('main'));
 }
 
-/** Pedidos del detalle y la sala, sin las lecturas de «visto». */
+/** Pedidos del detalle y la sala, sin las lecturas de «visto» ni del resumen. */
 function llamadasSinVisto(): [string, RequestInit][] {
-  return (fetchSpy.mock.calls as [string, RequestInit][]).filter(([url]) => !esVisto(url));
+  return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
+    ([url]) => !esVisto(url) && !esResumen(url),
+  );
 }
 
 function ultimaUrl(): string {
@@ -1032,14 +1046,19 @@ describe('Calificación del partido (WAT-213)', () => {
   const URL_PARTIDO = `${API_BASE}/matches/match-001`;
   const URL_VISTO = `${URL_PARTIDO}/watched`;
   const URL_NOTA = `${URL_PARTIDO}/rating`;
+  const URL_RESUMEN = `${URL_PARTIDO}/rating-summary`;
 
   interface OpcionesServidor {
     status?: string;
     visto?: boolean;
     nota?: number | null;
+    /** Notas de OTRAS personas: con la propia forman el resumen que calcula el servidor. */
+    otros?: number[];
     /** Reemplaza la lectura del visto (por ejemplo, para dejarla pendiente o fallar). */
     lecturaVisto?: (init?: RequestInit) => Promise<Response>;
     lecturaNota?: (init?: RequestInit) => Promise<Response>;
+    /** Recibe el número de pedido (1, 2…) para poder fallar sólo el segundo. */
+    lecturaResumen?: (pedido: number, init?: RequestInit) => Promise<Response>;
     guardadoNota?: (rating: number, init?: RequestInit) => Promise<Response>;
   }
 
@@ -1052,12 +1071,15 @@ describe('Calificación del partido (WAT-213)', () => {
     status = 'finished',
     visto: vistoInicial = true,
     nota: notaInicial = null,
+    otros = [],
     lecturaVisto,
     lecturaNota,
+    lecturaResumen,
     guardadoNota,
   }: OpcionesServidor = {}) {
     let visto = vistoInicial;
     let nota = notaInicial;
+    let lecturasResumen = 0;
 
     fetchSpy.mockImplementation((url: RequestInfo | URL, init?: RequestInit) => {
       const destino = String(url);
@@ -1087,6 +1109,22 @@ describe('Calificación del partido (WAT-213)', () => {
         return Promise.resolve(jsonResponse({ rating: nota }));
       }
 
+      if (destino === URL_RESUMEN) {
+        lecturasResumen += 1;
+        if (lecturaResumen) return lecturaResumen(lecturasResumen, init);
+
+        // Como la base: cuenta y promedia a todas las personas, la propia incluida.
+        const votos = nota === null ? otros : [...otros, nota];
+        const promedio = votos.reduce((suma, valor) => suma + valor, 0) / votos.length;
+
+        return Promise.resolve(
+          jsonResponse({
+            average: votos.length === 0 ? null : Math.round(promedio * 100) / 100,
+            count: votos.length,
+          }),
+        );
+      }
+
       return Promise.resolve(jsonResponse({ error: { code: 'NOT_FOUND', message: 'x' } }, 404));
     });
   }
@@ -1094,6 +1132,12 @@ describe('Calificación del partido (WAT-213)', () => {
   function pedidosNota(): [string, RequestInit][] {
     return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
       ([url]) => String(url) === URL_NOTA,
+    );
+  }
+
+  function pedidosResumen(): [string, RequestInit][] {
+    return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
+      ([url]) => String(url) === URL_RESUMEN,
     );
   }
 
@@ -1507,6 +1551,236 @@ describe('Calificación del partido (WAT-213)', () => {
         await m.findByText('Marcá el partido como visto para poder calificarlo.'),
       ).toBeInTheDocument();
       expect(m.queryByRole('button', { name: /de 5$/ })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('resumen de la comunidad (WAT-215)', () => {
+    const resumen = async (m: Awaited<ReturnType<typeof detalle>>) =>
+      within(await m.findByRole('region', { name: 'Calificación de la comunidad' }));
+
+    it('finalizado: lee el resumen con GET y bearer y muestra el promedio y la cantidad', async () => {
+      servidor({ otros: [3, 4, 4, 5] });
+
+      const m = await abrirDetalle();
+      const r = await resumen(m);
+
+      expect(await r.findByText('4,0')).toBeInTheDocument();
+      expect(r.getByText('de 5 (4 votos)')).toBeInTheDocument();
+      const [url, init] = pedidosResumen()[0]!;
+      expect(url).toBe(URL_RESUMEN);
+      expect(init.method).toBe('GET');
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-123');
+      expect(pedidosResumen()).toHaveLength(1);
+    });
+
+    it('un único voto va en singular', async () => {
+      servidor({ otros: [5] });
+
+      const r = await resumen(await abrirDetalle());
+
+      expect(await r.findByText('5,0')).toBeInTheDocument();
+      expect(r.getByText('de 5 (1 voto)')).toBeInTheDocument();
+    });
+
+    it('sin votos muestra un estado explícito, no «0 votos» ni un promedio', async () => {
+      servidor({ otros: [], nota: null });
+
+      const r = await resumen(await abrirDetalle());
+
+      expect(
+        await r.findByText('Todavía no hay calificaciones para este partido.'),
+      ).toBeInTheDocument();
+      expect(r.queryByText(/voto/)).not.toBeInTheDocument();
+      expect(r.queryByText(/de 5/)).not.toBeInTheDocument();
+    });
+
+    it.each(['scheduled', 'live', 'postponed', 'cancelled'])(
+      'con el partido en estado %s no hay resumen ni se pide',
+      async (status) => {
+        servidor({ status, otros: [4] });
+
+        const m = await abrirDetalle();
+        await m.findByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' });
+
+        expect(
+          m.queryByRole('region', { name: 'Calificación de la comunidad' }),
+        ).not.toBeInTheDocument();
+        expect(pedidosResumen()).toHaveLength(0);
+      },
+    );
+
+    it('se muestra aunque la persona no haya marcado el partido como visto ni lo haya calificado', async () => {
+      servidor({ visto: false, nota: null, otros: [2, 3] });
+
+      const m = await abrirDetalle();
+      const r = await resumen(m);
+
+      expect(await r.findByText('2,5')).toBeInTheDocument();
+      expect(m.queryByRole('button', { name: /de 5$/ })).not.toBeInTheDocument();
+    });
+
+    it('mientras lee anuncia la carga sin ofrecer acciones ni mostrar un cero', async () => {
+      servidor({ lecturaResumen: () => new Promise<Response>(() => {}) });
+
+      const m = await abrirDetalle();
+      const r = await resumen(m);
+
+      expect(await r.findByRole('status')).toHaveTextContent('Consultando las calificaciones…');
+      expect(r.queryByText(/todavía no hay calificaciones/i)).not.toBeInTheDocument();
+      expect(r.queryByText(/voto/)).not.toBeInTheDocument();
+    });
+
+    it('un error del servidor no se muestra como cero votos y no tapa el resto del detalle', async () => {
+      servidor({
+        nota: 3,
+        lecturaResumen: () =>
+          Promise.resolve(jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)),
+      });
+
+      const m = await abrirDetalle();
+      const r = await resumen(m);
+
+      expect(await r.findByRole('alert')).toHaveTextContent(
+        'No pudimos cargar el promedio de calificaciones. Intentá de nuevo.',
+      );
+      expect(r.queryByText(/todavía no hay calificaciones/i)).not.toBeInTheDocument();
+      expect(r.queryByText(/voto/)).not.toBeInTheDocument();
+      expect(await m.findByRole('button', { name: '3 de 5' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      expect(
+        m.getByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' }),
+      ).toBeInTheDocument();
+    });
+
+    it('«Reintentar» vuelve a pedir el resumen y lo muestra', async () => {
+      servidor({
+        otros: [4, 5],
+        lecturaResumen: (pedido) =>
+          pedido === 1
+            ? Promise.resolve(
+                jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500),
+              )
+            : Promise.resolve(jsonResponse({ average: 4.5, count: 2 })),
+      });
+      const user = userEvent.setup();
+
+      const r = await resumen(await abrirDetalle());
+      await user.click(await r.findByRole('button', { name: 'Reintentar' }));
+
+      expect(await r.findByText('4,5')).toBeInTheDocument();
+      expect(r.queryByRole('alert')).not.toBeInTheDocument();
+      expect(pedidosResumen()).toHaveLength(2);
+    });
+
+    it('un 401 ofrece reingresar y cierra la sesión por el flujo de Auth', async () => {
+      servidor({
+        lecturaResumen: () =>
+          Promise.resolve(jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401)),
+      });
+      const user = userEvent.setup();
+
+      const r = await resumen(await abrirDetalle());
+      await user.click(await r.findByRole('button', { name: 'Iniciar sesión nuevamente' }));
+
+      expect(authMock.signOut).toHaveBeenCalledTimes(1);
+    });
+
+    it('al guardar la propia nota el resumen se vuelve a pedir y refleja el voto nuevo', async () => {
+      servidor({ nota: null, otros: [5, 5] });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      const r = await resumen(m);
+      expect(await r.findByText('5,0')).toBeInTheDocument();
+      expect(r.getByText('de 5 (2 votos)')).toBeInTheDocument();
+
+      await user.click(await m.findByRole('button', { name: '1 de 5' }));
+
+      expect(await r.findByText('3,67')).toBeInTheDocument();
+      expect(r.getByText('de 5 (3 votos)')).toBeInTheDocument();
+      expect(pedidosResumen()).toHaveLength(2);
+    });
+
+    it('al editar la propia nota cambia el promedio pero no suma otro voto', async () => {
+      servidor({ nota: 1, otros: [5, 5] });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      const r = await resumen(m);
+      expect(await r.findByText('3,67')).toBeInTheDocument();
+      expect(r.getByText('de 5 (3 votos)')).toBeInTheDocument();
+
+      await user.click(await m.findByRole('button', { name: '5 de 5' }));
+
+      expect(await r.findByText('5,0')).toBeInTheDocument();
+      expect(r.getByText('de 5 (3 votos)')).toBeInTheDocument();
+      expect(pedidosResumen()).toHaveLength(2);
+    });
+
+    it('un guardado que falla no vuelve a pedir el resumen', async () => {
+      servidor({
+        nota: 2,
+        otros: [4],
+        guardadoNota: () =>
+          Promise.resolve(jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)),
+      });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      const r = await resumen(m);
+      await r.findByText('3,0');
+
+      await user.click(await m.findByRole('button', { name: '5 de 5' }));
+      await m.findAllByRole('alert');
+
+      expect(pedidosResumen()).toHaveLength(1);
+      expect(r.getByText('3,0')).toBeInTheDocument();
+    });
+
+    it('si el resumen falla tras guardar avisa el error en vez de dejar el valor viejo como vigente', async () => {
+      servidor({
+        nota: null,
+        otros: [5],
+        lecturaResumen: (pedido) =>
+          pedido === 1
+            ? Promise.resolve(jsonResponse({ average: 5, count: 1 }))
+            : Promise.resolve(
+                jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500),
+              ),
+      });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      const r = await resumen(m);
+      await r.findByText('5,0');
+
+      await user.click(await m.findByRole('button', { name: '2 de 5' }));
+
+      expect(await r.findByRole('alert')).toBeInTheDocument();
+      expect(r.queryByText('5,0')).not.toBeInTheDocument();
+      expect(r.queryByText(/todavía no hay calificaciones/i)).not.toBeInTheDocument();
+      // La nota propia ya se guardó: el fallo del resumen no la desconfirma.
+      expect(await m.findByRole('button', { name: '2 de 5' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    });
+
+    it('queda antes de la calificación propia y con su propio título de nivel 2', async () => {
+      servidor({ otros: [4] });
+
+      const m = await abrirDetalle();
+      const comunidad = await m.findByRole('heading', {
+        level: 2,
+        name: 'Calificación de la comunidad',
+      });
+      const propia = await m.findByRole('heading', { level: 2, name: 'Calificá el partido' });
+
+      expect(
+        comunidad.compareDocumentPosition(propia) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
     });
   });
 

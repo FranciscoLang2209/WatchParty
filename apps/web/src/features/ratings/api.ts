@@ -1,5 +1,11 @@
 import { readWebEnv } from '../../lib/env';
-import { RatingsApiError, isRatingValue, type RatingValue, type RatingsErrorKind } from './types';
+import {
+  RatingsApiError,
+  isRatingValue,
+  type RatingsErrorKind,
+  type RatingSummary,
+  type RatingValue,
+} from './types';
 
 type Messages = Record<RatingsErrorKind, string>;
 
@@ -24,6 +30,13 @@ const READ_MESSAGES: Messages = {
   cancelled: 'Consulta cancelada.',
 };
 
+/** El resumen es de lectura: sólo cambia lo que no se pudo cargar. */
+const SUMMARY_MESSAGES: Messages = {
+  ...SAVE_MESSAGES,
+  server: 'No pudimos cargar el promedio de calificaciones. Intentá de nuevo.',
+  cancelled: 'Consulta cancelada.',
+};
+
 const KIND_BY_API_CODE: Record<string, RatingsErrorKind> = {
   UNAUTHORIZED: 'unauthorized',
   NOT_FOUND: 'not-found',
@@ -40,6 +53,10 @@ function apiUrl(path: string): string {
 function ratingUrl(matchId: string): string {
   // El id es opaco: se codifica sin interpretarlo.
   return apiUrl(`/matches/${encodeURIComponent(matchId)}/rating`);
+}
+
+function ratingSummaryUrl(matchId: string): string {
+  return apiUrl(`/matches/${encodeURIComponent(matchId)}/rating-summary`);
 }
 
 function fail(kind: RatingsErrorKind, messages: Messages): RatingsApiError {
@@ -94,6 +111,36 @@ function toRating(body: unknown, messages: Messages): RatingValue | null {
   if (!isRatingValue(rating)) throw fail('server', messages);
 
   return rating;
+}
+
+/**
+ * Valida el cuerpo `{ average, count }` con las mismas reglas que la API:
+ * `count` es un entero >= 0; sin votos el promedio es `null`; con votos es un
+ * número de 1 a 5. Cualquier otra forma es un fallo: un resumen incoherente
+ * nunca se muestra como dato (ni como «cero votos»). Se arma un objeto nuevo
+ * con los dos campos, así que nada más que venga en el cuerpo llega a la
+ * pantalla.
+ */
+function toRatingSummary(body: unknown, messages: Messages): RatingSummary {
+  if (typeof body !== 'object' || body === null) throw fail('server', messages);
+
+  const { average, count } = body as Record<string, unknown>;
+
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
+    throw fail('server', messages);
+  }
+
+  if (count === 0) {
+    if (average !== null) throw fail('server', messages);
+
+    return { average: null, count: 0 };
+  }
+
+  if (typeof average !== 'number' || !Number.isFinite(average) || average < 1 || average > 5) {
+    throw fail('server', messages);
+  }
+
+  return { average, count };
 }
 
 /**
@@ -180,4 +227,20 @@ export async function saveRating(
   if (confirmed === null) throw fail('server', SAVE_MESSAGES);
 
   return confirmed;
+}
+
+/**
+ * Lee el promedio y la cantidad de votos del partido (WAT-214). Sin votos
+ * resuelve `{ average: null, count: 0 }` SÓLO si el servidor lo confirmó: un
+ * fallo de lectura siempre se lanza, nunca se resuelve como «cero votos».
+ */
+export async function getRatingSummary(
+  matchId: string,
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<RatingSummary> {
+  return toRatingSummary(
+    await request(ratingSummaryUrl(matchId), 'GET', accessToken, signal, SUMMARY_MESSAGES),
+    SUMMARY_MESSAGES,
+  );
 }

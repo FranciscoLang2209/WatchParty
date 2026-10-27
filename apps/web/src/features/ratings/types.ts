@@ -18,6 +18,20 @@ export function isRatingValue(value: unknown): value is RatingValue {
 }
 
 /**
+ * Espejo del resumen público de un partido (`GET /matches/:matchId/rating-summary`,
+ * WAT-214): promedio y cantidad de votos de TODAS las personas, sin
+ * identidades ni notas individuales.
+ *
+ * `average` es `null` si y sólo si `count` es 0: sin votos no hay promedio, y un
+ * promedio nunca es 0 porque las notas van de 1 a 5. Así «sin calificaciones»
+ * no se puede confundir con «promedio cero».
+ */
+export interface RatingSummary {
+  average: number | null;
+  count: number;
+}
+
+/**
  * Motivo por el que falló una operación.
  *
  * `cancelled` nunca se le muestra a la persona, `unauthorized` reingresa por el
