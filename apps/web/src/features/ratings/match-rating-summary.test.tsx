@@ -215,7 +215,7 @@ describe('Actualización tras guardar la nota propia', () => {
     expect(getRatingSummaryMock).toHaveBeenCalledTimes(2);
   });
 
-  it('mientras actualiza conserva lo último que confirmó el servidor', async () => {
+  it('mientras actualiza muestra la carga y no el valor anterior; llega el nuevo y lo reemplaza', async () => {
     getRatingSummaryMock.mockResolvedValueOnce(conVotos(5, 2));
     const nuevo = deferred<RatingSummary>();
     getRatingSummaryMock.mockReturnValueOnce(nuevo.promise);
@@ -225,12 +225,51 @@ describe('Actualización tras guardar la nota propia', () => {
 
     rerender(element({ refreshKey: 1 }));
 
-    expect(screen.getByText('5,0')).toBeInTheDocument();
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveTextContent('Consultando las calificaciones…');
+    expect(screen.queryByText('5,0')).not.toBeInTheDocument();
+    expect(screen.queryByText(/voto/)).not.toBeInTheDocument();
 
     await act(async () => nuevo.resolve(conVotos(4, 3)));
 
     expect(await screen.findByText('4,0')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('primer voto con la consulta pendiente: «sin calificaciones» deja de verse y se indica la carga', async () => {
+    getRatingSummaryMock.mockResolvedValueOnce(SIN_VOTOS);
+    const nuevo = deferred<RatingSummary>();
+    getRatingSummaryMock.mockReturnValueOnce(nuevo.promise);
+
+    const { rerender } = renderSummary({ refreshKey: 0 });
+    await screen.findByText('Todavía no hay calificaciones para este partido.');
+
+    rerender(element({ refreshKey: 1 }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Consultando las calificaciones…');
+    expect(screen.queryByText(/todavía no hay calificaciones/i)).not.toBeInTheDocument();
+
+    await act(async () => nuevo.resolve(conVotos(1, 1)));
+
+    expect(await screen.findByText('1,0')).toBeInTheDocument();
+    expect(screen.getByText('de 5 (1 voto)')).toBeInTheDocument();
+  });
+
+  it('un error anterior tampoco queda en pantalla mientras se vuelve a pedir', async () => {
+    getRatingSummaryMock.mockRejectedValueOnce(apiError('server'));
+    const nuevo = deferred<RatingSummary>();
+    getRatingSummaryMock.mockReturnValueOnce(nuevo.promise);
+
+    const { rerender } = renderSummary({ refreshKey: 0 });
+    await screen.findByRole('alert');
+
+    rerender(element({ refreshKey: 1 }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Consultando las calificaciones…');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    await act(async () => nuevo.resolve(conVotos(3, 1)));
+
+    expect(await screen.findByText('3,0')).toBeInTheDocument();
   });
 
   it('si la actualización falla avisa el error: ni cero votos ni el valor viejo como vigente', async () => {

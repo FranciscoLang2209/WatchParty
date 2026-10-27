@@ -1739,6 +1739,37 @@ describe('Calificación del partido (WAT-213)', () => {
       expect(r.getByText('3,0')).toBeInTheDocument();
     });
 
+    it('primer voto con la consulta del resumen pendiente: no conviven «guardada» y «sin calificaciones»', async () => {
+      let resolverSegundo!: (respuesta: Response) => void;
+      servidor({
+        nota: null,
+        otros: [],
+        lecturaResumen: (pedido) =>
+          pedido === 1
+            ? Promise.resolve(jsonResponse({ average: null, count: 0 }))
+            : new Promise<Response>((resolver) => {
+                resolverSegundo = resolver;
+              }),
+      });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      const r = await resumen(m);
+      await r.findByText('Todavía no hay calificaciones para este partido.');
+
+      await user.click(await m.findByRole('button', { name: '1 de 5' }));
+
+      expect(await m.findByText('Calificación guardada: 1 de 5.')).toBeInTheDocument();
+      expect(await r.findByRole('status')).toHaveTextContent('Consultando las calificaciones…');
+      expect(r.queryByText(/todavía no hay calificaciones/i)).not.toBeInTheDocument();
+
+      await act(async () => resolverSegundo(jsonResponse({ average: 1, count: 1 })));
+
+      expect(await r.findByText('1,0')).toBeInTheDocument();
+      expect(r.getByText('de 5 (1 voto)')).toBeInTheDocument();
+      expect(r.queryByRole('status')).not.toBeInTheDocument();
+    });
+
     it('si el resumen falla tras guardar avisa el error en vez de dejar el valor viejo como vigente', async () => {
       servidor({
         nota: null,

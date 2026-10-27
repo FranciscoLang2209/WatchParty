@@ -16,10 +16,15 @@ interface MatchRatingSummaryProps {
   refreshKey: number;
 }
 
+/**
+ * Lo último que respondió el servidor y para qué `refreshKey` lo pidió. Un
+ * resultado de un `refreshKey` anterior ya no está vigente: mientras llega el
+ * nuevo se muestra la carga, nunca el valor viejo.
+ */
 type Lectura =
   | { status: 'loading' }
-  | { status: 'ready'; summary: RatingSummary }
-  | { status: 'error'; expired: boolean };
+  | { status: 'ready'; summary: RatingSummary; refreshKey: number }
+  | { status: 'error'; expired: boolean; refreshKey: number };
 
 const MENSAJE_LECTURA = 'No pudimos cargar el promedio de calificaciones. Intentá de nuevo.';
 const MENSAJE_SESION_VENCIDA = 'La sesión venció. Iniciá sesión nuevamente.';
@@ -31,10 +36,12 @@ const MENSAJE_SESION_VENCIDA = 'La sesión venció. Iniciá sesión nuevamente.'
  * calificaciones, o error. Un fallo NUNCA se muestra como «cero votos» ni como
  * un promedio viejo: o se ve lo que confirmó el servidor, o se avisa el error.
  *
- * Se monta con `key` por partido. Al cambiar `refreshKey` se vuelve a pedir
- * conservando lo último confirmado hasta que llega la respuesta; una respuesta
- * que llegue tarde (de un pedido reemplazado o de una pantalla desmontada) se
- * descarta.
+ * Se monta con `key` por partido. Al cambiar `refreshKey` (la persona guardó su
+ * nota) el resumen anterior deja de ser vigente: mientras se vuelve a pedir se
+ * muestra la carga, y recién llega el valor nuevo o el error. Así nunca
+ * conviven en pantalla una nota recién guardada y un resumen que no la incluye.
+ * Una respuesta que llegue tarde (de un pedido reemplazado o de una pantalla
+ * desmontada) se descarta.
  */
 export function MatchRatingSummary({
   matchId,
@@ -60,7 +67,7 @@ export function MatchRatingSummary({
 
     getRatingSummary(matchId, accessTokenActual, controller.signal)
       .then((summary) => {
-        if (!controller.signal.aborted) setLectura({ status: 'ready', summary });
+        if (!controller.signal.aborted) setLectura({ status: 'ready', summary, refreshKey });
       })
       .catch((caught: unknown) => {
         if (controller.signal.aborted || isCancelled(caught)) return;
@@ -68,11 +75,18 @@ export function MatchRatingSummary({
         setLectura({
           status: 'error',
           expired: caught instanceof RatingsApiError && caught.kind === 'unauthorized',
+          refreshKey,
         });
       });
 
     return () => controller.abort();
   }, [matchId, refreshKey, intento]);
+
+  // Un resultado de un `refreshKey` anterior es viejo: se trata como carga.
+  const visible: Lectura =
+    lectura.status !== 'loading' && lectura.refreshKey !== refreshKey
+      ? { status: 'loading' }
+      : lectura;
 
   const reintentar = useCallback(() => {
     setLectura({ status: 'loading' });
@@ -85,19 +99,19 @@ export function MatchRatingSummary({
         Calificación de la comunidad
       </h2>
 
-      {lectura.status === 'loading' ? (
+      {visible.status === 'loading' ? (
         <p role="status" className="text-sm text-muted-foreground">
           Consultando las calificaciones…
         </p>
       ) : null}
 
-      {lectura.status === 'error' ? (
+      {visible.status === 'error' ? (
         <div role="alert" className="flex flex-col items-start gap-3">
           <p className="text-sm text-destructive">
-            {lectura.expired ? MENSAJE_SESION_VENCIDA : MENSAJE_LECTURA}
+            {visible.expired ? MENSAJE_SESION_VENCIDA : MENSAJE_LECTURA}
           </p>
 
-          {lectura.expired ? (
+          {visible.expired ? (
             <Button type="button" onClick={onSessionExpired}>
               Iniciar sesión nuevamente
             </Button>
@@ -109,17 +123,17 @@ export function MatchRatingSummary({
         </div>
       ) : null}
 
-      {lectura.status === 'ready' && lectura.summary.average === null ? (
+      {visible.status === 'ready' && visible.summary.average === null ? (
         <p className="text-sm text-muted-foreground">
           Todavía no hay calificaciones para este partido.
         </p>
       ) : null}
 
-      {lectura.status === 'ready' && lectura.summary.average !== null ? (
+      {visible.status === 'ready' && visible.summary.average !== null ? (
         <p className="flex flex-wrap items-baseline gap-x-2">
-          <span className="text-2xl font-semibold">{formatAverage(lectura.summary.average)}</span>
+          <span className="text-2xl font-semibold">{formatAverage(visible.summary.average)}</span>
           <span className="text-sm text-muted-foreground">
-            de 5 ({formatVotes(lectura.summary.count)})
+            de 5 ({formatVotes(visible.summary.count)})
           </span>
         </p>
       ) : null}
