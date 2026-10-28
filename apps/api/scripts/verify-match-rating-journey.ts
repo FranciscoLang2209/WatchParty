@@ -205,19 +205,38 @@ async function createFixture(admin: SupabaseClient): Promise<Fixture> {
   };
 }
 
-/** Borra lo creado. Las notas y los vistos van primero: sus FK no cascadean. */
+/**
+ * Borra lo creado. Las notas y los vistos van primero: sus FK no cascadean.
+ * Supabase devuelve los fallos en `error` en vez de lanzar, así que cada paso
+ * se comprueba: si uno falla igual se intentan los siguientes y se devuelve
+ * la lista de lo que quedó pendiente (vacía si se limpió todo).
+ */
 async function removeFixture(
   admin: SupabaseClient,
   fixture: Fixture,
   sessions: Session[],
-): Promise<void> {
-  await admin.from('match_ratings').delete().in('match_id', fixture.matchIds);
-  await admin.from('watched_matches').delete().in('match_id', fixture.matchIds);
-  await admin.from('matches').delete().in('id', fixture.matchIds);
-  await admin.from('teams').delete().in('id', fixture.teamIds);
+): Promise<string[]> {
+  const pending: string[] = [];
+  const step = async (
+    label: string,
+    operation: PromiseLike<{ error: { message: string } | null }>,
+  ): Promise<void> => {
+    try {
+      const { error } = await operation;
+      if (error) pending.push(`${label}: ${error.message}`);
+    } catch (error) {
+      pending.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  await step('notas', admin.from('match_ratings').delete().in('match_id', fixture.matchIds));
+  await step('vistos', admin.from('watched_matches').delete().in('match_id', fixture.matchIds));
+  await step('partidos', admin.from('matches').delete().in('id', fixture.matchIds));
+  await step('equipos', admin.from('teams').delete().in('id', fixture.teamIds));
   for (const session of sessions) {
-    await admin.auth.admin.deleteUser(session.userId);
+    await step('usuario temporal', admin.auth.admin.deleteUser(session.userId));
   }
+  return pending;
 }
 
 async function dbRatings(
@@ -400,7 +419,18 @@ async function runChecks(
   for (const { status, id } of fixture.ineligible) {
     // Se inserta el visto con service_role para aislar la regla de la nota
     // de cualquier regla de la ruta de "marcar como visto".
-    await admin.from('watched_matches').upsert({ user_id: a.userId, match_id: id });
+    const { error: watchedError } = await admin
+      .from('watched_matches')
+      .upsert({ user_id: a.userId, match_id: id });
+    if (watchedError) {
+      throw new Error(`No se pudo marcar como visto el partido ${status}: ${watchedError.message}`);
+    }
+    // Precondición: si la API ya lo ve como visto, el 409 de abajo solo puede
+    // venir de la regla de estado y no de la de "no visto".
+    const watchedRead = await api('GET', `/matches/${id}/watched`, { token: a.token });
+    if (watchedRead.status !== 200 || !sameJson(watchedRead.body, { watched: true })) {
+      throw new Error(`El partido ${status} no figura como visto para A (${watchedRead.status}).`);
+    }
     const response = await putRating(a.token, id, { rating: 3 });
     check(
       `Partido ${status} (visto): no se puede calificar, 409`,
@@ -544,7 +574,11 @@ async function main(): Promise<void> {
     sessions.push(b);
     process.exitCode = (await runChecks(admin, fixture, a, b)) ? 0 : 1;
   } finally {
-    await removeFixture(admin, fixture, sessions);
+    const pending = await removeFixture(admin, fixture, sessions);
+    if (pending.length > 0) {
+      console.error(`\nLa limpieza dejó datos de prueba sin borrar:\n- ${pending.join('\n- ')}`);
+      process.exitCode = 1;
+    }
   }
 }
 
