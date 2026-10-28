@@ -107,7 +107,7 @@ export function RoomsDirectoryPage() {
           <ul className="grid w-full list-none grid-cols-1 gap-4 sm:grid-cols-2">
             {visibles.map((match) => (
               <li key={match.id} className="w-full min-w-0">
-                <MatchCard match={match} />
+                <MatchCard match={match} variant="directory" />
               </li>
             ))}
           </ul>

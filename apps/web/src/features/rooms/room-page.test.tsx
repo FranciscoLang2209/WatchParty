@@ -663,6 +663,16 @@ describe('Sala: encabezado del partido', () => {
     );
   });
 
+  it('el encabezado de la sala no usa la presentación de las tarjetas del directorio', async () => {
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    const enlace = await p.findByRole('link', { name: `Ver partido: ${TITULO_PARTIDO}` });
+
+    expect(enlace).not.toHaveClass('h-11');
+    expect(enlace.querySelector('svg')).toBeNull();
+  });
+
   it('en móvil los nombres de los equipos cortan línea en vez de desbordar', async () => {
     renderAt('/rooms/room-123');
 
