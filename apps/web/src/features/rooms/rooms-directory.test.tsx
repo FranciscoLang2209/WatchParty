@@ -317,3 +317,186 @@ describe('Directorio de salas — tarjetas', () => {
     expect(m.queryByRole('list')).not.toBeInTheDocument();
   });
 });
+
+describe('Directorio de salas — carga, vacío y error', () => {
+  const respuesta401 = () =>
+    jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'No autenticado.' } }, 401);
+
+  it('la carga se presenta como un panel con título y mensaje, y marca la pantalla como ocupada', async () => {
+    conSesion();
+    fetchSpy.mockReturnValue(new Promise(() => {}));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    const estado = await m.findByRole('status');
+
+    expect(
+      within(estado).getByRole('heading', { level: 2, name: 'Un momento' }),
+    ).toBeInTheDocument();
+    expect(estado).toHaveTextContent('Cargando el directorio…');
+    expect(estado.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByRole('main').querySelector('section')).toHaveAttribute('aria-busy', 'true');
+  });
+
+  it('al terminar de cargar la pantalla deja de estar ocupada', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    await m.findByText(/River Plate/);
+
+    expect(screen.getByRole('main').querySelector('section')).toHaveAttribute('aria-busy', 'false');
+    expect(m.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('la lista vacía es un panel informativo: sin alerta, sin estado y sin botones', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+
+    expect(
+      await m.findByRole('heading', { level: 2, name: 'No hay partidos por ahora' }),
+    ).toBeInTheDocument();
+    expect(m.getByText(/Todavía no hay partidos ni salas disponibles/)).toBeInTheDocument();
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
+    expect(m.queryByRole('status')).not.toBeInTheDocument();
+    expect(m.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('un fallo recuperable se anuncia como alerta, con título, mensaje y Reintentar', async () => {
+    conSesion();
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    const alerta = await m.findByRole('alert');
+
+    expect(
+      within(alerta).getByRole('heading', { level: 2, name: 'Algo salió mal' }),
+    ).toBeInTheDocument();
+    expect(alerta).toHaveTextContent('No pudimos conectarnos.');
+    expect(within(alerta).getByRole('button', { name: 'Reintentar' })).toBeInTheDocument();
+    expect(
+      within(alerta).queryByRole('button', { name: /Iniciar sesión/ }),
+    ).not.toBeInTheDocument();
+    expect(alerta.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('la sesión vencida se distingue del error recuperable: otro título, otra acción y sin Reintentar', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(respuesta401());
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    const alerta = await m.findByRole('alert');
+
+    expect(
+      within(alerta).getByRole('heading', { level: 2, name: 'Necesitás ingresar de nuevo' }),
+    ).toBeInTheDocument();
+    expect(
+      within(alerta).queryByRole('heading', { name: 'Algo salió mal' }),
+    ).not.toBeInTheDocument();
+    expect(alerta).toHaveTextContent('La sesión venció. Iniciá sesión nuevamente.');
+    expect(
+      within(alerta).getByRole('button', { name: 'Iniciar sesión nuevamente' }),
+    ).toBeInTheDocument();
+    expect(m.queryByRole('button', { name: 'Reintentar' })).not.toBeInTheDocument();
+  });
+
+  it('los tres estados comparten la misma estructura: icono decorativo, título y mensaje', async () => {
+    conSesion();
+
+    async function estructura(responder: () => Promise<Response>) {
+      fetchSpy.mockImplementation(responder);
+      const vista = renderAt('/rooms');
+      const m = await directorio();
+      const titulo = await m.findByRole('heading', { level: 2 });
+      const tarjeta = titulo.parentElement as HTMLElement;
+      const forma = {
+        icono: tarjeta.querySelector('svg')?.getAttribute('aria-hidden'),
+        titulo: tarjeta.querySelector('h2') !== null,
+        mensaje: tarjeta.querySelector('p') !== null,
+        clases: tarjeta.className,
+      };
+
+      vista.unmount();
+
+      return forma;
+    }
+
+    const vacio = await estructura(async () => jsonResponse({ matches: [] }));
+    const fallo = await estructura(() => Promise.reject(new TypeError('Failed to fetch')));
+    const vencida = await estructura(async () => respuesta401());
+
+    expect(vacio).toEqual({ icono: 'true', titulo: true, mensaje: true, clases: vacio.clases });
+    expect(fallo).toEqual(vacio);
+    expect(vencida).toEqual(vacio);
+  });
+
+  it('al reintentar el foco pasa al panel de carga y, si sale bien, se muestran los partidos', async () => {
+    const user = userEvent.setup();
+    conSesion();
+    fetchSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    renderAt('/rooms');
+    const m = await directorio();
+    await m.findByRole('alert');
+
+    let resolver: (respuesta: Response) => void = () => {};
+    fetchSpy.mockReturnValue(new Promise<Response>((resolve) => (resolver = resolve)));
+    await user.click(m.getByRole('button', { name: 'Reintentar' }));
+
+    const cargando = await m.findByRole('status');
+    await waitFor(() => expect(cargando).toHaveFocus());
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
+
+    resolver(jsonResponse({ matches: [river] }));
+    expect(await m.findByText(/River Plate/)).toBeInTheDocument();
+    expect(m.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('si el reintento vuelve a fallar muestra otra vez el error con su Reintentar', async () => {
+    const user = userEvent.setup();
+    conSesion();
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    renderAt('/rooms');
+    const m = await directorio();
+    await m.findByRole('alert');
+
+    await user.click(m.getByRole('button', { name: 'Reintentar' }));
+
+    expect(await m.findByRole('button', { name: 'Reintentar' })).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('no pierde los controles de sesión existentes cuando falla la carga', async () => {
+    conSesion();
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    renderAt('/rooms');
+    await (await directorio()).findByRole('alert');
+
+    expect(screen.getByRole('button', { name: 'Cerrar sesión' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Navegación principal' })).toBeInTheDocument();
+  });
+
+  it('el icono de carga no gira con movimiento reducido', async () => {
+    conSesion();
+    fetchSpy.mockReturnValue(new Promise(() => {}));
+
+    renderAt('/rooms');
+
+    const estado = await (await directorio()).findByRole('status');
+
+    expect(estado.querySelector('svg')).toHaveClass('animate-spin', 'motion-reduce:animate-none');
+  });
+});

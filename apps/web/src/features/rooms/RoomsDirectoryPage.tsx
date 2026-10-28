@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { CalendarX, LoaderCircle, LogIn, TriangleAlert } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
 import { MatchCard } from '@/features/matches/MatchCard';
+import { DirectoryStatePanel } from './DirectoryStatePanel';
 import { listMatches } from '@/features/matches/api';
 import { MatchesApiError, isCancelled, type Match } from '@/features/matches/types';
 
@@ -39,6 +41,10 @@ export function RoomsDirectoryPage() {
 
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
+  const panelCarga = useRef<HTMLDivElement>(null);
+  // Al reintentar, el botón desaparece: el foco pasa al panel de carga para que el
+  // teclado y el lector de pantalla no queden en el vacío.
+  const reintentando = useRef(false);
 
   useEffect(() => {
     // Sin token no hay nada que pedir: el guard de rutas privadas se encarga.
@@ -63,7 +69,15 @@ export function RoomsDirectoryPage() {
     };
   }, [accessToken, intento]);
 
+  useEffect(() => {
+    if (estado.status !== 'loading' || !reintentando.current) return;
+
+    reintentando.current = false;
+    panelCarga.current?.focus();
+  }, [estado.status]);
+
   const reintentar = useCallback(() => {
+    reintentando.current = true;
     setEstado({ status: 'loading' });
     setIntento((valor) => valor + 1);
   }, []);
@@ -71,36 +85,66 @@ export function RoomsDirectoryPage() {
   const visibles = estado.status === 'ready' ? partidosVisibles(estado.matches) : [];
 
   return (
-    <section className="flex w-full flex-1 flex-col overflow-x-hidden">
+    <section
+      aria-busy={estado.status === 'loading'}
+      className="flex w-full flex-1 flex-col overflow-x-hidden"
+    >
       <div className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-6 px-4 py-6 sm:px-6">
         <h1 className="font-display text-3xl leading-tight font-semibold">Salas</h1>
 
         {estado.status === 'loading' ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            Cargando el directorio…
-          </p>
+          <DirectoryStatePanel
+            role="status"
+            icon={LoaderCircle}
+            spin
+            title="Un momento"
+            message="Cargando el directorio…"
+            panelRef={panelCarga}
+          />
         ) : null}
 
-        {estado.status === 'error' ? (
-          <div role="alert" className="flex flex-col items-start gap-3">
-            <p className="text-sm text-destructive">{estado.message}</p>
-
-            {estado.expired ? (
-              <Button type="button" onClick={() => void signOut()}>
+        {estado.status === 'error' && estado.expired ? (
+          // La sesión vencida no es un fallo recuperable: se resuelve con el flujo
+          // de Auth existente, así que no se ofrece reintentar.
+          <DirectoryStatePanel
+            role="alert"
+            icon={LogIn}
+            title="Necesitás ingresar de nuevo"
+            message={estado.message}
+            action={
+              <Button type="button" className="w-full sm:w-auto" onClick={() => void signOut()}>
                 Iniciar sesión nuevamente
               </Button>
-            ) : (
-              <Button type="button" variant="outline" onClick={reintentar}>
+            }
+          />
+        ) : null}
+
+        {estado.status === 'error' && !estado.expired ? (
+          <DirectoryStatePanel
+            role="alert"
+            tone="error"
+            icon={TriangleAlert}
+            title="Algo salió mal"
+            message={estado.message}
+            action={
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={reintentar}
+              >
                 Reintentar
               </Button>
-            )}
-          </div>
+            }
+          />
         ) : null}
 
         {estado.status === 'ready' && visibles.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Todavía no hay partidos ni salas disponibles. Volvé más tarde.
-          </p>
+          <DirectoryStatePanel
+            icon={CalendarX}
+            title="No hay partidos por ahora"
+            message="Todavía no hay partidos ni salas disponibles. Volvé más tarde."
+          />
         ) : null}
 
         {estado.status === 'ready' && visibles.length > 0 ? (
