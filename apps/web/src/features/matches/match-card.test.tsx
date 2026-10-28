@@ -34,6 +34,19 @@ describe('MatchCard', () => {
     expect(screen.getByText('Programado')).toBeInTheDocument();
   });
 
+  it('el título baja a h3 cuando la tarjeta cuelga de un título de sección', () => {
+    render(
+      <MemoryRouter>
+        <MatchCard match={partido} headingLevel="h3" />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('heading', { level: 3 })).toHaveTextContent(
+      'River Plate vs. Boca Juniors',
+    );
+    expect(screen.queryByRole('heading', { level: 2 })).not.toBeInTheDocument();
+  });
+
   it('no usa CardTitle: la tarjeta nunca aporta un h1', () => {
     renderCard();
 
