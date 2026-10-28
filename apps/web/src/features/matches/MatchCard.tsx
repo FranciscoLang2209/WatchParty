@@ -6,6 +6,8 @@ import type { Match } from './types';
 
 interface MatchCardProps {
   match: Match;
+  /** Nivel del título del partido: `h3` cuando la tarjeta cuelga de un título de sección. */
+  headingLevel?: 'h2' | 'h3';
 }
 
 /**
@@ -14,15 +16,15 @@ interface MatchCardProps {
  * No usa `CardTitle` a propósito: ese primitive renderiza un `<h1>` y la Home
  * debe conservar uno solo.
  */
-export function MatchCard({ match }: MatchCardProps) {
+export function MatchCard({ match, headingLevel: Titulo = 'h2' }: MatchCardProps) {
   const enVivo = match.status === 'live';
 
   return (
     <Card className="gap-3 p-4">
       {/* `min-w-0` y el quiebre de palabra evitan que un nombre largo desborde. */}
-      <h2 className="min-w-0 text-base leading-snug font-semibold break-words">
+      <Titulo className="min-w-0 text-base leading-snug font-semibold break-words">
         {match.homeTeam} <span className="text-muted-foreground">vs.</span> {match.awayTeam}
-      </h2>
+      </Titulo>
 
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
         <p className="min-w-0 text-sm text-muted-foreground">{formatKickoff(match.kickoffAt)}</p>
