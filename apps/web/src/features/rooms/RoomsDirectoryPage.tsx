@@ -72,8 +72,15 @@ export function RoomsDirectoryPage() {
 
   return (
     <section className="flex w-full flex-1 flex-col overflow-x-hidden">
-      <div className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-6 px-4 py-6 sm:px-6">
-        <h1 className="font-display text-3xl leading-tight font-semibold">Salas</h1>
+      <div className="mx-auto flex w-full max-w-5xl min-w-0 flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8">
+        <header className="flex min-w-0 flex-col gap-2">
+          <h1 className="font-display text-3xl leading-tight font-semibold break-words sm:text-4xl">
+            Salas
+          </h1>
+          <p className="max-w-2xl text-base text-muted-foreground">
+            Elegí un partido en vivo o próximo para entrar a su sala.
+          </p>
+        </header>
 
         {estado.status === 'loading' ? (
           <p role="status" className="text-sm text-muted-foreground">
@@ -104,7 +111,7 @@ export function RoomsDirectoryPage() {
         ) : null}
 
         {estado.status === 'ready' && visibles.length > 0 ? (
-          <ul className="grid w-full list-none grid-cols-1 gap-4 sm:grid-cols-2">
+          <ul className="grid w-full list-none grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {visibles.map((match) => (
               <li key={match.id} className="w-full min-w-0">
                 <MatchCard match={match} />
