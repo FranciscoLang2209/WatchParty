@@ -74,6 +74,7 @@ const PAGE: WatchedHistoryPage = {
         score: { home: 2, away: 1 },
       },
       watchedAt: '2026-10-10T12:00:00.123Z',
+      rating: 4,
     },
   ],
   nextCursor: { watchedAt: CURSOR_WATCHED_AT, matchId: MATCH_ID },
