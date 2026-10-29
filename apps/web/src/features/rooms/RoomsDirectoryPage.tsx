@@ -1,5 +1,5 @@
 import { CalendarX, LoaderCircle, LogIn, TriangleAlert } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
 import { MatchCard } from '@/features/matches/MatchCard';
@@ -14,11 +14,42 @@ type Estado =
 
 const MENSAJE_INESPERADO = 'No pudimos cargar el directorio. Intentá de nuevo.';
 
-/** /rooms sólo muestra partidos que todavía pueden tener sala activa. */
-const ESTADOS_VISIBLES: ReadonlySet<Match['status']> = new Set(['live', 'scheduled']);
+/**
+ * /rooms sólo muestra partidos que todavía pueden tener sala activa, repartidos en
+ * secciones por el estado que ya devuelve el catálogo. Un partido pertenece a una
+ * sola sección y, dentro de ella, conserva el orden con que llegó de la API.
+ */
+const SECCIONES: readonly { estado: Match['status']; titulo: string }[] = [
+  { estado: 'live', titulo: 'En vivo' },
+  { estado: 'scheduled', titulo: 'Próximos' },
+];
 
-function partidosVisibles(matches: Match[]): Match[] {
-  return matches.filter((match) => ESTADOS_VISIBLES.has(match.status));
+function seccionesVisibles(matches: Match[]) {
+  return SECCIONES.map(({ estado, titulo }) => ({
+    estado,
+    titulo,
+    matches: matches.filter((match) => match.status === estado),
+  })).filter((seccion) => seccion.matches.length > 0);
+}
+
+function SeccionPartidos({ titulo, matches }: { titulo: string; matches: Match[] }) {
+  const tituloId = useId();
+
+  return (
+    <section aria-labelledby={tituloId} className="flex w-full min-w-0 flex-col gap-3">
+      <h2 id={tituloId} className="font-display text-xl leading-tight font-semibold">
+        {titulo}
+      </h2>
+
+      <ul className="grid w-full list-none grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {matches.map((match) => (
+          <li key={match.id} className="w-full min-w-0">
+            <MatchCard match={match} variant="directory" headingLevel="h3" />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 function toEstadoError(error: unknown): Estado {
@@ -82,15 +113,22 @@ export function RoomsDirectoryPage() {
     setIntento((valor) => valor + 1);
   }, []);
 
-  const visibles = estado.status === 'ready' ? partidosVisibles(estado.matches) : [];
+  const secciones = estado.status === 'ready' ? seccionesVisibles(estado.matches) : [];
 
   return (
     <section
       aria-busy={estado.status === 'loading'}
       className="flex w-full flex-1 flex-col overflow-x-hidden"
     >
-      <div className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-6 px-4 py-6 sm:px-6">
-        <h1 className="font-display text-3xl leading-tight font-semibold">Salas</h1>
+      <div className="mx-auto flex w-full max-w-5xl min-w-0 flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8">
+        <header className="flex min-w-0 flex-col gap-2">
+          <h1 className="font-display text-3xl leading-tight font-semibold break-words sm:text-4xl">
+            Salas
+          </h1>
+          <p className="max-w-2xl text-base text-muted-foreground">
+            Elegí un partido en vivo o próximo para entrar a su sala.
+          </p>
+        </header>
 
         {estado.status === 'loading' ? (
           <DirectoryStatePanel
@@ -139,7 +177,7 @@ export function RoomsDirectoryPage() {
           />
         ) : null}
 
-        {estado.status === 'ready' && visibles.length === 0 ? (
+        {estado.status === 'ready' && secciones.length === 0 ? (
           <DirectoryStatePanel
             icon={CalendarX}
             title="No hay partidos por ahora"
@@ -147,15 +185,9 @@ export function RoomsDirectoryPage() {
           />
         ) : null}
 
-        {estado.status === 'ready' && visibles.length > 0 ? (
-          <ul className="grid w-full list-none grid-cols-1 gap-4 sm:grid-cols-2">
-            {visibles.map((match) => (
-              <li key={match.id} className="w-full min-w-0">
-                <MatchCard match={match} />
-              </li>
-            ))}
-          </ul>
-        ) : null}
+        {secciones.map(({ estado: estadoPartido, titulo, matches }) => (
+          <SeccionPartidos key={estadoPartido} titulo={titulo} matches={matches} />
+        ))}
       </div>
     </section>
   );

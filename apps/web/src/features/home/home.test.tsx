@@ -150,6 +150,20 @@ describe('Sesión y encabezado de la Home', () => {
     expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
   });
 
+  it('sus tarjetas conservan la presentación de siempre, sin los estilos del directorio', async () => {
+    conSesion();
+    responderPartidos({ matches: [river, racing] });
+
+    renderAt('/');
+
+    const enlaces = await screen.findAllByRole('link', { name: /Ver partido/ });
+
+    for (const enlace of enlaces) {
+      expect(enlace).not.toHaveClass('h-11');
+      expect(enlace.querySelector('svg')).toBeNull();
+    }
+  });
+
   it('expone un único encabezado accesible «Inicio», oculto visualmente', async () => {
     conSesion();
     responderPartidos({ matches: [river, racing] });

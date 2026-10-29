@@ -232,13 +232,15 @@ describe('Directorio de salas — tarjetas', () => {
 
     renderAt('/rooms');
 
-    const lista = await screen.findByRole('list');
-    const items = within(lista).getAllByRole('listitem');
+    const m = await directorio();
+    const items = await m.findAllByRole('listitem');
 
     expect(items).toHaveLength(2);
-    expect(within(lista).getByText(/River Plate/)).toBeInTheDocument();
-    expect(within(lista).getByText(/Racing Club/)).toBeInTheDocument();
-    expect(within(lista).getByText('En vivo')).toBeInTheDocument();
+    expect(m.getAllByRole('list')).toHaveLength(2);
+    expect(m.getByText(/River Plate/)).toBeInTheDocument();
+    expect(m.getByText(/Racing Club/)).toBeInTheDocument();
+    expect(m.getByText('Programado')).toBeInTheDocument();
+    expect(m.getByText('En vivo', { selector: 'span' })).toBeInTheDocument();
   });
 
   it('el enlace de cada tarjeta preserva el id opaco', async () => {
@@ -270,11 +272,12 @@ describe('Directorio de salas — tarjetas', () => {
 
     renderAt('/rooms');
 
+    // Racing está en vivo: su sección va primero, aunque la API lo traiga segundo.
     const primerEnlace = await screen.findByRole('link', {
-      name: 'Ver partido: River Plate vs. Boca Juniors',
+      name: 'Ver partido: Racing Club vs. Independiente',
     });
     const segundoEnlace = screen.getByRole('link', {
-      name: 'Ver partido: Racing Club vs. Independiente',
+      name: 'Ver partido: River Plate vs. Boca Juniors',
     });
 
     primerEnlace.focus();
@@ -296,12 +299,12 @@ describe('Directorio de salas — tarjetas', () => {
 
     renderAt('/rooms');
 
-    const lista = await screen.findByRole('list');
-    const items = within(lista).getAllByRole('listitem');
+    const m = await directorio();
+    const items = await m.findAllByRole('listitem');
 
     expect(items).toHaveLength(2);
-    expect(within(lista).getByText(/River Plate/)).toBeInTheDocument();
-    expect(within(lista).getByText(/Racing Club/)).toBeInTheDocument();
+    expect(m.getByText(/River Plate/)).toBeInTheDocument();
+    expect(m.getByText(/Racing Club/)).toBeInTheDocument();
   });
 
   it('si sólo hay partidos fuera de vista, explica la lista vacía en vez de una grilla vacía', async () => {
@@ -315,6 +318,285 @@ describe('Directorio de salas — tarjetas', () => {
     const m = await directorio();
     expect(await m.findByText(/Todavía no hay partidos ni salas disponibles/)).toBeInTheDocument();
     expect(m.queryByRole('list')).not.toBeInTheDocument();
+  });
+});
+
+describe('Directorio de salas — En vivo y Próximos', () => {
+  const partido = (id: string, status: 'live' | 'scheduled', homeTeam: string) => ({
+    ...river,
+    id,
+    homeTeam,
+    homeTeamId: `team-${id}`,
+    status,
+  });
+
+  const vivoA = partido('vivo-a', 'live', 'Vivo A');
+  const vivoB = partido('vivo-b', 'live', 'Vivo B');
+  const proximoA = partido('proximo-a', 'scheduled', 'Proximo A');
+  const proximoB = partido('proximo-b', 'scheduled', 'Proximo B');
+
+  function titulosEn(seccion: HTMLElement): (string | null)[] {
+    return within(seccion)
+      .getAllByRole('heading', { level: 3 })
+      .map((titulo) => titulo.textContent);
+  }
+
+  it('separa los partidos en las secciones En vivo y Próximos según su estado', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    const enVivo = await m.findByRole('region', { name: 'En vivo' });
+    const proximos = m.getByRole('region', { name: 'Próximos' });
+
+    expect(within(enVivo).getByText(/Racing Club/)).toBeInTheDocument();
+    expect(within(enVivo).queryByText(/River Plate/)).not.toBeInTheDocument();
+    expect(within(proximos).getByText(/River Plate/)).toBeInTheDocument();
+    expect(within(proximos).queryByText(/Racing Club/)).not.toBeInTheDocument();
+  });
+
+  it('En vivo va primero aunque la API traiga los programados antes', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [proximoA, vivoA] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    await m.findByRole('region', { name: 'En vivo' });
+
+    expect(m.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
+      'En vivo',
+      'Próximos',
+    ]);
+  });
+
+  it('conserva dentro de cada sección el orden en que llegaron de la API', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [proximoB, vivoB, proximoA, vivoA] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    const enVivo = await m.findByRole('region', { name: 'En vivo' });
+    const proximos = m.getByRole('region', { name: 'Próximos' });
+
+    expect(titulosEn(enVivo)).toEqual([
+      expect.stringContaining('Vivo B'),
+      expect.stringContaining('Vivo A'),
+    ]);
+    expect(titulosEn(proximos)).toEqual([
+      expect.stringContaining('Proximo B'),
+      expect.stringContaining('Proximo A'),
+    ]);
+  });
+
+  it('no duplica partidos: cada uno aparece una sola vez en todo el directorio', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [vivoA, proximoA, vivoB, proximoB] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    await m.findByRole('region', { name: 'En vivo' });
+
+    expect(m.getAllByRole('listitem')).toHaveLength(4);
+    expect(m.getAllByRole('link', { name: /Ver partido/ })).toHaveLength(4);
+    expect(m.getAllByRole('link', { name: 'Ver partido: Vivo A vs. Boca Juniors' })).toHaveLength(
+      1,
+    );
+  });
+
+  it('sin partidos en vivo no muestra la sección En vivo', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [proximoA] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    await m.findByRole('region', { name: 'Próximos' });
+
+    expect(m.queryByRole('region', { name: 'En vivo' })).not.toBeInTheDocument();
+    expect(m.queryByRole('heading', { name: 'En vivo' })).not.toBeInTheDocument();
+    expect(m.getAllByRole('list')).toHaveLength(1);
+  });
+
+  it('sin próximos no muestra la sección Próximos', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [vivoA] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    await m.findByRole('region', { name: 'En vivo' });
+
+    expect(m.queryByRole('region', { name: 'Próximos' })).not.toBeInTheDocument();
+    expect(m.queryByRole('heading', { name: 'Próximos' })).not.toBeInTheDocument();
+    expect(m.getAllByRole('list')).toHaveLength(1);
+  });
+
+  it('los partidos fuera de vista no abren ninguna sección', async () => {
+    conSesion();
+    const finished = { ...river, id: 'match-finished', status: 'finished' as const };
+
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [finished, vivoA] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    await m.findByRole('region', { name: 'En vivo' });
+
+    expect(m.queryByRole('region', { name: 'Próximos' })).not.toBeInTheDocument();
+    expect(m.getAllByRole('listitem')).toHaveLength(1);
+  });
+
+  it('cada título de sección es un h2 y los partidos cuelgan como h3', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [vivoA, proximoA] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    await m.findByRole('region', { name: 'En vivo' });
+
+    expect(m.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(m.getAllByRole('heading', { level: 2 })).toHaveLength(2);
+    expect(m.getAllByRole('heading', { level: 3 })).toHaveLength(2);
+  });
+
+  it('el foco pasa de En vivo a Próximos en el orden en que se leen', async () => {
+    const user = userEvent.setup();
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [proximoA, vivoA] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    const enlaceVivo = await m.findByRole('link', {
+      name: 'Ver partido: Vivo A vs. Boca Juniors',
+    });
+    const enlaceProximo = m.getByRole('link', {
+      name: 'Ver partido: Proximo A vs. Boca Juniors',
+    });
+
+    enlaceVivo.focus();
+    await user.tab();
+
+    expect(enlaceProximo).toHaveFocus();
+  });
+
+  it('sigue siendo una sola petición al mismo catálogo, sin endpoint de búsqueda', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [vivoA, proximoA] }));
+
+    renderAt('/rooms');
+    await (await directorio()).findByRole('region', { name: 'En vivo' });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(ultimaPeticion()[0]).toBe(`${API_BASE}/matches`);
+  });
+});
+
+describe('Directorio de salas — encabezado y grilla', () => {
+  const DESCRIPCION = 'Elegí un partido en vivo o próximo para entrar a su sala.';
+
+  it('presenta el título como único h1 y una descripción breve debajo', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    const titulo = await m.findByRole('heading', { level: 1, name: 'Salas' });
+    const descripcion = m.getByText(DESCRIPCION);
+
+    expect(m.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(titulo.parentElement).toContainElement(descripcion);
+    expect(titulo.compareDocumentPosition(descripcion)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('la descripción acompaña al título mientras carga, ante un error y con la lista vacía', async () => {
+    conSesion();
+    fetchSpy.mockReturnValue(new Promise(() => {}));
+
+    const cargando = renderAt('/rooms');
+    const m = await directorio();
+    await m.findByRole('status');
+    expect(m.getByText(DESCRIPCION)).toBeInTheDocument();
+    cargando.unmount();
+
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    const conError = renderAt('/rooms');
+    const e = await directorio();
+    await e.findByRole('alert');
+    expect(e.getByText(DESCRIPCION)).toBeInTheDocument();
+    conError.unmount();
+
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [] }));
+    renderAt('/rooms');
+    const v = await directorio();
+    await v.findByText(/Todavía no hay partidos ni salas disponibles/);
+    expect(v.getByText(DESCRIPCION)).toBeInTheDocument();
+  });
+
+  it('la grilla pasa de 1 a 2 y a 3 columnas según el ancho disponible', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
+
+    renderAt('/rooms');
+
+    const listas = await screen.findAllByRole('list');
+
+    expect(listas).toHaveLength(2);
+
+    for (const lista of listas) {
+      expect(lista).toHaveClass('grid-cols-1', 'sm:grid-cols-2', 'lg:grid-cols-3');
+    }
+  });
+
+  it('la página no usa anchos fijos en píxeles ni valores arbitrarios', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    await m.findAllByRole('list');
+    const clases = Array.from(screen.getByRole('main').querySelectorAll('[class]'))
+      .map((elemento) => elemento.getAttribute('class') ?? '')
+      .join(' ');
+
+    expect(clases).not.toMatch(/(?:^|\s)(?:\w+:)?(?:min-|max-)?[wh]-\[/);
+    expect(clases).not.toMatch(/\[\d+(?:\.\d+)?px\]/);
+  });
+});
+
+describe('Directorio de salas — presentación de las tarjetas', () => {
+  it('las tarjetas usan la variante del directorio: el enlace es una acción de 44 px', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
+
+    renderAt('/rooms');
+
+    const enlaces = await screen.findAllByRole('link', { name: /Ver partido/ });
+
+    expect(enlaces).toHaveLength(2);
+
+    for (const enlace of enlaces) {
+      expect(enlace).toHaveClass('h-11', 'w-full');
+    }
+  });
+
+  it('no agrega botones: salvo el reintento, la única acción de cada tarjeta es su enlace', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
+
+    renderAt('/rooms');
+    const m = await directorio();
+    await m.findAllByRole('link', { name: /Ver partido/ });
+
+    expect(m.queryByRole('button')).not.toBeInTheDocument();
   });
 });
 
