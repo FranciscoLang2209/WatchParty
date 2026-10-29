@@ -782,3 +782,124 @@ describe('Directorio de salas — carga, vacío y error', () => {
     expect(estado.querySelector('svg')).toHaveClass('animate-spin', 'motion-reduce:animate-none');
   });
 });
+
+describe('Directorio de salas — foco al terminar el reintento', () => {
+  const vivo = { ...racing, id: 'match-vivo', homeTeam: 'Vivo A', homeTeamId: 'team-vivo-a' };
+  const proximo = {
+    ...river,
+    id: 'match-proximo',
+    homeTeam: 'Proximo A',
+    homeTeamId: 'team-proximo-a',
+  };
+
+  /** Deja el directorio en error recuperable y devuelve cómo contestar al reintento. */
+  async function reintentarConRespuestaPendiente() {
+    const user = userEvent.setup();
+    conSesion();
+    fetchSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    renderAt('/rooms');
+    const m = await directorio();
+    await m.findByRole('alert');
+
+    let responder: (respuesta: Response | Error) => void = () => {};
+    fetchSpy.mockReturnValue(
+      new Promise<Response>((resolve, reject) => {
+        responder = (respuesta) =>
+          respuesta instanceof Error ? reject(respuesta) : resolve(respuesta);
+      }),
+    );
+    await user.click(m.getByRole('button', { name: 'Reintentar' }));
+    await waitFor(() => expect(m.getByRole('status')).toHaveFocus());
+
+    return { m, user, responder };
+  }
+
+  it('si el reintento trae partidos, el foco pasa a la primera sección y no vuelve al body', async () => {
+    const { m, responder } = await reintentarConRespuestaPendiente();
+
+    responder(jsonResponse({ matches: [proximo, vivo] }));
+
+    const titulo = await m.findByRole('heading', { level: 2, name: 'En vivo' });
+
+    await waitFor(() => expect(titulo).toHaveFocus());
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it('desde ese foco, Tab sigue por los enlaces de la primera sección', async () => {
+    const { m, user, responder } = await reintentarConRespuestaPendiente();
+
+    responder(jsonResponse({ matches: [vivo, proximo] }));
+
+    const titulo = await m.findByRole('heading', { level: 2, name: 'En vivo' });
+    await waitFor(() => expect(titulo).toHaveFocus());
+    await user.tab();
+
+    expect(m.getByRole('link', { name: 'Ver partido: Vivo A vs. Independiente' })).toHaveFocus();
+  });
+
+  it('si el reintento trae la lista vacía, el foco pasa al panel de lista vacía', async () => {
+    const { m, responder } = await reintentarConRespuestaPendiente();
+
+    responder(jsonResponse({ matches: [] }));
+
+    const titulo = await m.findByRole('heading', { level: 2, name: 'No hay partidos por ahora' });
+
+    await waitFor(() => expect(titulo.parentElement?.parentElement).toHaveFocus());
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it('si el reintento vuelve a fallar, el foco pasa a la nueva alerta con su Reintentar', async () => {
+    const { m, responder } = await reintentarConRespuestaPendiente();
+
+    responder(new TypeError('Failed to fetch'));
+
+    const alerta = await m.findByRole('alert');
+
+    await waitFor(() => expect(alerta).toHaveFocus());
+    expect(within(alerta).getByRole('button', { name: 'Reintentar' })).toBeInTheDocument();
+  });
+
+  it('si el reintento termina en sesión vencida, el foco pasa a la alerta de reingreso', async () => {
+    const { m, responder } = await reintentarConRespuestaPendiente();
+
+    responder(jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'No autenticado.' } }, 401));
+
+    const alerta = await m.findByRole('alert');
+
+    await waitFor(() => expect(alerta).toHaveFocus());
+    expect(
+      within(alerta).getByRole('button', { name: 'Iniciar sesión nuevamente' }),
+    ).toBeInTheDocument();
+  });
+
+  it('cada reintento sucesivo vuelve a llevar el foco al resultado', async () => {
+    const user = userEvent.setup();
+    conSesion();
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    renderAt('/rooms');
+    const m = await directorio();
+    await m.findByRole('alert');
+
+    for (let vuelta = 0; vuelta < 2; vuelta += 1) {
+      await user.click(m.getByRole('button', { name: 'Reintentar' }));
+      const alerta = await m.findByRole('alert');
+
+      await waitFor(() => expect(alerta).toHaveFocus());
+    }
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('la carga inicial no roba el foco: sólo un reintento lo mueve', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [vivo] }));
+
+    renderAt('/rooms');
+    const m = await directorio();
+    await m.findByRole('heading', { level: 2, name: 'En vivo' });
+
+    expect(document.activeElement).toBe(document.body);
+  });
+});

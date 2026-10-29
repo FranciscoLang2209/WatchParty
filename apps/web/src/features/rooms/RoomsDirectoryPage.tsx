@@ -1,5 +1,5 @@
 import { CalendarX, LoaderCircle, LogIn, TriangleAlert } from 'lucide-react';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
 import { MatchCard } from '@/features/matches/MatchCard';
@@ -32,12 +32,27 @@ function seccionesVisibles(matches: Match[]) {
   })).filter((seccion) => seccion.matches.length > 0);
 }
 
-function SeccionPartidos({ titulo, matches }: { titulo: string; matches: Match[] }) {
+function SeccionPartidos({
+  titulo,
+  matches,
+  tituloRef,
+}: {
+  titulo: string;
+  matches: Match[];
+  /** Destino del foco cuando un reintento termina con partidos. */
+  tituloRef?: Ref<HTMLHeadingElement>;
+}) {
   const tituloId = useId();
 
   return (
     <section aria-labelledby={tituloId} className="flex w-full min-w-0 flex-col gap-3">
-      <h2 id={tituloId} className="font-display text-xl leading-tight font-semibold">
+      <h2
+        id={tituloId}
+        ref={tituloRef}
+        // `tabIndex={-1}` sólo permite recibir el foco por código, no por Tab.
+        tabIndex={tituloRef ? -1 : undefined}
+        className="rounded-sm font-display text-xl leading-tight font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
         {titulo}
       </h2>
 
@@ -72,9 +87,11 @@ export function RoomsDirectoryPage() {
 
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
-  const panelCarga = useRef<HTMLDivElement>(null);
-  // Al reintentar, el botón desaparece: el foco pasa al panel de carga para que el
-  // teclado y el lector de pantalla no queden en el vacío.
+  // Destinos del foco durante un reintento: el panel que esté en pantalla (carga,
+  // error, sesión vencida o lista vacía) o, con partidos, el título de la primera
+  // sección. Sólo hay uno montado a la vez.
+  const panelFoco = useRef<HTMLDivElement>(null);
+  const tituloFoco = useRef<HTMLHeadingElement>(null);
   const reintentando = useRef(false);
 
   useEffect(() => {
@@ -100,11 +117,16 @@ export function RoomsDirectoryPage() {
     };
   }, [accessToken, intento]);
 
+  // Reintentar desmonta el botón que tenía el foco, y al llegar la respuesta se
+  // desmonta el panel de carga: sin esto el foco vuelve al body y quien navega con
+  // teclado pierde su ubicación. El foco acompaña cada etapa del reintento y queda
+  // en el contenido resultante. La carga inicial no lo mueve.
   useEffect(() => {
-    if (estado.status !== 'loading' || !reintentando.current) return;
+    if (!reintentando.current) return;
 
-    reintentando.current = false;
-    panelCarga.current?.focus();
+    (panelFoco.current ?? tituloFoco.current)?.focus();
+
+    if (estado.status !== 'loading') reintentando.current = false;
   }, [estado.status]);
 
   const reintentar = useCallback(() => {
@@ -137,7 +159,7 @@ export function RoomsDirectoryPage() {
             spin
             title="Un momento"
             message="Cargando el directorio…"
-            panelRef={panelCarga}
+            panelRef={panelFoco}
           />
         ) : null}
 
@@ -149,6 +171,7 @@ export function RoomsDirectoryPage() {
             icon={LogIn}
             title="Necesitás ingresar de nuevo"
             message={estado.message}
+            panelRef={panelFoco}
             action={
               <Button type="button" className="w-full sm:w-auto" onClick={() => void signOut()}>
                 Iniciar sesión nuevamente
@@ -164,6 +187,7 @@ export function RoomsDirectoryPage() {
             icon={TriangleAlert}
             title="Algo salió mal"
             message={estado.message}
+            panelRef={panelFoco}
             action={
               <Button
                 type="button"
@@ -182,11 +206,17 @@ export function RoomsDirectoryPage() {
             icon={CalendarX}
             title="No hay partidos por ahora"
             message="Todavía no hay partidos ni salas disponibles. Volvé más tarde."
+            panelRef={panelFoco}
           />
         ) : null}
 
-        {secciones.map(({ estado: estadoPartido, titulo, matches }) => (
-          <SeccionPartidos key={estadoPartido} titulo={titulo} matches={matches} />
+        {secciones.map(({ estado: estadoPartido, titulo, matches }, posicion) => (
+          <SeccionPartidos
+            key={estadoPartido}
+            titulo={titulo}
+            matches={matches}
+            tituloRef={posicion === 0 ? tituloFoco : undefined}
+          />
         ))}
       </div>
     </section>
