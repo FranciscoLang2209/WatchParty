@@ -23,6 +23,14 @@ export interface SearchQuery {
   cursor?: string | null;
 }
 
+/** Un cursor que no salió de este módulo (o fue alterado). La frontera HTTP lo traduce a 400. */
+export class InvalidSearchCursorError extends Error {
+  constructor() {
+    super('Cursor de búsqueda inválido.');
+    this.name = 'InvalidSearchCursorError';
+  }
+}
+
 /** Proyección mínima de un equipo para el resultado de búsqueda. */
 export interface TeamSearchResult {
   id: string;
