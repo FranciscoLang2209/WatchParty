@@ -109,10 +109,6 @@ export function CommentForm({ roomId, accessToken, onCommentCreated }: CommentFo
         onChange={(event) => handleBodyChange(event.target.value)}
       />
 
-      <p id={counterId} className="self-end text-xs text-muted-foreground">
-        {body.length}/{BODY_MAX_LENGTH}
-      </p>
-
       {error !== null ? (
         <p
           id={errorId}
@@ -123,9 +119,16 @@ export function CommentForm({ roomId, accessToken, onCommentCreated }: CommentFo
         </p>
       ) : null}
 
-      <Button type="submit" disabled={enviando} className="self-end">
-        {enviando ? 'Enviando…' : 'Comentar'}
-      </Button>
+      {/* Contador y botón en una misma fila: el contador queda a la izquierda del botón, centrado con él. */}
+      <div className="flex items-center justify-between gap-3">
+        <p id={counterId} className="min-w-0 text-xs text-muted-foreground tabular-nums">
+          {body.length}/{BODY_MAX_LENGTH}
+        </p>
+
+        <Button type="submit" disabled={enviando} className="shrink-0">
+          {enviando ? 'Enviando…' : 'Comentar'}
+        </Button>
+      </div>
     </form>
   );
 }
