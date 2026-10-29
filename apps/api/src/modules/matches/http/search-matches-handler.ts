@@ -2,12 +2,14 @@ import type { RequestHandler } from 'express';
 import { ValidationError } from '../../../errors/http-error.js';
 import {
   InvalidSearchCursorError,
-  SEARCH_DEFAULT_LIMIT,
   SEARCH_MAX_LIMIT,
   SEARCH_MIN_LIMIT,
   type MatchSearch,
 } from '../domain/match-search.js';
 import { toMatchResponse } from './match-response.js';
+
+/** Tamaño de página de la API: 20 resultados, el máximo que admite la búsqueda. */
+export const SEARCH_PAGE_SIZE = SEARCH_MAX_LIMIT;
 
 /** Un nombre de equipo cabe de sobra: más largo es un pedido mal formado. */
 export const SEARCH_TEXT_MAX_LENGTH = 100;
@@ -32,7 +34,7 @@ function parseSearchParams(query: Record<string, unknown>): SearchParams | null 
   const text = q.trim();
   if (text === '' || text.length > SEARCH_TEXT_MAX_LENGTH) return null;
 
-  let limit = SEARCH_DEFAULT_LIMIT;
+  let limit = SEARCH_PAGE_SIZE;
   if (rawLimit !== undefined) {
     if (typeof rawLimit !== 'string' || !/^\d+$/.test(rawLimit)) return null;
     limit = Number(rawLimit);
