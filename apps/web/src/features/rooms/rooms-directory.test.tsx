@@ -497,3 +497,77 @@ describe('Directorio de salas — En vivo y Próximos', () => {
     expect(ultimaPeticion()[0]).toBe(`${API_BASE}/matches`);
   });
 });
+
+describe('Directorio de salas — encabezado y grilla', () => {
+  const DESCRIPCION = 'Elegí un partido en vivo o próximo para entrar a su sala.';
+
+  it('presenta el título como único h1 y una descripción breve debajo', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    const titulo = await m.findByRole('heading', { level: 1, name: 'Salas' });
+    const descripcion = m.getByText(DESCRIPCION);
+
+    expect(m.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(titulo.parentElement).toContainElement(descripcion);
+    expect(titulo.compareDocumentPosition(descripcion)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('la descripción acompaña al título mientras carga, ante un error y con la lista vacía', async () => {
+    conSesion();
+    fetchSpy.mockReturnValue(new Promise(() => {}));
+
+    const cargando = renderAt('/rooms');
+    const m = await directorio();
+    await m.findByRole('status');
+    expect(m.getByText(DESCRIPCION)).toBeInTheDocument();
+    cargando.unmount();
+
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    const conError = renderAt('/rooms');
+    const e = await directorio();
+    await e.findByRole('alert');
+    expect(e.getByText(DESCRIPCION)).toBeInTheDocument();
+    conError.unmount();
+
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [] }));
+    renderAt('/rooms');
+    const v = await directorio();
+    await v.findByText(/Todavía no hay partidos ni salas disponibles/);
+    expect(v.getByText(DESCRIPCION)).toBeInTheDocument();
+  });
+
+  it('la grilla pasa de 1 a 2 y a 3 columnas según el ancho disponible', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
+
+    renderAt('/rooms');
+
+    const listas = await screen.findAllByRole('list');
+
+    expect(listas).toHaveLength(2);
+
+    for (const lista of listas) {
+      expect(lista).toHaveClass('grid-cols-1', 'sm:grid-cols-2', 'lg:grid-cols-3');
+    }
+  });
+
+  it('la página no usa anchos fijos en píxeles ni valores arbitrarios', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
+
+    renderAt('/rooms');
+
+    const m = await directorio();
+    await m.findAllByRole('list');
+    const clases = Array.from(screen.getByRole('main').querySelectorAll('[class]'))
+      .map((elemento) => elemento.getAttribute('class') ?? '')
+      .join(' ');
+
+    expect(clases).not.toMatch(/(?:^|\s)(?:\w+:)?(?:min-|max-)?[wh]-\[/);
+    expect(clases).not.toMatch(/\[\d+(?:\.\d+)?px\]/);
+  });
+});
