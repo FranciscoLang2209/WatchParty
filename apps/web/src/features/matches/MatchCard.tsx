@@ -13,6 +13,8 @@ interface MatchCardProps {
    * pantalla usa `default`: los estilos del directorio no se filtran a ella.
    */
   variant?: 'default' | 'directory';
+  /** Nivel del título del partido: `h3` cuando la tarjeta cuelga de un título de sección. */
+  headingLevel?: 'h2' | 'h3';
 }
 
 function EstadoBadge({ status }: { status: Match['status'] }) {
@@ -35,17 +37,23 @@ function EstadoBadge({ status }: { status: Match['status'] }) {
  * detalle, con aspecto de botón para que se reconozca y tenga un área táctil
  * de 44 px. El `h-full` y el `mt-auto` alinean los enlaces de una misma fila.
  */
-function DirectoryMatchCard({ match }: { match: Match }) {
+function DirectoryMatchCard({
+  match,
+  headingLevel: Titulo,
+}: {
+  match: Match;
+  headingLevel: 'h2' | 'h3';
+}) {
   return (
     <Card className="h-full gap-4 p-4 sm:p-5">
       <div className="flex">
         <EstadoBadge status={match.status} />
       </div>
 
-      <h2 className="min-w-0 font-display text-lg leading-snug font-semibold break-words">
+      <Titulo className="min-w-0 font-display text-lg leading-snug font-semibold break-words">
         {match.homeTeam} <span className="font-normal text-muted-foreground">vs.</span>{' '}
         {match.awayTeam}
-      </h2>
+      </Titulo>
 
       <p className="min-w-0 text-sm text-muted-foreground">{formatKickoff(match.kickoffAt)}</p>
 
@@ -68,17 +76,19 @@ function DirectoryMatchCard({ match }: { match: Match }) {
  * No usa `CardTitle` a propósito: ese primitive renderiza un `<h1>` y la Home
  * debe conservar uno solo.
  */
-export function MatchCard({ match, variant = 'default' }: MatchCardProps) {
+export function MatchCard({ match, variant = 'default', headingLevel = 'h2' }: MatchCardProps) {
   if (variant === 'directory') {
-    return <DirectoryMatchCard match={match} />;
+    return <DirectoryMatchCard match={match} headingLevel={headingLevel} />;
   }
+
+  const Titulo = headingLevel;
 
   return (
     <Card className="gap-3 p-4">
       {/* `min-w-0` y el quiebre de palabra evitan que un nombre largo desborde. */}
-      <h2 className="min-w-0 text-base leading-snug font-semibold break-words">
+      <Titulo className="min-w-0 text-base leading-snug font-semibold break-words">
         {match.homeTeam} <span className="text-muted-foreground">vs.</span> {match.awayTeam}
-      </h2>
+      </Titulo>
 
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
         <p className="min-w-0 text-sm text-muted-foreground">{formatKickoff(match.kickoffAt)}</p>
