@@ -42,7 +42,7 @@ function SeccionPartidos({ titulo, matches }: { titulo: string; matches: Match[]
       <ul className="grid w-full list-none grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {matches.map((match) => (
           <li key={match.id} className="w-full min-w-0">
-            <MatchCard match={match} headingLevel="h3" />
+            <MatchCard match={match} variant="directory" headingLevel="h3" />
           </li>
         ))}
       </ul>

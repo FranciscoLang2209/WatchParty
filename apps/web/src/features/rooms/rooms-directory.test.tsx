@@ -571,3 +571,31 @@ describe('Directorio de salas — encabezado y grilla', () => {
     expect(clases).not.toMatch(/\[\d+(?:\.\d+)?px\]/);
   });
 });
+
+describe('Directorio de salas — presentación de las tarjetas', () => {
+  it('las tarjetas usan la variante del directorio: el enlace es una acción de 44 px', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
+
+    renderAt('/rooms');
+
+    const enlaces = await screen.findAllByRole('link', { name: /Ver partido/ });
+
+    expect(enlaces).toHaveLength(2);
+
+    for (const enlace of enlaces) {
+      expect(enlace).toHaveClass('h-11', 'w-full');
+    }
+  });
+
+  it('no agrega botones: salvo el reintento, la única acción de cada tarjeta es su enlace', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
+
+    renderAt('/rooms');
+    const m = await directorio();
+    await m.findAllByRole('link', { name: /Ver partido/ });
+
+    expect(m.queryByRole('button')).not.toBeInTheDocument();
+  });
+});
