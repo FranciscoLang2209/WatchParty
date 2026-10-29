@@ -218,6 +218,23 @@ describe('AppRoutes', () => {
     expect(screen.queryByRole('heading', { name: 'Salas' })).not.toBeInTheDocument();
   });
 
+  it('redirige /search a /login sin sesión', async () => {
+    renderAt('/search');
+
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Buscar' })).not.toBeInTheDocument();
+  });
+
+  it('renderiza /search dentro del layout privado con sesión', async () => {
+    authMock.getSession.mockResolvedValue({ data: { session }, error: null });
+
+    renderAt('/search');
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Buscar' })).toBeInTheDocument();
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
+    expect(screen.getByRole('navigation', { name: 'Navegación principal' })).toBeInTheDocument();
+  });
+
   it('renderiza Home dentro del layout privado con sesión', async () => {
     authMock.getSession.mockResolvedValue({ data: { session }, error: null });
 

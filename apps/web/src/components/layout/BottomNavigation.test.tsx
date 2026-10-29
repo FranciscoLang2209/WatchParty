@@ -25,10 +25,9 @@ describe('BottomNavigation', () => {
   it('renderiza los cuatro destinos', () => {
     const { nav } = renderNav();
 
-    for (const label of ['Inicio', 'Salas', 'Perfil']) {
+    for (const label of ['Inicio', 'Salas', 'Buscar', 'Perfil']) {
       expect(within(nav).getByRole('link', { name: label })).toBeInTheDocument();
     }
-    expect(within(nav).getByRole('button', { name: 'Buscar, Próximamente' })).toBeInTheDocument();
   });
 
   it('lleva a /profile, que ya está disponible', () => {
@@ -127,22 +126,13 @@ describe('BottomNavigation', () => {
     expect(screen.getByText('ruta: /rooms')).toBeInTheDocument();
   });
 
-  it('los destinos no disponibles no modifican la URL', async () => {
-    const { user, nav } = renderNav('/');
+  it('Buscar navega a /search y se marca activo allí', () => {
+    const { nav } = renderNav('/search');
 
-    await user.click(within(nav).getByRole('button', { name: 'Buscar, Próximamente' }));
+    const buscar = within(nav).getByRole('link', { name: 'Buscar' });
 
-    expect(screen.getByText('ruta: /')).toBeInTheDocument();
-    expect(screen.queryByText('ruta: /rooms')).not.toBeInTheDocument();
-  });
-
-  it('marca los destinos futuros como no disponibles', () => {
-    const { nav } = renderNav();
-
-    expect(within(nav).getByRole('button', { name: 'Buscar, Próximamente' })).toHaveAttribute(
-      'aria-disabled',
-      'true',
-    );
+    expect(buscar).toHaveAttribute('href', '/search');
+    expect(buscar).toHaveAttribute('aria-current', 'page');
   });
 
   it('cada destino cumple el área táctil mínima y muestra icono y label', () => {

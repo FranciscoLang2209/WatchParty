@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getMatch, listMatches } from './api';
+import { getMatch, listMatches, searchMatches } from './api';
 import { MatchesApiError, isCancelled, isUnauthorized } from './types';
 
 const API_BASE = 'https://api.watchparty.test';
@@ -275,5 +275,63 @@ describe('Cancelación', () => {
     } as unknown as Response);
 
     await expect(listMatches(TOKEN)).rejects.toMatchObject({ kind: 'cancelled' });
+  });
+});
+
+describe('searchMatches', () => {
+  it('pide /matches/search con el texto codificado y el bearer', async () => {
+    respondWith({ matches: [partido], nextCursor: null });
+
+    const page = await searchMatches('River & Boca 100%', TOKEN);
+
+    expect(page).toEqual({ matches: [partido], nextCursor: null });
+    expect(requestUrl()).toBe(`${API_BASE}/matches/search?q=River+%26+Boca+100%25`);
+    expect(requestInit().method).toBe('GET');
+    expect(new Headers(requestInit().headers).get('Authorization')).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('envía limit y cursor sólo cuando se piden', async () => {
+    respondWith({ matches: [], nextCursor: null });
+
+    await searchMatches('river', TOKEN, { limit: 5, cursor: 'abc' });
+
+    expect(requestUrl()).toBe(`${API_BASE}/matches/search?q=river&limit=5&cursor=abc`);
+  });
+
+  it('devuelve el cursor de la página siguiente', async () => {
+    respondWith({ matches: [partido], nextCursor: 'siguiente' });
+
+    expect((await searchMatches('river', TOKEN)).nextCursor).toBe('siguiente');
+  });
+
+  it.each([
+    ['sin matches', { nextCursor: null }],
+    ['matches que no es lista', { matches: {}, nextCursor: null }],
+    ['sin nextCursor', { matches: [] }],
+    ['nextCursor que no es texto', { matches: [], nextCursor: 3 }],
+    ['un partido inválido', { matches: [{ id: 'x' }], nextCursor: null }],
+  ])('una respuesta %s se trata como fallo del servidor', async (_caso, body) => {
+    respondWith(body);
+
+    await expect(searchMatches('river', TOKEN)).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it.each([
+    [401, 'unauthorized'],
+    [400, 'server'],
+    [500, 'server'],
+  ])('traduce el status %i a «%s»', async (status, kind) => {
+    respondWith({}, { status });
+
+    await expect(searchMatches('river', TOKEN)).rejects.toMatchObject({ kind });
+  });
+
+  it('un corte de red es un error de red y una cancelación no se anuncia', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('fetch failed'));
+    await expect(searchMatches('river', TOKEN)).rejects.toMatchObject({ kind: 'network' });
+
+    fetchMock.mockRejectedValueOnce(abortError());
+    const error = await searchMatches('river', TOKEN).catch((caught: unknown) => caught);
+    expect(isCancelled(error)).toBe(true);
   });
 });

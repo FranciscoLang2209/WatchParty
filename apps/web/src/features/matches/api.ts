@@ -7,6 +7,7 @@ import {
   type MatchesEnvelope,
   type MatchesErrorKind,
   type MatchScore,
+  type MatchSearchPage,
 } from './types';
 
 /**
@@ -183,4 +184,43 @@ export async function getMatch(
   if (typeof body !== 'object' || body === null) throw fail('server');
 
   return toMatch(body.match);
+}
+
+export interface SearchMatchesOptions {
+  /** El `nextCursor` de la página anterior; sin él se pide la primera. */
+  cursor?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * Busca partidos persistidos por parte del nombre de un equipo (WAT-240). El
+ * texto se codifica como parámetro: viaja tal cual lo escribió la persona.
+ */
+export async function searchMatches(
+  text: string,
+  accessToken: string,
+  { cursor, limit, signal }: SearchMatchesOptions = {},
+): Promise<MatchSearchPage> {
+  const params = new URLSearchParams({ q: text });
+
+  if (limit !== undefined) params.set('limit', String(limit));
+  if (cursor !== undefined) params.set('cursor', cursor);
+
+  const body = await request<MatchSearchPage>(
+    matchesUrl(`/search?${params.toString()}`),
+    accessToken,
+    signal,
+  );
+
+  if (
+    typeof body !== 'object' ||
+    body === null ||
+    !Array.isArray(body.matches) ||
+    (body.nextCursor !== null && typeof body.nextCursor !== 'string')
+  ) {
+    throw fail('server');
+  }
+
+  return { matches: body.matches.map(toMatch), nextCursor: body.nextCursor };
 }
