@@ -2,12 +2,11 @@ import express from 'express';
 import request from 'supertest';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMatchesRouter } from './matches-router.js';
-import { SEARCH_TEXT_MAX_LENGTH } from './search-matches-handler.js';
+import { SEARCH_PAGE_SIZE, SEARCH_TEXT_MAX_LENGTH } from './search-matches-handler.js';
 import { errorHandler, notFoundHandler } from '../../../middleware/error-handler.js';
 import { supabaseAuthClient } from '../../../auth/supabase-auth-client.js';
 import {
   InvalidSearchCursorError,
-  SEARCH_DEFAULT_LIMIT,
   SEARCH_MAX_LIMIT,
   type MatchSearch,
   type SearchPage,
@@ -89,7 +88,7 @@ describe('GET /matches/search', () => {
     expect(search).toHaveBeenCalledWith({
       query: 'River',
       kind: 'matches',
-      limit: SEARCH_DEFAULT_LIMIT,
+      limit: SEARCH_PAGE_SIZE,
       cursor: null,
     });
   });
@@ -125,6 +124,44 @@ describe('GET /matches/search', () => {
     );
 
     expect(search).toHaveBeenCalledWith(expect.objectContaining({ query: '100%_a\\"b,(c)' }));
+  });
+
+  it('sin limit pide páginas de 20 resultados', async () => {
+    const { search } = buildSearch();
+
+    await get(buildTestApp({ search }), '/matches/search?q=river');
+
+    expect(SEARCH_PAGE_SIZE).toBe(20);
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ limit: 20 }));
+  });
+
+  it('devuelve una página de 20 con el cursor para cargar la siguiente', async () => {
+    const items = Array.from({ length: 20 }, (_, i) => ({ ...MATCH, id: `m-${i}` }));
+    const { search } = buildSearch({ kind: 'matches', items, nextCursor: 'siguiente' });
+
+    const response = await get(buildTestApp({ search }), '/matches/search?q=river');
+
+    expect(response.body.matches).toHaveLength(20);
+    expect(response.body.nextCursor).toBe('siguiente');
+  });
+
+  it('cada partido conserva exactamente el contrato de GET /matches', async () => {
+    const { search } = buildSearch();
+
+    const response = await get(buildTestApp({ search }), '/matches/search?q=river');
+
+    expect(Object.keys(response.body.matches[0]).sort()).toEqual(
+      [
+        'awayTeam',
+        'awayTeamId',
+        'homeTeam',
+        'homeTeamId',
+        'id',
+        'kickoffAt',
+        'score',
+        'status',
+      ].sort(),
+    );
   });
 
   it('no se confunde con el detalle de un partido', async () => {
@@ -181,5 +218,62 @@ describe('GET /matches/search', () => {
 
     expect(response.status).toBe(500);
     expect(JSON.stringify(response.body)).not.toContain('boom interno');
+  });
+});
+
+describe('compatibilidad de rutas con la búsqueda registrada', () => {
+  beforeEach(() => {
+    vi.mocked(supabaseAuthClient.auth.getUser).mockReset();
+  });
+
+  function buildFullApp() {
+    const list = vi.fn(async () => [MATCH]);
+    const findById = vi.fn(async (id: string) => (id === MATCH.id ? MATCH : null));
+    const { search } = buildSearch();
+    const app = express();
+
+    app.use('/matches', createMatchesRouter({ list, findById }, undefined, { search }));
+    app.use(notFoundHandler);
+    app.use(errorHandler);
+
+    return { app, list, findById, search };
+  }
+
+  it('GET /matches sigue devolviendo la agenda y no usa la búsqueda', async () => {
+    const { app, list, search } = buildFullApp();
+
+    const response = await get(app, '/matches');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ matches: [MATCH] });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it('GET /matches/:matchId sigue devolviendo el detalle', async () => {
+    const { app, findById, search } = buildFullApp();
+
+    const response = await get(app, `/matches/${MATCH.id}`);
+
+    expect(response.status).toBe(200);
+    expect(findById).toHaveBeenCalledWith(MATCH.id);
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it('un id inexistente sigue dando 404', async () => {
+    const { app } = buildFullApp();
+
+    const response = await get(app, '/matches/no-existe');
+
+    expect(response.status).toBe(404);
+  });
+
+  it('/matches/search sin q responde 400 de la búsqueda, no un 404 de detalle', async () => {
+    const { app, findById } = buildFullApp();
+
+    const response = await get(app, '/matches/search');
+
+    expect(response.status).toBe(400);
+    expect(findById).not.toHaveBeenCalled();
   });
 });

@@ -125,7 +125,7 @@ partidos persistidos (anteriores y futuros): no usa la agenda móvil ni consulta
 al proveedor deportivo.
 
 - `q` (obligatorio, 1–100 caracteres tras recortar): se trata como texto literal.
-- `limit` (opcional, entero 1–20, por defecto 10) y `cursor` (opcional, el
+- `limit` (opcional, entero 1–20; sin `limit` la página es de 20 resultados) y `cursor` (opcional, el
   `nextCursor` de la página anterior).
 - Respuesta: `{ matches, nextCursor }`, ordenada por `kickoffAt` e `id`.
 - Parámetros inválidos, repetidos o un cursor alterado: `400 VALIDATION_ERROR`.
