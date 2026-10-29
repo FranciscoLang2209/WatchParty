@@ -84,6 +84,15 @@ describe('CommentForm: qué se ve', () => {
     expect(screen.getByRole('button', { name: 'Comentar' })).toBeInTheDocument();
   });
 
+  it('el contador y el botón comparten una fila, centrados entre sí', () => {
+    renderForm();
+
+    const fila = screen.getByText(`0/${BODY_MAX_LENGTH}`).parentElement!;
+
+    expect(fila).toContainElement(enviar());
+    expect(fila).toHaveClass('flex', 'items-center', 'justify-between');
+  });
+
   it('el contador arranca en 0/180', () => {
     renderForm();
 
