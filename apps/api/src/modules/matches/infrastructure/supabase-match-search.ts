@@ -6,6 +6,7 @@ import {
   SEARCH_MIN_LIMIT,
   type MatchSearch,
   type MatchSearchPage,
+  type SearchKind,
   type SearchPage,
   type SearchQuery,
   type TeamSearchPage,
@@ -57,7 +58,16 @@ interface DecodedCursor {
 // carácter reservado de PostgREST, así que no hace falta además escaparlo.
 const CURSOR_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function decodeCursor(cursor: string): DecodedCursor {
+// El orden de partidos es por `kickoff_at`: su valor en el cursor tiene que ser
+// una fecha real. Postgres devuelve p. ej. `2026-10-24T17:34:02.941698+00:00`.
+const CURSOR_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}(:?\d{2})?)$/;
+
+function isValidTimestamp(value: string): boolean {
+  return CURSOR_TIMESTAMP_PATTERN.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+function decodeCursor(cursor: string, kind: SearchKind): DecodedCursor {
   let decoded: string;
   try {
     decoded = Buffer.from(cursor, 'base64url').toString('utf8');
@@ -77,6 +87,10 @@ function decodeCursor(cursor: string): DecodedCursor {
     throw new InvalidSearchCursorError();
   }
 
+  if (kind === 'matches' && !isValidTimestamp(sortValue)) {
+    throw new InvalidSearchCursorError();
+  }
+
   return { sortValue, id };
 }
 
@@ -90,10 +104,20 @@ function quoteFilterValue(value: string): string {
   return `"${escaped}"`;
 }
 
-// Escapa los caracteres especiales de ILIKE para que el texto buscado se
-// trate siempre como literal, nunca como patrón.
-function escapeLikePattern(text: string): string {
-  return text.replace(/[\\%_]/g, (char) => `\\${char}`);
+// La comparación del texto buscado es siempre literal. No se usa `ilike`
+// porque PostgREST traduce `*` a `%` en ese operador y no ofrece cómo escaparlo:
+// un `*` del usuario actuaría como comodín. `imatch` (regex, sin distinguir
+// mayúsculas) con el texto escapado compara literal también ante `*`, `%`, `_`.
+function escapeRegex(text: string): string {
+  return text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+}
+
+function containsText<T extends { filter(column: string, operator: string, value: string): T }>(
+  builder: T,
+  column: string,
+  text: string,
+): T {
+  return builder.filter(column, 'imatch', escapeRegex(text));
 }
 
 /**
@@ -110,7 +134,7 @@ export class SupabaseMatchSearch implements MatchSearch {
   async search(query: SearchQuery): Promise<SearchPage> {
     const limit = clampLimit(query.limit);
     const text = query.query.trim();
-    const cursor = query.cursor ? decodeCursor(query.cursor) : null;
+    const cursor = query.cursor ? decodeCursor(query.cursor, query.kind) : null;
 
     return query.kind === 'teams'
       ? this.searchTeams(text, limit, cursor)
@@ -130,7 +154,7 @@ export class SupabaseMatchSearch implements MatchSearch {
       .limit(limit + 1);
 
     if (text !== '') {
-      builder = builder.ilike('name', `%${escapeLikePattern(text)}%`);
+      builder = containsText(builder, 'name', text);
     }
 
     if (cursor) {
@@ -167,10 +191,7 @@ export class SupabaseMatchSearch implements MatchSearch {
     let lastId: string | null = null;
 
     for (;;) {
-      let builder = this.client
-        .from('teams')
-        .select('id')
-        .ilike('name', `%${escapeLikePattern(text)}%`)
+      let builder = containsText(this.client.from('teams').select('id'), 'name', text)
         .order('id', { ascending: true })
         .limit(TEAM_LOOKUP_BATCH_SIZE);
 

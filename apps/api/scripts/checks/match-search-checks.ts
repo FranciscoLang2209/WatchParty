@@ -74,6 +74,21 @@ export async function checkMatchSearchReservedCharacters(
         detail: `Segunda página devolvió ${second.items.length} resultado(s) sin error.`,
       });
     }
+
+    // `*` es comodín de PostgREST en `ilike`; acá tiene que compararse literal.
+    for (const text of ['*', '.', '(Reserva)', '%', '_']) {
+      const page = await search.search({ query: text, kind: 'teams', limit: 20 });
+      const nombres = page.kind === 'teams' ? page.items.map((team) => team.name) : [];
+      const todosContienen = nombres.every((name) =>
+        name.toLowerCase().includes(text.toLowerCase()),
+      );
+
+      results.push({
+        label: `El texto «${text}» se busca literal, sin actuar como comodín ni regex`,
+        passed: todosContienen,
+        detail: `Encontrados: ${nombres.join(', ') || 'ninguno'}`,
+      });
+    }
   } catch (error) {
     results.push({
       label: 'La búsqueda con caracteres reservados no lanza un error de PostgREST',

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseMatchSearch, TEAM_LOOKUP_BATCH_SIZE } from './supabase-match-search.js';
-import { SEARCH_MAX_LIMIT } from '../domain/match-search.js';
+import { InvalidSearchCursorError, SEARCH_MAX_LIMIT } from '../domain/match-search.js';
 
 type FakeResult = { data: unknown; error: { message: string; code?: string } | null };
 
@@ -15,6 +15,10 @@ function makeQueryBuilder(result: FakeResult) {
     }),
     ilike: vi.fn((...args: unknown[]) => {
       calls.push({ method: 'ilike', args });
+      return builder;
+    }),
+    filter: vi.fn((...args: unknown[]) => {
+      calls.push({ method: 'filter', args });
       return builder;
     }),
     order: vi.fn((...args: unknown[]) => {
@@ -110,7 +114,8 @@ describe('SupabaseMatchSearch', () => {
 
       expect(page).toEqual({ kind: 'teams', items: [RIVER], nextCursor: null });
       const builder = nthBuilder(client.builders.teams, 0);
-      expect(builder.ilike).toHaveBeenCalledWith('name', '%river%');
+      expect(builder.filter).toHaveBeenCalledWith('name', 'imatch', 'river');
+      expect(builder.ilike).not.toHaveBeenCalled();
       expect(builder.limit).toHaveBeenCalledWith(6);
       expect(builder.order).toHaveBeenNthCalledWith(1, 'name', { ascending: true });
       expect(builder.order).toHaveBeenNthCalledWith(2, 'id', { ascending: true });
@@ -272,7 +277,43 @@ describe('SupabaseMatchSearch', () => {
     });
   });
 
+  describe('texto literal', () => {
+    it.each([
+      ['*', '\\*'],
+      ['%', '%'],
+      ['_', '_'],
+      ['a.b', 'a\\.b'],
+      ['(Reserva)', '\\(Reserva\\)'],
+      ['a|b[c]{1}^$+?\\', 'a\\|b\\[c\\]\\{1\\}\\^\\$\\+\\?\\\\'],
+    ])('el texto %s se compara escapado, nunca como patrón', async (text, escaped) => {
+      const client = makeFakeClient({ teams: [() => ({ data: [], error: null })] });
+      const search = new SupabaseMatchSearch(asSupabaseClient(client));
+
+      await search.search({ query: text, kind: 'teams', limit: 5 });
+
+      const builder = nthBuilder(client.builders.teams, 0);
+      expect(builder.filter).toHaveBeenCalledWith('name', 'imatch', escaped);
+      expect(builder.ilike).not.toHaveBeenCalled();
+    });
+
+    it('en la búsqueda de partidos el lookup de equipos también compara literal', async () => {
+      const client = makeFakeClient({ teams: [() => ({ data: [], error: null })] });
+      const search = new SupabaseMatchSearch(asSupabaseClient(client));
+
+      const page = await search.search({ query: '*', kind: 'matches', limit: 5 });
+
+      expect(page.items).toEqual([]);
+      expect(nthBuilder(client.builders.teams, 0).filter).toHaveBeenCalledWith(
+        'name',
+        'imatch',
+        '\\*',
+      );
+    });
+  });
+
   describe('cursor inválido', () => {
+    const CURSOR_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-000000000000';
+
     it('un cursor sin separador interno se rechaza', async () => {
       const client = makeFakeClient({});
       const search = new SupabaseMatchSearch(asSupabaseClient(client));
@@ -293,6 +334,47 @@ describe('SupabaseMatchSearch', () => {
       await expect(
         search.search({ query: '', kind: 'teams', limit: 1, cursor: brokenCursor }),
       ).rejects.toThrow('Cursor de búsqueda inválido.');
+    });
+
+    it('un cursor de partidos con fecha inválida se rechaza antes de consultar', async () => {
+      const client = makeFakeClient({});
+      const search = new SupabaseMatchSearch(asSupabaseClient(client));
+      const brokenCursor = Buffer.from(`not-a-date\u0000${CURSOR_ID}`, 'utf8').toString(
+        'base64url',
+      );
+
+      await expect(
+        search.search({ query: '', kind: 'matches', limit: 1, cursor: brokenCursor }),
+      ).rejects.toBeInstanceOf(InvalidSearchCursorError);
+      expect(client.fromCalls).toEqual([]);
+    });
+
+    it.each([
+      '2026-13-45T99:99:99Z',
+      '2026-10-24',
+      '2026-10-24T17:34:02',
+      '1',
+      '2026-10-24T17:34:02Z,x',
+    ])('un cursor de partidos con la fecha «%s» se rechaza', async (fecha) => {
+      const client = makeFakeClient({});
+      const search = new SupabaseMatchSearch(asSupabaseClient(client));
+      const cursor = Buffer.from(`${fecha}\u0000${CURSOR_ID}`, 'utf8').toString('base64url');
+
+      await expect(
+        search.search({ query: '', kind: 'matches', limit: 1, cursor }),
+      ).rejects.toBeInstanceOf(InvalidSearchCursorError);
+    });
+
+    it('un cursor de equipos acepta cualquier nombre como valor de orden', async () => {
+      const client = makeFakeClient({ teams: [() => ({ data: [], error: null })] });
+      const search = new SupabaseMatchSearch(asSupabaseClient(client));
+      const cursor = Buffer.from(`not-a-date\u0000${CURSOR_ID}`, 'utf8').toString('base64url');
+
+      await expect(search.search({ query: '', kind: 'teams', limit: 1, cursor })).resolves.toEqual({
+        kind: 'teams',
+        items: [],
+        nextCursor: null,
+      });
     });
   });
 });
