@@ -117,6 +117,19 @@ a mano (por ejemplo en `app.test.ts`, vía `createApp(new LocalMatchCatalog())`)
 variable requerida), `env.ts` explota al importarse — no hay try/catch que
 caiga de vuelta a `LocalMatchCatalog`.
 
+## `GET /matches/search` (WAT-239)
+
+Expone `MatchSearch` (WAT-167) por HTTP, con sesión. Busca por parte del nombre
+del equipo local o visitante, sin distinguir mayúsculas, entre **todos** los
+partidos persistidos (anteriores y futuros): no usa la agenda móvil ni consulta
+al proveedor deportivo.
+
+- `q` (obligatorio, 1–100 caracteres tras recortar): se trata como texto literal.
+- `limit` (opcional, entero 1–20, por defecto 10) y `cursor` (opcional, el
+  `nextCursor` de la página anterior).
+- Respuesta: `{ matches, nextCursor }`, ordenada por `kickoffAt` e `id`.
+- Parámetros inválidos, repetidos o un cursor alterado: `400 VALIDATION_ERROR`.
+
 ## Fuera de alcance de este módulo (por ahora)
 
 Autenticación, proveedor deportivo real (sincronización automática —

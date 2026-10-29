@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
+  InvalidSearchCursorError,
   SEARCH_DEFAULT_LIMIT,
   SEARCH_MAX_LIMIT,
   SEARCH_MIN_LIMIT,
@@ -61,19 +62,19 @@ function decodeCursor(cursor: string): DecodedCursor {
   try {
     decoded = Buffer.from(cursor, 'base64url').toString('utf8');
   } catch {
-    throw new Error('Cursor de búsqueda inválido.');
+    throw new InvalidSearchCursorError();
   }
 
   const separatorIndex = decoded.indexOf(CURSOR_SEPARATOR);
   if (separatorIndex === -1) {
-    throw new Error('Cursor de búsqueda inválido.');
+    throw new InvalidSearchCursorError();
   }
 
   const sortValue = decoded.slice(0, separatorIndex);
   const id = decoded.slice(separatorIndex + 1);
 
   if (sortValue === '' || !CURSOR_ID_PATTERN.test(id)) {
-    throw new Error('Cursor de búsqueda inválido.');
+    throw new InvalidSearchCursorError();
   }
 
   return { sortValue, id };

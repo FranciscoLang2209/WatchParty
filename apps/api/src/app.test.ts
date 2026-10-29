@@ -74,6 +74,7 @@ const app = createApp(
   noopWatchedStore,
   noopRatingStore,
   noopStatisticsStore,
+  { search: async () => ({ kind: 'matches', items: [], nextCursor: null }) },
 );
 
 describe('GET /health', () => {

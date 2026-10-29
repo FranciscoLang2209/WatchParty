@@ -4,6 +4,8 @@ import { env } from './config/env.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 import { createMatchesRouter } from './modules/matches/http/matches-router.js';
 import type { MatchCatalog } from './modules/matches/domain/match-catalog.js';
+import type { MatchSearch } from './modules/matches/domain/match-search.js';
+import { SupabaseMatchSearch } from './modules/matches/infrastructure/supabase-match-search.js';
 import { createSupabaseSportsDataClient } from './modules/matches/infrastructure/supabase-sports-data-client.js';
 import { SupabaseMatchStore } from './modules/matches/infrastructure/supabase-match-store.js';
 import { SupabaseMatchCatalog } from './modules/matches/infrastructure/supabase-match-catalog.js';
@@ -52,6 +54,7 @@ export function createApp(
   watchedStore: WatchedMatchStore,
   ratingStore: MatchRatingStore,
   statisticsStore: UserStatisticsStore,
+  matchSearch: MatchSearch,
 ): Express {
   const app = express();
 
@@ -72,7 +75,7 @@ export function createApp(
     res.status(200).json({ status: 'ok' });
   });
 
-  app.use('/matches', createMatchesRouter(matchCatalog));
+  app.use('/matches', createMatchesRouter(matchCatalog, undefined, matchSearch));
   app.use('/matches', createWatchedRouter(watchedStore));
   app.use(
     '/matches',
@@ -111,6 +114,7 @@ const reactionStore = new SupabaseRoomCommentReactionStore(sportsDataClient);
 const watchedStore = new SupabaseWatchedMatchStore(sportsDataClient, matchCatalog);
 const ratingStore = new SupabaseMatchRatingStore(sportsDataClient);
 const statisticsStore = new SupabaseUserStatisticsStore(sportsDataClient);
+const matchSearch = new SupabaseMatchSearch(sportsDataClient);
 
 export default createApp(
   matchCatalog,
@@ -121,4 +125,5 @@ export default createApp(
   watchedStore,
   ratingStore,
   statisticsStore,
+  matchSearch,
 );
