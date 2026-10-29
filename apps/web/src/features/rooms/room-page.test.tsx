@@ -624,6 +624,21 @@ describe('Sala: encabezado del partido', () => {
     );
   }
 
+  /** Responde el partido del encabezado con campos distintos; el resto como en el caso base. */
+  function mockPartido(cambios: Record<string, unknown>) {
+    fetchSpy.mockImplementation((input: unknown) =>
+      Promise.resolve(
+        esPartido(input)
+          ? jsonResponse({ match: { ...partido, ...cambios } })
+          : esComentarios(input)
+            ? jsonResponse({ comments: [] })
+            : esReaccion(input)
+              ? jsonResponse({ reaction: { count: 0, reacted: false } })
+              : jsonResponse({ room: sala }),
+      ),
+    );
+  }
+
   it('pide el partido de la sala con bearer y muestra los equipos en vez del UUID', async () => {
     renderAt('/rooms/room-123');
 
@@ -650,6 +665,44 @@ describe('Sala: encabezado del partido', () => {
     // 21:00 UTC son las 18:00 en Argentina.
     expect(p.getByText(/18:00/)).toBeInTheDocument();
     expect(p.getByText('En vivo')).toBeInTheDocument();
+  });
+
+  it('con marcador lo destaca y deja el horario como dato secundario', async () => {
+    mockPartido({ status: 'finished', score: { home: 2, away: 1 } });
+
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+
+    expect(await p.findByText('Resultado: River Plate 2, Boca Juniors 1')).toBeInTheDocument();
+    expect(p.getByText('Finalizado')).toBeInTheDocument();
+    expect(p.getByText(/18:00/)).toHaveClass('text-muted-foreground');
+  });
+
+  it('sin resultado destaca el horario y no inventa un 0–0 ni «Sin resultado»', async () => {
+    renderAt('/rooms/room-123');
+
+    const p = await pantalla();
+    const horario = await p.findByText(/18:00/);
+
+    expect(horario).toHaveClass('font-display');
+    expect(p.queryByText(/Resultado:/)).not.toBeInTheDocument();
+    expect(p.queryByText('Sin resultado')).not.toBeInTheDocument();
+    expect(p.queryByText(/0 – 0/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['live', 'En vivo'],
+    ['scheduled', 'Programado'],
+    ['finished', 'Finalizado'],
+    ['postponed', 'Postergado'],
+    ['cancelled', 'Cancelado'],
+  ])('muestra el estado %s como texto «%s»', async (status, etiqueta) => {
+    mockPartido({ status });
+
+    renderAt('/rooms/room-123');
+
+    expect(await (await pantalla()).findByText(etiqueta)).toBeInTheDocument();
   });
 
   it('enlaza al detalle del partido por su id opaco, con nombre accesible', async () => {
