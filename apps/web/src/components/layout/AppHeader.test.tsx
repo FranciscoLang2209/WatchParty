@@ -74,10 +74,9 @@ describe('AppHeader — marca y navegación', () => {
     const nav = screen.getByRole('navigation', { name: 'Navegación principal' });
 
     expect(nav).toBeInTheDocument();
-    for (const label of ['Inicio', 'Salas', 'Perfil']) {
+    for (const label of ['Inicio', 'Salas', 'Buscar', 'Perfil']) {
       expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
     }
-    expect(screen.getByRole('button', { name: 'Buscar, Próximamente' })).toBeInTheDocument();
   });
 
   it('lleva a /profile y lo marca activo, igual que la barra inferior', () => {
@@ -112,18 +111,13 @@ describe('AppHeader — marca y navegación', () => {
     expect(screen.getByRole('link', { name: 'Inicio' })).not.toHaveAttribute('aria-current');
   });
 
-  it('los destinos futuros están deshabilitados y no cambian la URL', async () => {
-    const { user } = renderHeader({ path: '/' });
+  it('lleva a /search y lo marca activo, igual que la barra inferior', () => {
+    renderHeader({ path: '/search' });
 
-    const buscar = screen.getByRole('button', { name: 'Buscar, Próximamente' });
+    const buscar = screen.getByRole('link', { name: 'Buscar' });
 
-    expect(buscar).toHaveAttribute('aria-disabled', 'true');
-    expect(buscar.tagName).toBe('BUTTON');
-
-    await user.click(buscar);
-
-    expect(screen.getByText('ruta: /')).toBeInTheDocument();
-    expect(screen.queryByText('ruta: /rooms')).not.toBeInTheDocument();
+    expect(buscar).toHaveAttribute('href', '/search');
+    expect(buscar).toHaveAttribute('aria-current', 'page');
   });
 
   it('permite recorrer la cabecera con el teclado', async () => {

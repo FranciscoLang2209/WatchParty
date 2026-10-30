@@ -29,6 +29,13 @@ export interface Match {
   score: MatchScore | null;
 }
 
+/** Página de la búsqueda de partidos (`GET /matches/search`). */
+export interface MatchSearchPage {
+  matches: Match[];
+  /** `null` cuando no hay otra página; si no, se pasa como `cursor` para pedirla. */
+  nextCursor: string | null;
+}
+
 /** La API envuelve sus respuestas: la lista en `matches` y el detalle en `match`. */
 export interface MatchesEnvelope {
   matches: Match[];

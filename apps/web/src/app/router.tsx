@@ -11,6 +11,7 @@ import { MatchDetailPage } from '@/features/matches/MatchDetailPage';
 import { ProfilePage } from '@/features/profiles/ProfilePage';
 import { RoomPage } from '@/features/rooms/RoomPage';
 import { RoomsDirectoryPage } from '@/features/rooms/RoomsDirectoryPage';
+import { SearchPage } from '@/features/search/SearchPage';
 
 /**
  * Área privada con una excepción: `/` sin sesión muestra la landing en lugar de
@@ -45,6 +46,7 @@ export function AppRoutes() {
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/rooms" element={<RoomsDirectoryPage />} />
         <Route path="/rooms/:roomId" element={<RoomPage />} />
+        <Route path="/search" element={<SearchPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
