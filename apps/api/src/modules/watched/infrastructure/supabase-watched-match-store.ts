@@ -8,6 +8,7 @@ import {
 import { isValidMatchRating } from '../../ratings/domain/match-rating-store.js';
 import {
   isValidWatchedAtCursor,
+  isWatchedHistoryRatingStatus,
   type ListWatchedHistoryPageOptions,
   type WatchedHistoryCursor,
   type WatchedHistoryPage,
@@ -136,7 +137,7 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
    */
   async listHistoryPage(
     userId: string,
-    { limit, before, teamId }: ListWatchedHistoryPageOptions,
+    { limit, before, teamId, ratingStatus = 'all' }: ListWatchedHistoryPageOptions,
   ): Promise<WatchedHistoryPage> {
     if (!Number.isInteger(limit) || limit < 1) {
       throw new RangeError('El límite de la página debe ser un entero mayor o igual a 1.');
@@ -144,6 +145,17 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
     if (before) assertValidCursor(before);
     if (teamId !== undefined && !UUID_PATTERN.test(teamId)) {
       throw new RangeError('El equipo del filtro del historial de vistos es inválido.');
+    }
+    if (!isWatchedHistoryRatingStatus(ratingStatus)) {
+      throw new RangeError('El filtro por nota del historial de vistos es inválido.');
+    }
+
+    // `match_ratings` no tiene FK hacia `watched_matches`: primero se leen los
+    // partidos que el usuario calificó y después se filtran sus vistos con
+    // `in`/`not in` en la misma consulta que pagina, antes del `limit`.
+    const ratedMatchIds = ratingStatus === 'all' ? [] : await this.findRatedMatchIds(userId);
+    if (ratingStatus === 'rated' && ratedMatchIds.length === 0) {
+      return { items: [], nextCursor: null };
     }
 
     let query = this.client
@@ -157,6 +169,12 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
       query = query.or(`home_team_id.eq.${teamId},away_team_id.eq.${teamId}`, {
         referencedTable: 'match',
       });
+    }
+
+    if (ratingStatus === 'rated') {
+      query = query.in('match_id', ratedMatchIds);
+    } else if (ratingStatus === 'unrated' && ratedMatchIds.length > 0) {
+      query = query.not('match_id', 'in', `(${ratedMatchIds.join(',')})`);
     }
 
     if (before) {
@@ -201,6 +219,27 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
       nextCursor:
         hasMore && lastRow ? { watchedAt: lastRow.created_at, matchId: lastRow.match_id } : null,
     };
+  }
+
+  /**
+   * IDs de los partidos que `userId` calificó (WAT-263), para filtrar el
+   * historial por nota antes de paginar. Solo las notas de `userId`: la de
+   * otro usuario sobre el mismo partido no lo vuelve "calificado".
+   */
+  private async findRatedMatchIds(userId: string): Promise<string[]> {
+    const { data, error } = await this.client
+      .from('match_ratings')
+      .select('match_id')
+      .eq('user_id', userId);
+
+    if (error) {
+      throw new WatchedMatchPersistenceError(
+        'No se pudieron leer las notas para filtrar el historial de vistos.',
+        error,
+      );
+    }
+
+    return ((data ?? []) as { match_id: string }[]).map((row) => row.match_id);
   }
 
   /**
