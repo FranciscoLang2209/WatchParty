@@ -8,16 +8,40 @@ import { MatchSummaryCard } from '@/features/matches/MatchSummaryCard';
 import { searchMatches } from '@/features/matches/api';
 import { MatchesApiError, isCancelled, isUnauthorized, type Match } from '@/features/matches/types';
 
-type Estado =
+/** Carga de la página siguiente: un fallo acá no toca los resultados ya mostrados. */
+type PaginaSiguiente =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'ready'; query: string; matches: Match[]; hayMas: boolean }
+  | { status: 'error'; message: string; expired: boolean };
+
+type Estado =
+  // Todavía no se buscó nada.
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | {
+      status: 'ready';
+      query: string;
+      matches: Match[];
+      /** `null` cuando no hay otra página. */
+      nextCursor: string | null;
+      siguiente: PaginaSiguiente;
+    }
   | { status: 'error'; query: string; message: string; expired: boolean };
 
 /** Debe coincidir con el máximo que acepta la API para `q`. */
 const TEXTO_MAX = 100;
+/** Tamaño de página de la API (WAT-240). */
+const PAGE_SIZE = 20;
 const MENSAJE_VACIO = 'Escribí el nombre de un equipo para buscar.';
 const MENSAJE_INESPERADO = 'No pudimos completar la búsqueda. Intentá de nuevo.';
+
+function describirError(error: unknown): { message: string; expired: boolean } {
+  if (error instanceof MatchesApiError) {
+    return { message: error.message, expired: error.kind === 'unauthorized' };
+  }
+
+  return { message: MENSAJE_INESPERADO, expired: false };
+}
 
 /** Tope de reintentos por token renovado dentro de una misma petición. */
 const REINTENTOS_TOKEN_MAX = 3;
@@ -32,19 +56,19 @@ async function pedirPagina(
   query: string,
   token: string,
   tokenVigente: { readonly current: string | null },
-  signal: AbortSignal,
+  options: Parameters<typeof searchMatches>[2],
 ) {
   let usado = token;
 
   for (let reintento = 0; ; reintento += 1) {
     try {
-      return await searchMatches(query, usado, { signal });
+      return await searchMatches(query, usado, options);
     } catch (error) {
       const vigente = tokenVigente.current;
 
       if (
         !isUnauthorized(error) ||
-        signal.aborted ||
+        options?.signal?.aborted ||
         vigente === null ||
         vigente === usado ||
         reintento >= REINTENTOS_TOKEN_MAX
@@ -57,32 +81,29 @@ async function pedirPagina(
   }
 }
 
-function toEstadoError(query: string, error: unknown): Estado {
-  if (error instanceof MatchesApiError) {
-    return {
-      status: 'error',
-      query,
-      message: error.message,
-      expired: error.kind === 'unauthorized',
-    };
-  }
+/** Suma la página nueva sin repetir partidos que ya estaban (por id) y conserva el orden. */
+function sinRepetidos(existentes: Match[], nuevos: Match[]): Match[] {
+  const vistos = new Set(existentes.map((match) => match.id));
 
-  return { status: 'error', query, message: MENSAJE_INESPERADO, expired: false };
+  return [...existentes, ...nuevos.filter((match) => !vistos.has(match.id))];
 }
 
 /**
- * Pantalla de búsqueda (WAT-241). Consulta sólo al enviar el formulario — con el
- * botón o con Enter —, nunca al escribir. Muestra la primera página de la API;
- * cargar las siguientes no forma parte de este ticket, así que si hay más
- * resultados se avisa en vez de mostrar una lista que parece completa.
+ * Pantalla de búsqueda (WAT-241, WAT-243). Consulta sólo al enviar el formulario
+ * — con el botón o con Enter —, nunca al escribir.
  *
- * Renovar el token no cancela la búsqueda en curso: si ésta responde 401 por el
- * token reemplazado, se reintenta con el vigente en vez de mostrar la sesión
- * como vencida.
+ * Sólo cuenta la última petición: una búsqueda nueva, un cambio de sesión o salir
+ * de la pantalla abortan lo que esté en curso y su respuesta se descarta aunque
+ * llegue tarde. Una búsqueda nueva siempre arranca de la primera página.
+ *
+ * Renovar el token no cancela la petición en curso: si ésta responde 401 por el
+ * token reemplazado, se reintenta con el vigente sin tocar los resultados.
  */
 export function SearchPage() {
   const { session, signOut } = useAuth();
   const accessToken = session?.access_token ?? null;
+  // Identifica a la persona, no al token: renovarlo no cambia de sesión.
+  const userId = session?.user.id ?? null;
 
   const campoId = useId();
   const errorId = useId();
@@ -90,46 +111,118 @@ export function SearchPage() {
   const [texto, setTexto] = useState('');
   const [errorCampo, setErrorCampo] = useState<string | null>(null);
   const [estado, setEstado] = useState<Estado>({ status: 'idle' });
-  // La última búsqueda en curso: una nueva, o salir de la pantalla, descarta su respuesta.
+  // La petición vigente (primera página o «Cargar más»); sólo hay una a la vez.
   const controllerRef = useRef<AbortController | null>(null);
-  // El token vigente, para reintentar una petición cuyo token se renovó mientras tanto.
+  // El token vigente al momento de pedir, sin volver a crear los callbacks al renovarse.
   const tokenRef = useRef(accessToken);
+  // Destino del foco cuando «Cargar más» desaparece por ser la última página.
+  const resumenRef = useRef<HTMLParagraphElement>(null);
+  const cargarMasRef = useRef<HTMLButtonElement>(null);
+  const enfocarResumen = useRef(false);
 
   useEffect(() => {
     tokenRef.current = accessToken;
   }, [accessToken]);
 
-  useEffect(() => () => controllerRef.current?.abort(), []);
-
-  const buscar = useCallback(
-    (query: string) => {
-      if (accessToken === null) return;
-
+  // Otra persona en la misma pantalla no hereda resultados ni búsquedas de la anterior.
+  useEffect(() => {
+    return () => {
       controllerRef.current?.abort();
-      const controller = new AbortController();
-      controllerRef.current = controller;
+      controllerRef.current = null;
+      setTexto('');
+      setErrorCampo(null);
+      setEstado({ status: 'idle' });
+    };
+  }, [userId]);
 
-      setEstado({ status: 'loading' });
+  useEffect(() => {
+    if (!enfocarResumen.current) return;
 
-      pedirPagina(query, accessToken, tokenRef, controller.signal)
-        .then((page) => {
-          if (controller.signal.aborted) return;
+    enfocarResumen.current = false;
+    resumenRef.current?.focus();
+  }, [estado]);
 
-          setEstado({
-            status: 'ready',
-            query,
-            matches: page.matches,
-            hayMas: page.nextCursor !== null,
-          });
-        })
-        .catch((error: unknown) => {
-          if (controller.signal.aborted || isCancelled(error)) return;
+  const buscar = useCallback((query: string) => {
+    const token = tokenRef.current;
 
-          setEstado(toEstadoError(query, error));
+    if (token === null) return;
+
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+
+    setEstado({ status: 'loading' });
+
+    pedirPagina(query, token, tokenRef, { limit: PAGE_SIZE, signal: controller.signal })
+      .then((page) => {
+        if (controller.signal.aborted) return;
+
+        setEstado({
+          status: 'ready',
+          query,
+          matches: sinRepetidos([], page.matches),
+          nextCursor: page.nextCursor,
+          siguiente: { status: 'idle' },
         });
-    },
-    [accessToken],
-  );
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || isCancelled(error)) return;
+
+        setEstado({ status: 'error', query, ...describirError(error) });
+      });
+  }, []);
+
+  const cargarMas = useCallback(() => {
+    const token = tokenRef.current;
+
+    if (token === null || estado.status !== 'ready') return;
+    if (estado.nextCursor === null || estado.siguiente.status === 'loading') return;
+
+    const { query, nextCursor } = estado;
+
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+
+    setEstado({ ...estado, siguiente: { status: 'loading' } });
+
+    pedirPagina(query, token, tokenRef, {
+      cursor: nextCursor,
+      limit: PAGE_SIZE,
+      signal: controller.signal,
+    })
+      .then((page) => {
+        if (controller.signal.aborted) return;
+
+        // Sólo se traslada el foco si seguía en «Cargar más»: si la persona pasó al
+        // campo o a otro control mientras esperaba, no se le interrumpe.
+        const teniaElFoco = document.activeElement === cargarMasRef.current;
+
+        setEstado((actual) => {
+          if (actual.status !== 'ready' || actual.query !== query) return actual;
+
+          return {
+            ...actual,
+            matches: sinRepetidos(actual.matches, page.matches),
+            nextCursor: page.nextCursor,
+            siguiente: { status: 'idle' },
+          };
+        });
+
+        // El botón se va con la última página: el foco pasa al resumen.
+        if (page.nextCursor === null && teniaElFoco) enfocarResumen.current = true;
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || isCancelled(error)) return;
+
+        // Los resultados que ya estaban se conservan: sólo falla la página siguiente.
+        setEstado((actual) =>
+          actual.status === 'ready' && actual.query === query
+            ? { ...actual, siguiente: { status: 'error', ...describirError(error) } }
+            : actual,
+        );
+      });
+  }, [estado]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -204,6 +297,12 @@ export function SearchPage() {
           ) : null}
         </form>
 
+        {estado.status === 'idle' ? (
+          <p className="text-sm text-muted-foreground">
+            Escribí el nombre de un equipo y apretá Buscar para ver sus partidos.
+          </p>
+        ) : null}
+
         {estado.status === 'loading' ? (
           <p role="status" className="text-sm text-muted-foreground">
             Buscando…
@@ -229,7 +328,13 @@ export function SearchPage() {
 
         {estado.status === 'ready' ? (
           <section aria-label="Resultados de la búsqueda" className="flex min-w-0 flex-col gap-4">
-            <p role="status" className="text-sm text-muted-foreground">
+            <p
+              ref={resumenRef}
+              role="status"
+              // `tabIndex={-1}` sólo permite recibir el foco por código, no por Tab.
+              tabIndex={-1}
+              className="rounded-sm text-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               {estado.matches.length === 0
                 ? `No encontramos partidos para «${estado.query}».`
                 : `${estado.matches.length} ${estado.matches.length === 1 ? 'partido' : 'partidos'} para «${estado.query}».`}
@@ -245,10 +350,35 @@ export function SearchPage() {
               </ul>
             ) : null}
 
-            {estado.hayMas ? (
-              <p className="text-sm text-muted-foreground">
-                Hay más resultados. Probá con un nombre más específico para acotarlos.
+            {estado.siguiente.status === 'error' ? (
+              <p role="alert" className="text-sm text-destructive">
+                {estado.siguiente.message}
               </p>
+            ) : null}
+
+            {estado.siguiente.status === 'error' && estado.siguiente.expired ? (
+              <Button type="button" className="self-start" onClick={() => void signOut()}>
+                Iniciar sesión nuevamente
+              </Button>
+            ) : null}
+
+            {estado.nextCursor !== null &&
+            !(estado.siguiente.status === 'error' && estado.siguiente.expired) ? (
+              <Button
+                ref={cargarMasRef}
+                type="button"
+                variant="outline"
+                className="w-full self-start sm:w-auto"
+                aria-busy={estado.siguiente.status === 'loading'}
+                aria-disabled={estado.siguiente.status === 'loading'}
+                onClick={cargarMas}
+              >
+                {estado.siguiente.status === 'loading'
+                  ? 'Cargando…'
+                  : estado.siguiente.status === 'error'
+                    ? 'Reintentar'
+                    : 'Cargar más'}
+              </Button>
             ) : null}
           </section>
         ) : null}

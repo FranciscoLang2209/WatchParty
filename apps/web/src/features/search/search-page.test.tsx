@@ -98,6 +98,18 @@ afterEach(() => {
   fetchSpy.mockRestore();
 });
 
+function partido(n: number) {
+  return {
+    ...racing,
+    id: `match-${n}`,
+    homeTeam: `Local ${n}`,
+    awayTeam: `Visitante ${n}`,
+  };
+}
+
+const pagina = (desde: number, cantidad: number) =>
+  Array.from({ length: cantidad }, (_, i) => partido(desde + i));
+
 describe('Búsqueda: formulario', () => {
   it('muestra el campo con su etiqueta y el botón Buscar', async () => {
     const p = await pantalla();
@@ -105,6 +117,14 @@ describe('Búsqueda: formulario', () => {
     expect(p.getByRole('search')).toBeInTheDocument();
     expect(p.getByLabelText('Equipo')).toBeInTheDocument();
     expect(p.getByRole('button', { name: 'Buscar' })).toHaveAttribute('type', 'submit');
+  });
+
+  it('antes de buscar muestra la consulta vacía, distinta de «sin resultados»', async () => {
+    const p = await pantalla();
+
+    expect(p.getByText(/Escribí el nombre de un equipo y apretá Buscar/)).toBeInTheDocument();
+    expect(p.queryByText(/No encontramos partidos/)).not.toBeInTheDocument();
+    expect(p.queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('no consulta nada al montar ni mientras se escribe', async () => {
@@ -129,7 +149,7 @@ describe('Búsqueda: formulario', () => {
     expect(busquedas()).toHaveLength(1);
 
     const [url, init] = busquedas()[0]!;
-    expect(url).toBe(`${API_BASE}/matches/search?q=river`);
+    expect(url).toBe(`${API_BASE}/matches/search?q=river&limit=20`);
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-123');
   });
 
@@ -308,16 +328,6 @@ describe('Búsqueda: resultados', () => {
     expect(p.queryByRole('list')).not.toBeInTheDocument();
   });
 
-  it('si hay más páginas avisa en vez de aparentar una lista completa', async () => {
-    responderBusqueda({ matches: [river], nextCursor: 'siguiente' });
-    const user = userEvent.setup();
-    const p = await pantalla();
-
-    await user.type(p.getByLabelText('Equipo'), 'river{Enter}');
-
-    expect(await p.findByText(/Hay más resultados/)).toBeInTheDocument();
-  });
-
   it('una nueva búsqueda reemplaza los resultados anteriores', async () => {
     const user = userEvent.setup();
     const p = await pantalla();
@@ -482,5 +492,390 @@ describe('Búsqueda: errores', () => {
       expect(await p.findByRole('alert')).toHaveTextContent('La sesión venció');
       expect(busquedas()).toHaveLength(1);
     });
+  });
+});
+
+describe('Búsqueda: Cargar más', () => {
+  /** Responde la primera página y, con `cursor`, la que corresponda. */
+  function responderPaginas(paginas: Record<string, unknown>) {
+    fetchSpy.mockImplementation((input: unknown) => {
+      if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+
+      const cursor = new URL(String(input)).searchParams.get('cursor') ?? 'primera';
+
+      return Promise.resolve(jsonResponse(paginas[cursor]));
+    });
+  }
+
+  async function buscarYEsperar(p: Awaited<ReturnType<typeof pantalla>>, texto = 'local') {
+    const user = userEvent.setup();
+
+    await user.type(p.getByLabelText('Equipo'), `${texto}{Enter}`);
+    await p.findByRole('list');
+
+    return user;
+  }
+
+  it('sin otra página no muestra Cargar más', async () => {
+    responderPaginas({ primera: { matches: pagina(1, 3), nextCursor: null } });
+    const p = await pantalla();
+
+    await buscarYEsperar(p);
+
+    expect(p.queryByRole('button', { name: 'Cargar más' })).not.toBeInTheDocument();
+  });
+
+  it('pide páginas de 20 y suma la siguiente a los resultados existentes', async () => {
+    responderPaginas({
+      primera: { matches: pagina(1, 20), nextCursor: 'c1' },
+      c1: { matches: pagina(21, 5), nextCursor: null },
+    });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    expect(p.getByText('20 partidos para «local».')).toBeInTheDocument();
+
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+
+    expect(await p.findByText('25 partidos para «local».')).toBeInTheDocument();
+    expect(p.getAllByRole('listitem')).toHaveLength(25);
+    expect(p.getByRole('heading', { name: 'Local 1 vs. Visitante 1' })).toBeInTheDocument();
+    expect(p.getByRole('heading', { name: 'Local 25 vs. Visitante 25' })).toBeInTheDocument();
+
+    const [primera, segunda] = busquedas().map(([url]) => new URL(url).searchParams);
+    expect(primera!.get('limit')).toBe('20');
+    expect(primera!.has('cursor')).toBe(false);
+    expect(segunda!.get('limit')).toBe('20');
+    expect(segunda!.get('cursor')).toBe('c1');
+    expect(segunda!.get('q')).toBe('local');
+  });
+
+  it('con la última página el botón desaparece y el foco pasa al resumen', async () => {
+    responderPaginas({
+      primera: { matches: pagina(1, 20), nextCursor: 'c1' },
+      c1: { matches: pagina(21, 1), nextCursor: null },
+    });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+
+    await waitFor(() => expect(p.queryByRole('button', { name: 'Cargar más' })).toBeNull());
+    expect(p.getByText('21 partidos para «local».')).toHaveFocus();
+  });
+
+  it('un 401 del token reemplazado al cargar más se reintenta con el vigente y conserva los resultados', async () => {
+    const tokenDe = (init: RequestInit) => new Headers(init.headers).get('Authorization');
+    const pendientes: Array<() => void> = [];
+
+    // Con `token-123` la segunda página queda en espera hasta rechazarla con 401.
+    fetchSpy.mockImplementation((input: unknown, init?: RequestInit) => {
+      if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+
+      const cursor = new URL(String(input)).searchParams.get('cursor');
+
+      if (cursor === null) {
+        return Promise.resolve(jsonResponse({ matches: pagina(1, 20), nextCursor: 'c1' }));
+      }
+
+      if (tokenDe(init ?? {}) === 'Bearer token-123') {
+        return new Promise<Response>((resolve) => {
+          pendientes.push(() => resolve(jsonResponse({ error: { code: 'UNAUTHORIZED' } }, 401)));
+        });
+      }
+
+      return Promise.resolve(jsonResponse({ matches: pagina(21, 5), nextCursor: null }));
+    });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+    await waitFor(() => expect(pendientes).toHaveLength(1));
+
+    const alCambiarAuth = authMock.onAuthStateChange.mock.calls[0]![0] as (
+      event: string,
+      session: Session,
+    ) => void;
+    act(() =>
+      alCambiarAuth('TOKEN_REFRESHED', { ...session, access_token: 'token-nuevo' } as Session),
+    );
+    act(() => pendientes.splice(0).forEach((rechazar) => rechazar()));
+
+    expect(await p.findByText('25 partidos para «local».')).toBeInTheDocument();
+    expect(p.queryByText(/La sesión venció/)).not.toBeInTheDocument();
+    expect(p.getAllByRole('listitem')).toHaveLength(25);
+
+    const [, , reintento] = busquedas();
+    expect(tokenDe(reintento![1])).toBe('Bearer token-nuevo');
+    expect(new URL(reintento![0]).searchParams.get('cursor')).toBe('c1');
+  });
+
+  it('si la persona pasó al campo mientras carga, la última página no le quita el foco', async () => {
+    let resolver: (response: Response) => void = () => {};
+    fetchSpy.mockImplementation((input: unknown) => {
+      if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+
+      if (new URL(String(input)).searchParams.has('cursor')) {
+        return new Promise<Response>((resolve) => {
+          resolver = resolve;
+        });
+      }
+
+      return Promise.resolve(jsonResponse({ matches: pagina(1, 20), nextCursor: 'c1' }));
+    });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+    await p.findByRole('button', { name: 'Cargando…' });
+    await user.click(p.getByLabelText('Equipo'));
+    await user.type(p.getByLabelText('Equipo'), ' otra');
+
+    act(() => resolver(jsonResponse({ matches: pagina(21, 1), nextCursor: null })));
+
+    await waitFor(() =>
+      expect(p.queryByRole('button', { name: /Cargando…|Cargar más/ })).toBeNull(),
+    );
+    expect(p.getByLabelText('Equipo')).toHaveFocus();
+    expect(p.getByText('21 partidos para «local».')).not.toHaveFocus();
+
+    await user.type(p.getByLabelText('Equipo'), ' más');
+    expect(p.getByLabelText('Equipo')).toHaveValue('local otra más');
+  });
+
+  it('mientras carga la página siguiente no admite un segundo pedido', async () => {
+    let resolver: (response: Response) => void = () => {};
+    fetchSpy.mockImplementation((input: unknown) => {
+      if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+      if (!new URL(String(input)).searchParams.has('cursor')) {
+        return Promise.resolve(jsonResponse({ matches: pagina(1, 20), nextCursor: 'c1' }));
+      }
+      return new Promise<Response>((resolve) => {
+        resolver = resolve;
+      });
+    });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+    const cargando = await p.findByRole('button', { name: 'Cargando…' });
+    await user.click(cargando);
+    await user.click(cargando);
+
+    expect(cargando).toHaveAttribute('aria-busy', 'true');
+    expect(busquedas()).toHaveLength(2);
+
+    resolver(jsonResponse({ matches: pagina(21, 1), nextCursor: null }));
+    expect(await p.findByText('21 partidos para «local».')).toBeInTheDocument();
+  });
+
+  it('si falla la página siguiente conserva los resultados y permite reintentar', async () => {
+    const paginas: Record<string, unknown> = {
+      primera: { matches: pagina(1, 20), nextCursor: 'c1' },
+    };
+    responderPaginas(paginas);
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    fetchSpy.mockImplementation((input: unknown) =>
+      Promise.resolve(
+        esBusqueda(input)
+          ? jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)
+          : jsonResponse({ matches: [] }),
+      ),
+    );
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+
+    expect(await p.findByRole('alert')).toHaveTextContent('No pudimos cargar los partidos');
+    expect(p.getAllByRole('listitem')).toHaveLength(20);
+    expect(p.getByText('20 partidos para «local».')).toBeInTheDocument();
+
+    paginas.c1 = { matches: pagina(21, 2), nextCursor: null };
+    responderPaginas(paginas);
+    await user.click(p.getByRole('button', { name: 'Reintentar' }));
+
+    expect(await p.findByText('22 partidos para «local».')).toBeInTheDocument();
+    expect(p.queryByRole('alert')).not.toBeInTheDocument();
+    expect(new URL(busquedas().at(-1)![0]).searchParams.get('cursor')).toBe('c1');
+  });
+
+  it('con la sesión vencida al paginar conserva los resultados y ofrece volver a ingresar', async () => {
+    responderPaginas({ primera: { matches: pagina(1, 20), nextCursor: 'c1' } });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    fetchSpy.mockImplementation((input: unknown) =>
+      Promise.resolve(
+        esBusqueda(input)
+          ? jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401)
+          : jsonResponse({ matches: [] }),
+      ),
+    );
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+
+    expect(await p.findByRole('alert')).toHaveTextContent('La sesión venció');
+    expect(p.getAllByRole('listitem')).toHaveLength(20);
+    expect(p.queryByRole('button', { name: 'Reintentar' })).not.toBeInTheDocument();
+
+    await user.click(p.getByRole('button', { name: 'Iniciar sesión nuevamente' }));
+    expect(authMock.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('no repite partidos que la página siguiente devuelve otra vez', async () => {
+    responderPaginas({
+      primera: { matches: pagina(1, 20), nextCursor: 'c1' },
+      c1: { matches: [...pagina(19, 4)], nextCursor: null },
+    });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+
+    expect(await p.findByText('22 partidos para «local».')).toBeInTheDocument();
+    expect(p.getAllByRole('heading', { name: 'Local 19 vs. Visitante 19' })).toHaveLength(1);
+    expect(p.getAllByRole('heading', { name: 'Local 20 vs. Visitante 20' })).toHaveLength(1);
+  });
+
+  it('una búsqueda nueva reinicia la paginación: sin cursor y sin resultados viejos', async () => {
+    responderPaginas({
+      primera: { matches: pagina(1, 20), nextCursor: 'c1' },
+      c1: { matches: pagina(21, 5), nextCursor: null },
+    });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+    await p.findByText('25 partidos para «local».');
+
+    responderPaginas({ primera: { matches: [racing], nextCursor: null } });
+    await user.clear(p.getByLabelText('Equipo'));
+    await user.type(p.getByLabelText('Equipo'), 'racing{Enter}');
+
+    expect(await p.findByText('1 partido para «racing».')).toBeInTheDocument();
+    expect(p.getAllByRole('listitem')).toHaveLength(1);
+    expect(p.queryByRole('button', { name: 'Cargar más' })).not.toBeInTheDocument();
+    expect(new URL(busquedas().at(-1)![0]).searchParams.has('cursor')).toBe(false);
+  });
+
+  it('descarta la página siguiente que llega después de una búsqueda nueva', async () => {
+    let resolverVieja: (response: Response) => void = () => {};
+    fetchSpy.mockImplementation((input: unknown) => {
+      if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+
+      const params = new URL(String(input)).searchParams;
+
+      if (params.get('cursor') === 'c1') {
+        return new Promise<Response>((resolve) => {
+          resolverVieja = resolve;
+        });
+      }
+
+      return Promise.resolve(
+        jsonResponse(
+          params.get('q') === 'local'
+            ? { matches: pagina(1, 20), nextCursor: 'c1' }
+            : { matches: [racing], nextCursor: null },
+        ),
+      );
+    });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+    await p.findByRole('button', { name: 'Cargando…' });
+
+    await user.clear(p.getByLabelText('Equipo'));
+    await user.type(p.getByLabelText('Equipo'), 'racing{Enter}');
+    await p.findByText('1 partido para «racing».');
+
+    resolverVieja(jsonResponse({ matches: pagina(21, 5), nextCursor: null }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(p.getByText('1 partido para «racing».')).toBeInTheDocument();
+    expect(p.getAllByRole('listitem')).toHaveLength(1);
+  });
+
+  it('descarta una página siguiente fallida de una búsqueda anterior', async () => {
+    let rechazarVieja: (error: unknown) => void = () => {};
+    fetchSpy.mockImplementation((input: unknown) => {
+      if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+
+      const params = new URL(String(input)).searchParams;
+
+      if (params.get('cursor') === 'c1') {
+        return new Promise<Response>((_resolve, reject) => {
+          rechazarVieja = reject;
+        });
+      }
+
+      return Promise.resolve(
+        jsonResponse(
+          params.get('q') === 'local'
+            ? { matches: pagina(1, 20), nextCursor: 'c1' }
+            : { matches: [racing], nextCursor: null },
+        ),
+      );
+    });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+    await p.findByRole('button', { name: 'Cargando…' });
+    await user.clear(p.getByLabelText('Equipo'));
+    await user.type(p.getByLabelText('Equipo'), 'racing{Enter}');
+    await p.findByText('1 partido para «racing».');
+
+    rechazarVieja(new TypeError('fetch failed'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(p.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('al cambiar de sesión descarta resultados y respuestas pendientes de la anterior', async () => {
+    let resolverVieja: (response: Response) => void = () => {};
+    fetchSpy.mockImplementation((input: unknown) => {
+      if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+      return new Promise<Response>((resolve) => {
+        resolverVieja = resolve;
+      });
+    });
+    const user = userEvent.setup();
+    const p = await pantalla();
+
+    await user.type(p.getByLabelText('Equipo'), 'river{Enter}');
+    await p.findByText('Buscando…');
+
+    const alCambiarAuth = authMock.onAuthStateChange.mock.calls[0]![0] as (
+      event: string,
+      session: Session,
+    ) => void;
+    const otra = {
+      access_token: 'token-otra',
+      user: { id: 'user-2', email: 'c@d.com' },
+    } as Session;
+    act(() => alCambiarAuth('SIGNED_IN', otra));
+
+    await waitFor(() => expect(p.getByLabelText('Equipo')).toHaveValue(''));
+    expect(p.getByText(/Escribí el nombre de un equipo y apretá Buscar/)).toBeInTheDocument();
+
+    resolverVieja(jsonResponse({ matches: [river], nextCursor: null }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(p.queryByRole('heading', { name: 'River Plate vs. Boca Juniors' })).toBeNull();
+  });
+
+  it('renovar el token de la misma persona no borra sus resultados', async () => {
+    responderPaginas({ primera: { matches: pagina(1, 3), nextCursor: null } });
+    const p = await pantalla();
+    await buscarYEsperar(p);
+
+    const alCambiarAuth = authMock.onAuthStateChange.mock.calls[0]![0] as (
+      event: string,
+      session: Session,
+    ) => void;
+    act(() =>
+      alCambiarAuth('TOKEN_REFRESHED', { ...session, access_token: 'token-nuevo' } as Session),
+    );
+
+    expect(p.getByText('3 partidos para «local».')).toBeInTheDocument();
   });
 });
