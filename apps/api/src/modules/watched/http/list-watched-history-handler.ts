@@ -17,10 +17,12 @@ import { UUID_PATTERN } from './match-id-pattern.js';
 interface WatchedHistoryItemResponse {
   match: MatchResponse;
   watchedAt: string;
+  /** Nota propia (entero de 1 a 5), o `null` explícito si no lo calificó (WAT-261). */
+  rating: number | null;
 }
 
 function toWatchedHistoryItemResponse(item: WatchedHistoryItem): WatchedHistoryItemResponse {
-  return { match: toMatchResponse(item.match), watchedAt: item.watchedAt };
+  return { match: toMatchResponse(item.match), watchedAt: item.watchedAt, rating: item.rating };
 }
 
 /**
@@ -67,7 +69,9 @@ function parsePagination(query: Record<string, unknown>): ListWatchedHistoryPage
 /**
  * Handler de `GET /me/watched-matches` (WAT-217): historial propio de
  * partidos vistos, del más reciente al más antiguo. El usuario sale siempre
- * del bearer (`req.user`), nunca del query string.
+ * del bearer (`req.user`), nunca del query string. Cada item incluye la nota
+ * propia (WAT-261); si el store no pudo leerla, lanza y responde 500, nunca
+ * `rating: null`.
  */
 export function createListWatchedHistoryHandler(store: WatchedMatchStore): RequestHandler {
   return async (req, res, next) => {

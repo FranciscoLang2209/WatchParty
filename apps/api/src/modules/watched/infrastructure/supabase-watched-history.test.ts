@@ -23,7 +23,51 @@ interface HistoryRow {
   match: EmbeddedMatchRow;
 }
 
+interface RatingRow {
+  user_id: string;
+  match_id: string;
+  rating: unknown;
+}
+
 type FakeError = { message: string };
+
+interface FakeClientOptions {
+  selectError?: FakeError;
+  ratings?: RatingRow[];
+  ratingsError?: FakeError;
+}
+
+/**
+ * Doble de `match_ratings`: interpreta solo lo que arma `listHistoryPage`
+ * para las notas propias, `eq` por usuario e `in` por partidos de la página.
+ */
+function makeRatingsBuilder(ratings: RatingRow[], ratingsError?: FakeError) {
+  const filters: ((row: RatingRow) => boolean)[] = [];
+
+  const builder = {
+    select: vi.fn(() => builder),
+    eq: vi.fn((column: keyof RatingRow, value: string) => {
+      filters.push((row) => row[column] === value);
+      return builder;
+    }),
+    in: vi.fn((column: keyof RatingRow, values: string[]) => {
+      filters.push((row) => values.includes(row[column] as string));
+      return builder;
+    }),
+    then: (resolve: (value: { data: RatingRow[] | null; error: FakeError | null }) => void) => {
+      if (ratingsError) {
+        resolve({ data: null, error: ratingsError });
+        return;
+      }
+      resolve({
+        data: ratings.filter((row) => filters.every((filter) => filter(row))),
+        error: null,
+      });
+    },
+  };
+
+  return builder;
+}
 
 /**
  * Doble de Supabase con `watched_matches` en memoria (embebiendo su partido,
@@ -31,8 +75,11 @@ type FakeError = { message: string };
  * `listHistoryPage`: `eq` por usuario, el filtro `or` del cursor, `order`
  * descendente por columnas y `limit`.
  */
-function makeFakeClient(rows: HistoryRow[], options: { selectError?: FakeError } = {}) {
+function makeFakeClient(rows: HistoryRow[], options: FakeClientOptions = {}) {
   const from = vi.fn((table: string) => {
+    if (table === 'match_ratings') {
+      return makeRatingsBuilder(options.ratings ?? [], options.ratingsError);
+    }
     if (table !== 'watched_matches') {
       throw new Error(`Tabla inesperada en el fake client: ${table}`);
     }
@@ -132,6 +179,10 @@ function row(userId: string, n: number, createdAt: string, status = 'finished'):
   };
 }
 
+function rating(userId: string, n: number, value: unknown): RatingRow {
+  return { user_id: userId, match_id: matchId(n), rating: value };
+}
+
 function ids(items: WatchedHistoryItem[]): string[] {
   return items.map((item) => item.match.id);
 }
@@ -166,6 +217,7 @@ describe('SupabaseWatchedMatchStore.listHistoryPage()', () => {
           score: { home: 2, away: 1 },
         },
         watchedAt: '2026-10-10T12:00:00.123Z',
+        rating: null,
       },
     ]);
   });
@@ -305,5 +357,121 @@ describe('SupabaseWatchedMatchStore.listHistoryPage()', () => {
     const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
 
     await expect(store.listHistoryPage(USER_ID, { limit: 2 })).rejects.toThrow();
+  });
+  it('incluye la nota propia de cada visto, o null si no lo calificó', async () => {
+    const client = makeFakeClient(
+      [
+        row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'),
+        row(USER_ID, 2, '2026-10-02T10:00:00.000000+00:00'),
+        row(USER_ID, 3, '2026-10-03T10:00:00.000000+00:00'),
+      ],
+      { ratings: [rating(USER_ID, 1, 5), rating(USER_ID, 3, 2)] },
+    );
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+    const page = await store.listHistoryPage(USER_ID, { limit: 10 });
+
+    expect(page.items.map((item) => [item.match.id, item.rating])).toEqual([
+      [matchId(3), 2],
+      [matchId(2), null],
+      [matchId(1), 5],
+    ]);
+  });
+
+  it('no usa la nota de otro usuario sobre el mismo partido', async () => {
+    const client = makeFakeClient(
+      [
+        row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'),
+        row(OTHER_USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'),
+      ],
+      { ratings: [rating(OTHER_USER_ID, 1, 4)] },
+    );
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+    const page = await store.listHistoryPage(USER_ID, { limit: 10 });
+
+    expect(page.items.map((item) => item.rating)).toEqual([null]);
+  });
+
+  it('lee las notas de toda la página en una sola consulta, solo de los partidos de esa página', async () => {
+    const client = makeFakeClient(
+      [
+        row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'),
+        row(USER_ID, 2, '2026-10-02T10:00:00.000000+00:00'),
+        row(USER_ID, 3, '2026-10-03T10:00:00.000000+00:00'),
+      ],
+      { ratings: [rating(USER_ID, 1, 3)] },
+    );
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+    await store.listHistoryPage(USER_ID, { limit: 2 });
+
+    const tables = client.from.mock.calls.map(([table]) => table);
+    expect(tables).toEqual(['watched_matches', 'match_ratings']);
+    const ratingsBuilder = client.from.mock.results[1]!.value as ReturnType<
+      typeof makeRatingsBuilder
+    >;
+    expect(ratingsBuilder.eq).toHaveBeenCalledWith('user_id', USER_ID);
+    expect(ratingsBuilder.in).toHaveBeenCalledWith('match_id', [matchId(3), matchId(2)]);
+  });
+
+  it('una página vacía no consulta las notas', async () => {
+    const client = makeFakeClient([]);
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+    await store.listHistoryPage(USER_ID, { limit: 10 });
+
+    expect(client.from.mock.calls.map(([table]) => table)).toEqual(['watched_matches']);
+  });
+
+  it('propaga un error al leer las notas como WatchedMatchPersistenceError, no como null', async () => {
+    const client = makeFakeClient([row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00')], {
+      ratingsError: { message: 'fallo simulado' },
+    });
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+    await expect(store.listHistoryPage(USER_ID, { limit: 2 })).rejects.toThrow(
+      WatchedMatchPersistenceError,
+    );
+  });
+
+  it.each([0, 6, 3.5, '4'])(
+    'una nota guardada fuera de rango (%s) se informa como error de persistencia',
+    async (value) => {
+      const client = makeFakeClient([row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00')], {
+        ratings: [rating(USER_ID, 1, value)],
+      });
+      const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+      await expect(store.listHistoryPage(USER_ID, { limit: 2 })).rejects.toThrow(
+        WatchedMatchPersistenceError,
+      );
+    },
+  );
+
+  it('las notas acompañan a cada página sin alterar el orden ni el cursor', async () => {
+    const client = makeFakeClient(
+      [
+        row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'),
+        row(USER_ID, 2, '2026-10-02T10:00:00.000000+00:00'),
+        row(USER_ID, 3, '2026-10-02T10:00:00.000000+00:00'),
+      ],
+      { ratings: [rating(USER_ID, 1, 1), rating(USER_ID, 3, 4)] },
+    );
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+    const first = await store.listHistoryPage(USER_ID, { limit: 2 });
+    const second = await store.listHistoryPage(USER_ID, { limit: 2, before: first.nextCursor! });
+
+    expect(first.items.map((item) => [item.match.id, item.rating])).toEqual([
+      [matchId(3), 4],
+      [matchId(2), null],
+    ]);
+    expect(first.nextCursor).toEqual({
+      watchedAt: '2026-10-02T10:00:00.000000+00:00',
+      matchId: matchId(2),
+    });
+    expect(second.items.map((item) => [item.match.id, item.rating])).toEqual([[matchId(1), 1]]);
+    expect(second.nextCursor).toBeNull();
   });
 });

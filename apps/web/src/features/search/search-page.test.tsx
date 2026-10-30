@@ -433,6 +433,66 @@ describe('Búsqueda: errores', () => {
 
     expect(p.queryByText(/boom interno/)).not.toBeInTheDocument();
   });
+
+  describe('401 de un token reemplazado', () => {
+    const renovarToken = () => {
+      const alCambiarAuth = authMock.onAuthStateChange.mock.calls[0]![0] as (
+        event: string,
+        session: Session,
+      ) => void;
+
+      act(() =>
+        alCambiarAuth('TOKEN_REFRESHED', { ...session, access_token: 'token-nuevo' } as Session),
+      );
+    };
+
+    const tokenDe = (init: RequestInit) => new Headers(init.headers).get('Authorization');
+
+    it('reintenta con el token vigente y no muestra «La sesión venció»', async () => {
+      // Con `token-123` la petición queda en espera hasta que se la rechaza con 401.
+      const pendientes: Array<() => void> = [];
+
+      fetchSpy.mockImplementation((input: unknown, init?: RequestInit) => {
+        if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+
+        if (tokenDe(init ?? {}) === 'Bearer token-123') {
+          return new Promise<Response>((resolve) => {
+            pendientes.push(() => resolve(jsonResponse({ error: { code: 'UNAUTHORIZED' } }, 401)));
+          });
+        }
+
+        return Promise.resolve(jsonResponse({ matches: [river], nextCursor: null }));
+      });
+      const user = userEvent.setup();
+      const p = await pantalla();
+
+      await user.type(p.getByLabelText('Equipo'), 'river{Enter}');
+      await p.findByText('Buscando…');
+      renovarToken();
+      act(() => pendientes.splice(0).forEach((rechazar) => rechazar()));
+
+      expect(
+        await p.findByRole('heading', { name: 'River Plate vs. Boca Juniors' }),
+      ).toBeInTheDocument();
+      expect(p.queryByText(/La sesión venció/)).not.toBeInTheDocument();
+      expect(p.queryByRole('button', { name: 'Iniciar sesión nuevamente' })).toBeNull();
+      expect(busquedas().map(([, init]) => tokenDe(init))).toEqual([
+        'Bearer token-123',
+        'Bearer token-nuevo',
+      ]);
+    });
+
+    it('un 401 con el token que sigue vigente no se reintenta', async () => {
+      responderBusqueda({ error: { code: 'UNAUTHORIZED', message: 'x' } }, 401);
+      const user = userEvent.setup();
+      const p = await pantalla();
+
+      await user.type(p.getByLabelText('Equipo'), 'river{Enter}');
+
+      expect(await p.findByRole('alert')).toHaveTextContent('La sesión venció');
+      expect(busquedas()).toHaveLength(1);
+    });
+  });
 });
 
 describe('Búsqueda: Cargar más', () => {
@@ -502,6 +562,52 @@ describe('Búsqueda: Cargar más', () => {
 
     await waitFor(() => expect(p.queryByRole('button', { name: 'Cargar más' })).toBeNull());
     expect(p.getByText('21 partidos para «local».')).toHaveFocus();
+  });
+
+  it('un 401 del token reemplazado al cargar más se reintenta con el vigente y conserva los resultados', async () => {
+    const tokenDe = (init: RequestInit) => new Headers(init.headers).get('Authorization');
+    const pendientes: Array<() => void> = [];
+
+    // Con `token-123` la segunda página queda en espera hasta rechazarla con 401.
+    fetchSpy.mockImplementation((input: unknown, init?: RequestInit) => {
+      if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+
+      const cursor = new URL(String(input)).searchParams.get('cursor');
+
+      if (cursor === null) {
+        return Promise.resolve(jsonResponse({ matches: pagina(1, 20), nextCursor: 'c1' }));
+      }
+
+      if (tokenDe(init ?? {}) === 'Bearer token-123') {
+        return new Promise<Response>((resolve) => {
+          pendientes.push(() => resolve(jsonResponse({ error: { code: 'UNAUTHORIZED' } }, 401)));
+        });
+      }
+
+      return Promise.resolve(jsonResponse({ matches: pagina(21, 5), nextCursor: null }));
+    });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+    await waitFor(() => expect(pendientes).toHaveLength(1));
+
+    const alCambiarAuth = authMock.onAuthStateChange.mock.calls[0]![0] as (
+      event: string,
+      session: Session,
+    ) => void;
+    act(() =>
+      alCambiarAuth('TOKEN_REFRESHED', { ...session, access_token: 'token-nuevo' } as Session),
+    );
+    act(() => pendientes.splice(0).forEach((rechazar) => rechazar()));
+
+    expect(await p.findByText('25 partidos para «local».')).toBeInTheDocument();
+    expect(p.queryByText(/La sesión venció/)).not.toBeInTheDocument();
+    expect(p.getAllByRole('listitem')).toHaveLength(25);
+
+    const [, , reintento] = busquedas();
+    expect(tokenDe(reintento![1])).toBe('Bearer token-nuevo');
+    expect(new URL(reintento![0]).searchParams.get('cursor')).toBe('c1');
   });
 
   it('mientras carga la página siguiente no admite un segundo pedido', async () => {
