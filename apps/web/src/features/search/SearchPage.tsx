@@ -117,6 +117,7 @@ export function SearchPage() {
   const tokenRef = useRef(accessToken);
   // Destino del foco cuando «Cargar más» desaparece por ser la última página.
   const resumenRef = useRef<HTMLParagraphElement>(null);
+  const cargarMasRef = useRef<HTMLButtonElement>(null);
   const enfocarResumen = useRef(false);
 
   useEffect(() => {
@@ -193,6 +194,10 @@ export function SearchPage() {
       .then((page) => {
         if (controller.signal.aborted) return;
 
+        // Sólo se traslada el foco si seguía en «Cargar más»: si la persona pasó al
+        // campo o a otro control mientras esperaba, no se le interrumpe.
+        const teniaElFoco = document.activeElement === cargarMasRef.current;
+
         setEstado((actual) => {
           if (actual.status !== 'ready' || actual.query !== query) return actual;
 
@@ -205,7 +210,7 @@ export function SearchPage() {
         });
 
         // El botón se va con la última página: el foco pasa al resumen.
-        if (page.nextCursor === null) enfocarResumen.current = true;
+        if (page.nextCursor === null && teniaElFoco) enfocarResumen.current = true;
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || isCancelled(error)) return;
@@ -360,6 +365,7 @@ export function SearchPage() {
             {estado.nextCursor !== null &&
             !(estado.siguiente.status === 'error' && estado.siguiente.expired) ? (
               <Button
+                ref={cargarMasRef}
                 type="button"
                 variant="outline"
                 className="w-full self-start sm:w-auto"

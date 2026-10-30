@@ -610,6 +610,39 @@ describe('Búsqueda: Cargar más', () => {
     expect(new URL(reintento![0]).searchParams.get('cursor')).toBe('c1');
   });
 
+  it('si la persona pasó al campo mientras carga, la última página no le quita el foco', async () => {
+    let resolver: (response: Response) => void = () => {};
+    fetchSpy.mockImplementation((input: unknown) => {
+      if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+
+      if (new URL(String(input)).searchParams.has('cursor')) {
+        return new Promise<Response>((resolve) => {
+          resolver = resolve;
+        });
+      }
+
+      return Promise.resolve(jsonResponse({ matches: pagina(1, 20), nextCursor: 'c1' }));
+    });
+    const p = await pantalla();
+    const user = await buscarYEsperar(p);
+
+    await user.click(p.getByRole('button', { name: 'Cargar más' }));
+    await p.findByRole('button', { name: 'Cargando…' });
+    await user.click(p.getByLabelText('Equipo'));
+    await user.type(p.getByLabelText('Equipo'), ' otra');
+
+    act(() => resolver(jsonResponse({ matches: pagina(21, 1), nextCursor: null })));
+
+    await waitFor(() =>
+      expect(p.queryByRole('button', { name: /Cargando…|Cargar más/ })).toBeNull(),
+    );
+    expect(p.getByLabelText('Equipo')).toHaveFocus();
+    expect(p.getByText('21 partidos para «local».')).not.toHaveFocus();
+
+    await user.type(p.getByLabelText('Equipo'), ' más');
+    expect(p.getByLabelText('Equipo')).toHaveValue('local otra más');
+  });
+
   it('mientras carga la página siguiente no admite un segundo pedido', async () => {
     let resolver: (response: Response) => void = () => {};
     fetchSpy.mockImplementation((input: unknown) => {
