@@ -71,6 +71,8 @@ export interface WatchedHistoryItem {
   match: Match;
   /** ISO 8601 UTC, truncado a milisegundos. */
   watchedAt: string;
+  /** Nota propia del partido (entero de 1 a 5), o `null` si no lo calificó (WAT-260). */
+  rating: number | null;
 }
 
 /** `nextCursor` es `null` cuando no quedan más vistos después de `items`. */
@@ -112,6 +114,9 @@ export interface WatchedMatchStore {
    * un partido nuevo no desplaza las páginas ya leídas. Un usuario sin vistos
    * devuelve `items: []`, nunca `null`. Lanza `RangeError` si `limit` o el
    * cursor son inválidos.
+   *
+   * Cada item trae la nota propia de `userId` (WAT-260); nunca la de otro
+   * usuario. Un fallo al leer las notas se lanza, no se convierte en `null`.
    */
   listHistoryPage(
     userId: string,

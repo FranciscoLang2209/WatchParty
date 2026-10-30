@@ -5,6 +5,7 @@ import {
   toMatch,
   type MatchRowWithTeams,
 } from '../../matches/infrastructure/supabase-match-store.js';
+import { isValidMatchRating } from '../../ratings/domain/match-rating-store.js';
 import {
   isValidWatchedAtCursor,
   type ListWatchedHistoryPageOptions,
@@ -25,6 +26,11 @@ interface HistoryRow {
   match_id: string;
   created_at: string;
   match: MatchRowWithTeams | null;
+}
+
+interface OwnRatingRow {
+  match_id: string;
+  rating: unknown;
 }
 
 function assertValidCursor(cursor: WatchedHistoryCursor): void {
@@ -155,6 +161,10 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
     const lastRow = pageRows[pageRows.length - 1];
+    const ownRatings = await this.findOwnRatings(
+      userId,
+      pageRows.map((row) => row.match_id),
+    );
 
     return {
       items: pageRows.map((row) => {
@@ -163,10 +173,51 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
             `El visto del partido ${row.match_id} no pudo resolver su partido.`,
           );
         }
-        return { match: toMatch(row.match), watchedAt: new Date(row.created_at).toISOString() };
+        return {
+          match: toMatch(row.match),
+          watchedAt: new Date(row.created_at).toISOString(),
+          rating: ownRatings.get(row.match_id) ?? null,
+        };
       }),
       nextCursor:
         hasMore && lastRow ? { watchedAt: lastRow.created_at, matchId: lastRow.match_id } : null,
     };
+  }
+
+  /**
+   * Notas propias de `userId` para los partidos de una página (WAT-260), en
+   * una sola consulta acotada a esos partidos: sin N+1 y sin depender del
+   * tamaño del historial. `match_ratings` no tiene FK hacia `watched_matches`,
+   * por eso no se embebe en `HISTORY_SELECT`. Filtra siempre por `userId`: la
+   * nota de otro usuario sobre el mismo partido nunca entra en el mapa.
+   */
+  private async findOwnRatings(userId: string, matchIds: string[]): Promise<Map<string, number>> {
+    if (matchIds.length === 0) return new Map();
+
+    const { data, error } = await this.client
+      .from('match_ratings')
+      .select('match_id, rating')
+      .eq('user_id', userId)
+      .in('match_id', matchIds);
+
+    if (error) {
+      throw new WatchedMatchPersistenceError(
+        'No se pudieron leer las notas del historial de vistos.',
+        error,
+      );
+    }
+
+    const ratings = new Map<string, number>();
+    for (const row of (data ?? []) as OwnRatingRow[]) {
+      // La base ya garantiza 1..5; un valor distinto es un dato corrupto, no
+      // "sin calificar".
+      if (!isValidMatchRating(row.rating)) {
+        throw new WatchedMatchPersistenceError(
+          `La nota del partido visto ${row.match_id} es inválida.`,
+        );
+      }
+      ratings.set(row.match_id, row.rating);
+    }
+    return ratings;
   }
 }
