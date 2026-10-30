@@ -22,6 +22,11 @@ import { WatchedMatchPersistenceError } from './watched-match-persistence-error.
 // `<tabla>_<columna>_fkey`. El hint deja explícito qué relación embeber.
 const HISTORY_SELECT = `match_id, created_at, match:matches!watched_matches_match_id_fkey(${MATCH_SELECT_WITH_TEAMS})`;
 
+// Con filtro por equipo (WAT-262) el partido se embebe con `!inner`: así un
+// filtro sobre el partido excluye el visto entero. Sin `!inner`, PostgREST
+// devolvería el visto igual, con `match: null`.
+const HISTORY_SELECT_FILTERED_BY_MATCH = `match_id, created_at, match:matches!watched_matches_match_id_fkey!inner(${MATCH_SELECT_WITH_TEAMS})`;
+
 interface HistoryRow {
   match_id: string;
   created_at: string;
@@ -131,14 +136,28 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
    */
   async listHistoryPage(
     userId: string,
-    { limit, before }: ListWatchedHistoryPageOptions,
+    { limit, before, teamId }: ListWatchedHistoryPageOptions,
   ): Promise<WatchedHistoryPage> {
     if (!Number.isInteger(limit) || limit < 1) {
       throw new RangeError('El límite de la página debe ser un entero mayor o igual a 1.');
     }
     if (before) assertValidCursor(before);
+    if (teamId !== undefined && !UUID_PATTERN.test(teamId)) {
+      throw new RangeError('El equipo del filtro del historial de vistos es inválido.');
+    }
 
-    let query = this.client.from('watched_matches').select(HISTORY_SELECT).eq('user_id', userId);
+    let query = this.client
+      .from('watched_matches')
+      .select(teamId === undefined ? HISTORY_SELECT : HISTORY_SELECT_FILTERED_BY_MATCH)
+      .eq('user_id', userId);
+
+    if (teamId !== undefined) {
+      // Por ID del equipo, nunca por nombre. Va en la misma consulta que la
+      // paginación, así que filtra todo el historial antes del `limit`.
+      query = query.or(`home_team_id.eq.${teamId},away_team_id.eq.${teamId}`, {
+        referencedTable: 'match',
+      });
+    }
 
     if (before) {
       // (created_at, match_id) < (before.watchedAt, before.matchId), en el

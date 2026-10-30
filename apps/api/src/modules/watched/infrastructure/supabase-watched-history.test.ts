@@ -72,8 +72,13 @@ function makeRatingsBuilder(ratings: RatingRow[], ratingsError?: FakeError) {
 /**
  * Doble de Supabase con `watched_matches` en memoria (embebiendo su partido,
  * como el select con relación). Interpreta solo lo que arma
- * `listHistoryPage`: `eq` por usuario, el filtro `or` del cursor, `order`
- * descendente por columnas y `limit`.
+ * `listHistoryPage`: `eq` por usuario, el filtro `or` del cursor, el `or`
+ * por equipo sobre el partido embebido, `order` descendente por columnas y
+ * `limit`.
+ *
+ * Como PostgREST, un filtro sobre el partido embebido solo excluye vistos si
+ * el select usa `!inner`; sin eso el doble falla en vez de filtrar, para que
+ * un test no pase con una consulta que en la base real no filtraría.
  */
 function makeFakeClient(rows: HistoryRow[], options: FakeClientOptions = {}) {
   const from = vi.fn((table: string) => {
@@ -88,13 +93,33 @@ function makeFakeClient(rows: HistoryRow[], options: FakeClientOptions = {}) {
     const orderColumns: { column: keyof HistoryRow; ascending: boolean }[] = [];
     let limitCount: number | undefined;
 
+    let innerJoin = false;
+
     const builder = {
-      select: vi.fn(() => builder),
+      select: vi.fn((columns: string) => {
+        innerJoin = /match:matches![a-z_]+!inner\(/.test(columns);
+        return builder;
+      }),
       eq: vi.fn((column: keyof HistoryRow, value: string) => {
         filters.push((row) => row[column] === value);
         return builder;
       }),
-      or: vi.fn((filter: string) => {
+      or: vi.fn((filter: string, orOptions?: { referencedTable?: string }) => {
+        if (orOptions?.referencedTable !== undefined) {
+          const team = /^home_team_id\.eq\.(.+),away_team_id\.eq\.(.+)$/.exec(filter);
+          if (orOptions.referencedTable !== 'match' || !team || team[1] !== team[2]) {
+            throw new Error(`Filtro or embebido inesperado: ${filter}`);
+          }
+          if (!innerJoin) {
+            throw new Error('Filtrar el partido embebido sin !inner no excluye vistos.');
+          }
+          const teamId = team[1];
+          filters.push(
+            (row) => row.match.home_team?.id === teamId || row.match.away_team?.id === teamId,
+          );
+          return builder;
+        }
+
         const match = /^created_at\.lt\.(.+),and\(created_at\.eq\.(.+),match_id\.lt\.(.+)\)$/.exec(
           filter,
         );
@@ -177,6 +202,16 @@ function row(userId: string, n: number, createdAt: string, status = 'finished'):
       away_team: { id: `away-${n}`, name: `Visitante ${n}` },
     },
   };
+}
+
+function teamId(n: number): string {
+  return `b${String(n).padStart(7, '0')}-1111-4111-8111-111111111111`;
+}
+
+function withTeams(historyRow: HistoryRow, home: number, away: number): HistoryRow {
+  historyRow.match.home_team = { id: teamId(home), name: `Equipo ${home}` };
+  historyRow.match.away_team = { id: teamId(away), name: `Equipo ${away}` };
+  return historyRow;
 }
 
 function rating(userId: string, n: number, value: unknown): RatingRow {
@@ -474,4 +509,88 @@ describe('SupabaseWatchedMatchStore.listHistoryPage()', () => {
     expect(second.items.map((item) => [item.match.id, item.rating])).toEqual([[matchId(1), 1]]);
     expect(second.nextCursor).toBeNull();
   });
+  it('con teamId devuelve los vistos donde el equipo jugó de local o de visitante', async () => {
+    const client = makeFakeClient([
+      withTeams(row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'), 1, 2),
+      withTeams(row(USER_ID, 2, '2026-10-02T10:00:00.000000+00:00'), 3, 1),
+      withTeams(row(USER_ID, 3, '2026-10-03T10:00:00.000000+00:00'), 2, 3),
+    ]);
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+    const page = await store.listHistoryPage(USER_ID, { limit: 10, teamId: teamId(1) });
+
+    expect(ids(page.items)).toEqual([matchId(2), matchId(1)]);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it('con teamId sin coincidencias devuelve una página vacía', async () => {
+    const client = makeFakeClient([
+      withTeams(row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'), 1, 2),
+    ]);
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+    expect(await store.listHistoryPage(USER_ID, { limit: 10, teamId: teamId(9) })).toEqual({
+      items: [],
+      nextCursor: null,
+    });
+  });
+
+  it('filtra antes de paginar: encuentra coincidencias que estaban en páginas posteriores', async () => {
+    const client = makeFakeClient([
+      withTeams(row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'), 1, 2),
+      withTeams(row(USER_ID, 2, '2026-10-02T10:00:00.000000+00:00'), 3, 1),
+      withTeams(row(USER_ID, 3, '2026-10-03T10:00:00.000000+00:00'), 2, 3),
+      withTeams(row(USER_ID, 4, '2026-10-04T10:00:00.000000+00:00'), 2, 3),
+      withTeams(row(USER_ID, 5, '2026-10-05T10:00:00.000000+00:00'), 3, 2),
+    ]);
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+    const first = await store.listHistoryPage(USER_ID, { limit: 1, teamId: teamId(1) });
+    const second = await store.listHistoryPage(USER_ID, {
+      limit: 1,
+      teamId: teamId(1),
+      before: first.nextCursor!,
+    });
+
+    expect(ids(first.items)).toEqual([matchId(2)]);
+    expect(first.nextCursor).not.toBeNull();
+    expect(ids(second.items)).toEqual([matchId(1)]);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it('con teamId no incluye vistos de otro usuario del mismo equipo', async () => {
+    const client = makeFakeClient([
+      withTeams(row(OTHER_USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'), 1, 2),
+    ]);
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+    const page = await store.listHistoryPage(USER_ID, { limit: 10, teamId: teamId(1) });
+
+    expect(page.items).toEqual([]);
+  });
+
+  it('sin teamId no filtra por equipo ni fuerza el join interno', async () => {
+    const client = makeFakeClient([row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00')]);
+    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+    await store.listHistoryPage(USER_ID, { limit: 10 });
+
+    const builder = client.from.mock.results[0]!.value as {
+      select: { mock: { calls: string[][] } };
+    };
+    expect(builder.select.mock.calls[0]![0]).not.toContain('!inner');
+  });
+
+  it.each(['equipo-1', '', `${'b0000001-1111-4111-8111-111111111111'},user_id.neq.x`])(
+    'con teamId inválido (%s) lanza RangeError sin consultar la base',
+    async (invalid) => {
+      const client = makeFakeClient([]);
+      const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+      await expect(store.listHistoryPage(USER_ID, { limit: 2, teamId: invalid })).rejects.toThrow(
+        RangeError,
+      );
+      expect(client.from).not.toHaveBeenCalled();
+    },
+  );
 });

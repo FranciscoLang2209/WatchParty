@@ -64,6 +64,11 @@ export interface ListWatchedHistoryPageOptions {
   limit: number;
   /** Si se omite, la página empieza en el visto más reciente. */
   before?: WatchedHistoryCursor;
+  /**
+   * UUID de un equipo (WAT-262): solo vistos donde jugó de local o de
+   * visitante. Se aplica antes de paginar, sobre todo el historial propio.
+   */
+  teamId?: string;
 }
 
 /** Un partido del historial propio, con el momento en que se marcó visto. */
@@ -112,8 +117,8 @@ export interface WatchedMatchStore {
    * Historial de vistos de `userId` (WAT-217), del más reciente al más
    * antiguo, con desempate estable por `match_id`. Paginado por cursor: marcar
    * un partido nuevo no desplaza las páginas ya leídas. Un usuario sin vistos
-   * devuelve `items: []`, nunca `null`. Lanza `RangeError` si `limit` o el
-   * cursor son inválidos.
+   * devuelve `items: []`, nunca `null`. Lanza `RangeError` si `limit`, el
+   * cursor o `teamId` son inválidos.
    *
    * Cada item trae la nota propia de `userId` (WAT-260); nunca la de otro
    * usuario. Un fallo al leer las notas se lanza, no se convierte en `null`.

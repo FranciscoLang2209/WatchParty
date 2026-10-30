@@ -26,26 +26,40 @@ function toWatchedHistoryItemResponse(item: WatchedHistoryItem): WatchedHistoryI
 }
 
 /**
- * Lee y valida la paginación del query string ANTES de tocar el store, mismo
- * criterio que list-room-comments-handler.ts. Devuelve `null` si algún
- * parámetro es inválido.
+ * Lee y valida la paginación y el filtro del query string ANTES de tocar el
+ * store, mismo criterio que list-room-comments-handler.ts. Devuelve `null` si
+ * algún parámetro es inválido.
  *
  * - `beforeWatchedAt` y `beforeMatchId` viajan juntos o ninguno de los dos.
  * - Sin `limit` se usa el límite por defecto; nunca se devuelve la lista
  *   completa sin acotar.
+ * - `teamId` (WAT-262) es opcional y debe ser un UUID, como `teams.id`.
  */
-function parsePagination(query: Record<string, unknown>): ListWatchedHistoryPageOptions | null {
-  const { beforeWatchedAt, beforeMatchId, limit: rawLimit } = query;
+function parseListOptions(query: Record<string, unknown>): ListWatchedHistoryPageOptions | null {
+  const { beforeWatchedAt, beforeMatchId, limit: rawLimit, teamId } = query;
 
   // Un parámetro repetido (?limit=1&limit=2) llega como array: se rechaza.
   if (
-    [beforeWatchedAt, beforeMatchId, rawLimit].some(
+    [beforeWatchedAt, beforeMatchId, rawLimit, teamId].some(
       (value) => value !== undefined && typeof value !== 'string',
     )
   ) {
     return null;
   }
 
+  if (teamId !== undefined && !UUID_PATTERN.test(teamId as string)) return null;
+
+  const pagination = parsePagination(beforeWatchedAt, beforeMatchId, rawLimit);
+  if (!pagination) return null;
+
+  return teamId === undefined ? pagination : { ...pagination, teamId: teamId as string };
+}
+
+function parsePagination(
+  beforeWatchedAt: unknown,
+  beforeMatchId: unknown,
+  rawLimit: unknown,
+): ListWatchedHistoryPageOptions | null {
   let limit = WATCHED_HISTORY_PAGE_DEFAULT_LIMIT;
   if (rawLimit !== undefined) {
     if (!/^\d+$/.test(rawLimit as string)) return null;
@@ -69,13 +83,14 @@ function parsePagination(query: Record<string, unknown>): ListWatchedHistoryPage
 /**
  * Handler de `GET /me/watched-matches` (WAT-217): historial propio de
  * partidos vistos, del más reciente al más antiguo. El usuario sale siempre
- * del bearer (`req.user`), nunca del query string. Cada item incluye la nota
+ * del bearer (`req.user`), nunca del query string; `teamId` opcional filtra
+ * por equipo local o visitante (WAT-262). Cada item incluye la nota
  * propia (WAT-261); si el store no pudo leerla, lanza y responde 500, nunca
  * `rating: null`.
  */
 export function createListWatchedHistoryHandler(store: WatchedMatchStore): RequestHandler {
   return async (req, res, next) => {
-    const options = parsePagination(req.query);
+    const options = parseListOptions(req.query);
 
     if (!options) {
       next(new ValidationError());
