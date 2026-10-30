@@ -4,7 +4,7 @@ import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { MatchCard } from '@/features/matches/MatchCard';
+import { MatchSummaryCard } from '@/features/matches/MatchSummaryCard';
 import { searchMatches } from '@/features/matches/api';
 import { MatchesApiError, isCancelled, isUnauthorized, type Match } from '@/features/matches/types';
 
@@ -239,7 +239,7 @@ export function SearchPage() {
               <ul className="grid w-full list-none grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {estado.matches.map((match) => (
                   <li key={match.id} className="w-full min-w-0">
-                    <MatchCard match={match} />
+                    <MatchSummaryCard match={match} />
                   </li>
                 ))}
               </ul>
