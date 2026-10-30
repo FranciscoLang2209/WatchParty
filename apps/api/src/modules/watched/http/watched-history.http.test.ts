@@ -59,6 +59,7 @@ function buildTestApp(listHistoryPage: ListHistoryPage): Express {
 const URL = '/me/watched-matches';
 const MATCH_ID = 'a1111111-1111-4111-8111-111111111111';
 const CURSOR_WATCHED_AT = '2026-10-10T12:00:00.123456+00:00';
+const TEAM_ID = 'b1111111-1111-4111-8111-111111111111';
 
 const PAGE: WatchedHistoryPage = {
   items: [
@@ -168,6 +169,44 @@ describe('GET /me/watched-matches', () => {
     });
   });
 
+  it('pasa teamId al store junto con limit y el cursor', async () => {
+    mockAuthenticated('user-123');
+    const listHistoryPage = vi.fn<ListHistoryPage>(async () => EMPTY_PAGE);
+    const app = buildTestApp(listHistoryPage);
+
+    const response = await request(app)
+      .get(URL)
+      .query({
+        teamId: TEAM_ID,
+        limit: '5',
+        beforeWatchedAt: CURSOR_WATCHED_AT,
+        beforeMatchId: MATCH_ID,
+      })
+      .set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(200);
+    expect(listHistoryPage).toHaveBeenCalledWith('user-123', {
+      limit: 5,
+      before: { watchedAt: CURSOR_WATCHED_AT, matchId: MATCH_ID },
+      teamId: TEAM_ID,
+    });
+  });
+
+  it('con teamId sin coincidencias responde 200 con items vacíos', async () => {
+    mockAuthenticated('user-123');
+    const listHistoryPage = vi.fn<ListHistoryPage>(async () => EMPTY_PAGE);
+    const app = buildTestApp(listHistoryPage);
+
+    const response = await request(app)
+      .get(URL)
+      .query({ teamId: TEAM_ID })
+      .set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ items: [], nextCursor: null });
+    expect(listHistoryPage).toHaveBeenCalledWith('user-123', { limit: 20, teamId: TEAM_ID });
+  });
+
   it('ignora un userId enviado en la query: lista solo los vistos del bearer', async () => {
     mockAuthenticated('user-123');
     const listHistoryPage = vi.fn<ListHistoryPage>(async () => EMPTY_PAGE);
@@ -225,6 +264,10 @@ describe('GET /me/watched-matches', () => {
       { beforeWatchedAt: '2026-10-10T24:00:00.123456+00:00', beforeMatchId: MATCH_ID },
     ],
     ['beforeMatchId que no es UUID', { beforeWatchedAt: CURSOR_WATCHED_AT, beforeMatchId: 'x' }],
+    ['teamId que no es UUID', { teamId: 'boca' }],
+    ['teamId vacío', { teamId: '' }],
+    ['teamId que intenta inyectar un filtro', { teamId: `${TEAM_ID},user_id.neq.x` }],
+    ['teamId repetido', `teamId=${TEAM_ID}&teamId=${TEAM_ID}`],
   ])('con %s responde 400 VALIDATION_ERROR y no invoca el store', async (_label, query) => {
     mockAuthenticated();
     const listHistoryPage = vi.fn<ListHistoryPage>();
