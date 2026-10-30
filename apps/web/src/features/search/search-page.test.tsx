@@ -200,7 +200,7 @@ describe('Búsqueda: formulario', () => {
 });
 
 describe('Búsqueda: resultados', () => {
-  it('lista los partidos con la tarjeta existente y cuenta los resultados', async () => {
+  it('lista los partidos con estado, equipos, marcador y fecha, y cuenta los resultados', async () => {
     responderBusqueda({ matches: [river, racing], nextCursor: null });
     const user = userEvent.setup();
     const p = await pantalla();
@@ -213,6 +213,75 @@ describe('Búsqueda: resultados', () => {
     ).toHaveAttribute('href', '/matches/match-river-boca');
     expect(p.getByRole('heading', { name: 'Racing Club vs. Independiente' })).toBeInTheDocument();
     expect(p.queryByText(/Hay más resultados/)).not.toBeInTheDocument();
+
+    // El que tiene resultado lo muestra; el que no, destaca su horario.
+    expect(p.getByText('Finalizado')).toBeInTheDocument();
+    expect(p.getByText('Resultado: River Plate 2, Boca Juniors 1')).toBeInTheDocument();
+    expect(p.getByText('Programado')).toBeInTheDocument();
+    expect(p.getAllByText(/\d{2}:\d{2}/)).toHaveLength(2);
+    expect(p.getAllByText(/Resultado:/)).toHaveLength(1);
+  });
+
+  it('cada resultado tiene un enlace con nombre propio, distinto del de los demás', async () => {
+    responderBusqueda({ matches: [river, racing], nextCursor: null });
+    const user = userEvent.setup();
+    const p = await pantalla();
+
+    await user.type(p.getByLabelText('Equipo'), 'a{Enter}');
+    await p.findByText('2 partidos para «a».');
+
+    expect(p.getAllByRole('link', { name: /^Ver partido: / })).toHaveLength(2);
+    expect(
+      p.getByRole('link', { name: 'Ver partido: Racing Club vs. Independiente' }),
+    ).toHaveAttribute('href', '/matches/match-racing-inde');
+  });
+
+  it('abre el detalle del partido con un clic', async () => {
+    fetchSpy.mockImplementation((input: unknown) =>
+      Promise.resolve(
+        esBusqueda(input)
+          ? jsonResponse({ matches: [river], nextCursor: null })
+          : String(input).endsWith('/matches/match-river-boca')
+            ? jsonResponse({ match: river })
+            : jsonResponse({ matches: [] }),
+      ),
+    );
+    const user = userEvent.setup();
+    const p = await pantalla();
+
+    await user.type(p.getByLabelText('Equipo'), 'river{Enter}');
+    await user.click(await p.findByRole('link', { name: /^Ver partido: River Plate/ }));
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('search')).not.toBeInTheDocument();
+  });
+
+  it('abre el detalle con el teclado: Tab hasta el enlace y Enter', async () => {
+    fetchSpy.mockImplementation((input: unknown) =>
+      Promise.resolve(
+        esBusqueda(input)
+          ? jsonResponse({ matches: [river], nextCursor: null })
+          : String(input).endsWith('/matches/match-river-boca')
+            ? jsonResponse({ match: river })
+            : jsonResponse({ matches: [] }),
+      ),
+    );
+    const user = userEvent.setup();
+    const p = await pantalla();
+
+    await user.type(p.getByLabelText('Equipo'), 'river{Enter}');
+    const enlace = await p.findByRole('link', { name: /^Ver partido: River Plate/ });
+
+    await user.tab(); // del campo al botón Buscar
+    await user.tab(); // del botón al enlace del resultado
+    expect(enlace).toHaveFocus();
+    await user.keyboard('{Enter}');
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' }),
+    ).toBeInTheDocument();
   });
 
   it('anuncia «Buscando…» mientras espera', async () => {
