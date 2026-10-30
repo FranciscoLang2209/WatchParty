@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { MatchSummaryCard } from '@/features/matches/MatchSummaryCard';
 import { searchMatches } from '@/features/matches/api';
-import { MatchesApiError, isCancelled, type Match } from '@/features/matches/types';
+import { MatchesApiError, isCancelled, isUnauthorized, type Match } from '@/features/matches/types';
 
 /** Carga de la página siguiente: un fallo acá no toca los resultados ya mostrados. */
 type PaginaSiguiente =
@@ -43,6 +43,44 @@ function describirError(error: unknown): { message: string; expired: boolean } {
   return { message: MENSAJE_INESPERADO, expired: false };
 }
 
+/** Tope de reintentos por token renovado dentro de una misma petición. */
+const REINTENTOS_TOKEN_MAX = 3;
+
+/**
+ * Pide una página con el token con que arrancó la petición. Si responde 401 pero
+ * el token ya fue reemplazado (renovación en vuelo), el 401 es del token viejo y
+ * no de la sesión: reintenta con el vigente. Un 401 con el token que sigue
+ * vigente es vencimiento real y se propaga.
+ */
+async function pedirPagina(
+  query: string,
+  token: string,
+  tokenVigente: { readonly current: string | null },
+  options: Parameters<typeof searchMatches>[2],
+) {
+  let usado = token;
+
+  for (let reintento = 0; ; reintento += 1) {
+    try {
+      return await searchMatches(query, usado, options);
+    } catch (error) {
+      const vigente = tokenVigente.current;
+
+      if (
+        !isUnauthorized(error) ||
+        options?.signal?.aborted ||
+        vigente === null ||
+        vigente === usado ||
+        reintento >= REINTENTOS_TOKEN_MAX
+      ) {
+        throw error;
+      }
+
+      usado = vigente;
+    }
+  }
+}
+
 /** Suma la página nueva sin repetir partidos que ya estaban (por id) y conserva el orden. */
 function sinRepetidos(existentes: Match[], nuevos: Match[]): Match[] {
   const vistos = new Set(existentes.map((match) => match.id));
@@ -57,6 +95,9 @@ function sinRepetidos(existentes: Match[], nuevos: Match[]): Match[] {
  * Sólo cuenta la última petición: una búsqueda nueva, un cambio de sesión o salir
  * de la pantalla abortan lo que esté en curso y su respuesta se descarta aunque
  * llegue tarde. Una búsqueda nueva siempre arranca de la primera página.
+ *
+ * Renovar el token no cancela la petición en curso: si ésta responde 401 por el
+ * token reemplazado, se reintenta con el vigente sin tocar los resultados.
  */
 export function SearchPage() {
   const { session, signOut } = useAuth();
@@ -111,7 +152,7 @@ export function SearchPage() {
 
     setEstado({ status: 'loading' });
 
-    searchMatches(query, token, { limit: PAGE_SIZE, signal: controller.signal })
+    pedirPagina(query, token, tokenRef, { limit: PAGE_SIZE, signal: controller.signal })
       .then((page) => {
         if (controller.signal.aborted) return;
 
@@ -144,7 +185,11 @@ export function SearchPage() {
 
     setEstado({ ...estado, siguiente: { status: 'loading' } });
 
-    searchMatches(query, token, { cursor: nextCursor, limit: PAGE_SIZE, signal: controller.signal })
+    pedirPagina(query, token, tokenRef, {
+      cursor: nextCursor,
+      limit: PAGE_SIZE,
+      signal: controller.signal,
+    })
       .then((page) => {
         if (controller.signal.aborted) return;
 

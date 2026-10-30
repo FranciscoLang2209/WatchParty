@@ -739,4 +739,111 @@ describe('Búsqueda: Cargar más', () => {
 
     expect(p.getByText('3 partidos para «local».')).toBeInTheDocument();
   });
+
+  describe('401 de un token reemplazado', () => {
+    const alCambiarAuth = () =>
+      authMock.onAuthStateChange.mock.calls[0]![0] as (event: string, session: Session) => void;
+
+    const renovarToken = () =>
+      act(() =>
+        alCambiarAuth()('TOKEN_REFRESHED', { ...session, access_token: 'token-nuevo' } as Session),
+      );
+
+    const tokenDe = (init: RequestInit) => new Headers(init.headers).get('Authorization');
+
+    /**
+     * Las peticiones con `token-123` quedan en espera hasta `rechazarViejo()`, que
+     * las responde 401; con cualquier otro token responde `paginas` según el cursor.
+     */
+    function responderConTokenViejoPendiente(paginas: Record<string, unknown>) {
+      const pendientes: Array<() => void> = [];
+
+      fetchSpy.mockImplementation((input: unknown, init?: RequestInit) => {
+        if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+
+        const cursor = new URL(String(input)).searchParams.get('cursor') ?? 'primera';
+
+        if (tokenDe(init ?? {}) === 'Bearer token-123') {
+          return new Promise<Response>((resolve) => {
+            pendientes.push(() => resolve(jsonResponse({ error: 'unauthorized' }, 401)));
+          });
+        }
+
+        return Promise.resolve(jsonResponse(paginas[cursor]));
+      });
+
+      return { rechazarViejo: () => act(() => pendientes.splice(0).forEach((f) => f())) };
+    }
+
+    it('primera página: reintenta con el token vigente y no muestra «La sesión venció»', async () => {
+      const { rechazarViejo } = responderConTokenViejoPendiente({
+        primera: { matches: pagina(1, 3), nextCursor: null },
+      });
+      const user = userEvent.setup();
+      const p = await pantalla();
+
+      await user.type(p.getByLabelText('Equipo'), 'local{Enter}');
+      await p.findByText('Buscando…');
+      renovarToken();
+      rechazarViejo();
+
+      expect(await p.findByText('3 partidos para «local».')).toBeInTheDocument();
+      expect(p.queryByText('La sesión venció')).not.toBeInTheDocument();
+      expect(p.queryByRole('button', { name: 'Iniciar sesión nuevamente' })).toBeNull();
+      expect(busquedas().map(([, init]) => tokenDe(init))).toEqual([
+        'Bearer token-123',
+        'Bearer token-nuevo',
+      ]);
+    });
+
+    it('Cargar más: reintenta la misma página con el token vigente y conserva los resultados', async () => {
+      // Con `token-123` la primera página responde bien; sólo la segunda queda en espera.
+      const pendientes: Array<() => void> = [];
+
+      fetchSpy.mockImplementation((input: unknown, init?: RequestInit) => {
+        if (!esBusqueda(input)) return Promise.resolve(jsonResponse({ matches: [] }));
+
+        const cursor = new URL(String(input)).searchParams.get('cursor');
+
+        if (cursor === null) {
+          return Promise.resolve(jsonResponse({ matches: pagina(1, 20), nextCursor: 'c1' }));
+        }
+
+        if (tokenDe(init ?? {}) === 'Bearer token-123') {
+          return new Promise<Response>((resolve) => {
+            pendientes.push(() => resolve(jsonResponse({ error: 'unauthorized' }, 401)));
+          });
+        }
+
+        return Promise.resolve(jsonResponse({ matches: pagina(21, 5), nextCursor: null }));
+      });
+      const p = await pantalla();
+      const user = await buscarYEsperar(p);
+
+      await user.click(p.getByRole('button', { name: 'Cargar más' }));
+      await waitFor(() => expect(pendientes).toHaveLength(1));
+      renovarToken();
+      act(() => pendientes.splice(0).forEach((f) => f()));
+
+      expect(await p.findByText('25 partidos para «local».')).toBeInTheDocument();
+      expect(p.queryByText('La sesión venció')).not.toBeInTheDocument();
+      expect(p.getAllByRole('listitem')).toHaveLength(25);
+
+      const [, , reintento] = busquedas();
+      expect(tokenDe(reintento![1])).toBe('Bearer token-nuevo');
+      expect(new URL(reintento![0]).searchParams.get('cursor')).toBe('c1');
+    });
+
+    it('un 401 con el token que sigue vigente sigue pidiendo reingresar', async () => {
+      responderBusqueda({ error: 'unauthorized' }, 401);
+      const user = userEvent.setup();
+      const p = await pantalla();
+
+      await user.type(p.getByLabelText('Equipo'), 'local{Enter}');
+
+      expect(await p.findByRole('alert')).toHaveTextContent('La sesión venció');
+      expect(p.getByRole('button', { name: 'Iniciar sesión nuevamente' })).toBeInTheDocument();
+      expect(busquedas()).toHaveLength(1);
+    });
+  });
 });
