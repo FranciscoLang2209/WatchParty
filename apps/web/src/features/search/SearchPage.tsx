@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { MatchCard } from '@/features/matches/MatchCard';
 import { searchMatches } from '@/features/matches/api';
-import { MatchesApiError, isCancelled, type Match } from '@/features/matches/types';
+import { MatchesApiError, isCancelled, isUnauthorized, type Match } from '@/features/matches/types';
 
 type Estado =
   | { status: 'idle' }
@@ -18,6 +18,44 @@ type Estado =
 const TEXTO_MAX = 100;
 const MENSAJE_VACIO = 'Escribí el nombre de un equipo para buscar.';
 const MENSAJE_INESPERADO = 'No pudimos completar la búsqueda. Intentá de nuevo.';
+
+/** Tope de reintentos por token renovado dentro de una misma petición. */
+const REINTENTOS_TOKEN_MAX = 3;
+
+/**
+ * Pide una página con el token con que arrancó la petición. Si responde 401 pero
+ * el token ya fue reemplazado (renovación en vuelo), el 401 es del token viejo y
+ * no de la sesión: reintenta con el vigente. Un 401 con el token que sigue
+ * vigente es vencimiento real y se propaga.
+ */
+async function pedirPagina(
+  query: string,
+  token: string,
+  tokenVigente: { readonly current: string | null },
+  signal: AbortSignal,
+) {
+  let usado = token;
+
+  for (let reintento = 0; ; reintento += 1) {
+    try {
+      return await searchMatches(query, usado, { signal });
+    } catch (error) {
+      const vigente = tokenVigente.current;
+
+      if (
+        !isUnauthorized(error) ||
+        signal.aborted ||
+        vigente === null ||
+        vigente === usado ||
+        reintento >= REINTENTOS_TOKEN_MAX
+      ) {
+        throw error;
+      }
+
+      usado = vigente;
+    }
+  }
+}
 
 function toEstadoError(query: string, error: unknown): Estado {
   if (error instanceof MatchesApiError) {
@@ -37,6 +75,10 @@ function toEstadoError(query: string, error: unknown): Estado {
  * botón o con Enter —, nunca al escribir. Muestra la primera página de la API;
  * cargar las siguientes no forma parte de este ticket, así que si hay más
  * resultados se avisa en vez de mostrar una lista que parece completa.
+ *
+ * Renovar el token no cancela la búsqueda en curso: si ésta responde 401 por el
+ * token reemplazado, se reintenta con el vigente en vez de mostrar la sesión
+ * como vencida.
  */
 export function SearchPage() {
   const { session, signOut } = useAuth();
@@ -50,6 +92,12 @@ export function SearchPage() {
   const [estado, setEstado] = useState<Estado>({ status: 'idle' });
   // La última búsqueda en curso: una nueva, o salir de la pantalla, descarta su respuesta.
   const controllerRef = useRef<AbortController | null>(null);
+  // El token vigente, para reintentar una petición cuyo token se renovó mientras tanto.
+  const tokenRef = useRef(accessToken);
+
+  useEffect(() => {
+    tokenRef.current = accessToken;
+  }, [accessToken]);
 
   useEffect(() => () => controllerRef.current?.abort(), []);
 
@@ -63,7 +111,7 @@ export function SearchPage() {
 
       setEstado({ status: 'loading' });
 
-      searchMatches(query, accessToken, { signal: controller.signal })
+      pedirPagina(query, accessToken, tokenRef, controller.signal)
         .then((page) => {
           if (controller.signal.aborted) return;
 
