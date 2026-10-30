@@ -110,10 +110,35 @@ describe('GET /me/watched-matches', () => {
             score: { home: 2, away: 1 },
           },
           watchedAt: '2026-10-10T12:00:00.123Z',
+          rating: 4,
         },
       ],
       nextCursor: { watchedAt: CURSOR_WATCHED_AT, matchId: MATCH_ID },
     });
+  });
+
+  it('conserva los campos previos de cada item y solo agrega rating', async () => {
+    mockAuthenticated();
+    const app = buildTestApp(vi.fn<ListHistoryPage>(async () => PAGE));
+
+    const response = await request(app).get(URL).set('Authorization', 'Bearer good-token');
+
+    expect(Object.keys(response.body)).toEqual(['items', 'nextCursor']);
+    expect(Object.keys(response.body.items[0])).toEqual(['match', 'watchedAt', 'rating']);
+  });
+
+  it('un partido sin calificar viaja con rating null explícito, no omitido', async () => {
+    mockAuthenticated();
+    const unrated: WatchedHistoryPage = {
+      items: [{ ...PAGE.items[0]!, rating: null }],
+      nextCursor: null,
+    };
+    const app = buildTestApp(vi.fn<ListHistoryPage>(async () => unrated));
+
+    const response = await request(app).get(URL).set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(200);
+    expect(response.body.items[0]).toHaveProperty('rating', null);
   });
 
   it('un usuario sin vistos recibe 200 con items vacíos y nextCursor null', async () => {
@@ -248,5 +273,26 @@ describe('GET /me/watched-matches', () => {
       error: { code: 'INTERNAL_ERROR', message: 'Ocurrió un error inesperado.' },
     });
     expect(JSON.stringify(response.body)).not.toContain('watched_matches');
+  });
+
+  it('un error al leer las notas responde 500 genérico, no items sin calificar', async () => {
+    mockAuthenticated();
+    const app = buildTestApp(
+      vi.fn<ListHistoryPage>(async () => {
+        throw new WatchedMatchPersistenceError(
+          'No se pudieron leer las notas del historial de vistos.',
+          new Error('permission denied for table match_ratings'),
+        );
+      }),
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await request(app).get(URL).set('Authorization', 'Bearer good-token');
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({
+      error: { code: 'INTERNAL_ERROR', message: 'Ocurrió un error inesperado.' },
+    });
+    expect(JSON.stringify(response.body)).not.toContain('match_ratings');
   });
 });
