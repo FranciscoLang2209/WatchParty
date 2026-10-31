@@ -59,6 +59,17 @@ export interface WatchedHistoryCursor {
   matchId: string;
 }
 
+/**
+ * Filtro por nota propia del historial (WAT-263): `all` (sin filtrar),
+ * `rated` (con nota propia) o `unrated` (sin nota propia).
+ */
+export const WATCHED_HISTORY_RATING_STATUSES = ['all', 'rated', 'unrated'] as const;
+export type WatchedHistoryRatingStatus = (typeof WATCHED_HISTORY_RATING_STATUSES)[number];
+
+export function isWatchedHistoryRatingStatus(value: unknown): value is WatchedHistoryRatingStatus {
+  return (WATCHED_HISTORY_RATING_STATUSES as readonly unknown[]).includes(value);
+}
+
 /** Opciones de `listHistoryPage`. `limit` debe ser un entero >= 1. */
 export interface ListWatchedHistoryPageOptions {
   limit: number;
@@ -69,6 +80,11 @@ export interface ListWatchedHistoryPageOptions {
    * visitante. Se aplica antes de paginar, sobre todo el historial propio.
    */
   teamId?: string;
+  /**
+   * Filtro por nota propia (WAT-263). Omitirlo equivale a `all`. Se combina
+   * con `teamId` y también se aplica antes de paginar.
+   */
+  ratingStatus?: WatchedHistoryRatingStatus;
 }
 
 /** Un partido del historial propio, con el momento en que se marcó visto. */
@@ -118,7 +134,7 @@ export interface WatchedMatchStore {
    * antiguo, con desempate estable por `match_id`. Paginado por cursor: marcar
    * un partido nuevo no desplaza las páginas ya leídas. Un usuario sin vistos
    * devuelve `items: []`, nunca `null`. Lanza `RangeError` si `limit`, el
-   * cursor o `teamId` son inválidos.
+   * cursor, `teamId` o `ratingStatus` son inválidos.
    *
    * Cada item trae la nota propia de `userId` (WAT-260); nunca la de otro
    * usuario. Un fallo al leer las notas se lanza, no se convierte en `null`.
