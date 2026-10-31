@@ -18,25 +18,35 @@ import {
 import { UUID_PATTERN } from '../http/match-id-pattern.js';
 import { WatchedMatchPersistenceError } from './watched-match-persistence-error.js';
 
-// `watched_matches.match_id` es una FK inline sin nombre explícito
-// (20260930120000_watched_matches.sql): Postgres la nombra
+// El historial se lee de la vista `watched_history` (WAT-263): cada visto con
+// la nota propia (`rating`, o null) del `left join` con match_ratings. Su
+// `match_id` sale de `watched_matches.match_id`, una FK inline sin nombre
+// explícito (20260930120000_watched_matches.sql): Postgres la nombra
 // `<tabla>_<columna>_fkey`. El hint deja explícito qué relación embeber.
-const HISTORY_SELECT = `match_id, created_at, match:matches!watched_matches_match_id_fkey(${MATCH_SELECT_WITH_TEAMS})`;
+const HISTORY_SELECT = `match_id, created_at, rating, match:matches!watched_matches_match_id_fkey(${MATCH_SELECT_WITH_TEAMS})`;
 
 // Con filtro por equipo (WAT-262) el partido se embebe con `!inner`: así un
 // filtro sobre el partido excluye el visto entero. Sin `!inner`, PostgREST
 // devolvería el visto igual, con `match: null`.
-const HISTORY_SELECT_FILTERED_BY_MATCH = `match_id, created_at, match:matches!watched_matches_match_id_fkey!inner(${MATCH_SELECT_WITH_TEAMS})`;
+const HISTORY_SELECT_FILTERED_BY_MATCH = `match_id, created_at, rating, match:matches!watched_matches_match_id_fkey!inner(${MATCH_SELECT_WITH_TEAMS})`;
 
 interface HistoryRow {
   match_id: string;
   created_at: string;
+  rating: unknown;
   match: MatchRowWithTeams | null;
 }
 
-interface OwnRatingRow {
-  match_id: string;
-  rating: unknown;
+// La base ya garantiza 1..5; un valor distinto es un dato corrupto, no
+// "sin calificar".
+function toOwnRating(row: HistoryRow): number | null {
+  if (row.rating === null) return null;
+  if (!isValidMatchRating(row.rating)) {
+    throw new WatchedMatchPersistenceError(
+      `La nota del partido visto ${row.match_id} es inválida.`,
+    );
+  }
+  return row.rating;
 }
 
 function assertValidCursor(cursor: WatchedHistoryCursor): void {
@@ -132,8 +142,9 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
    * mismo enfoque que `listPageByRoom` de comentarios: pide `limit + 1` filas
    * y la extra solo indica que hay otra página. La comparación con el cursor
    * es estricta (`<`), así que el último visto de la página anterior no se
-   * repite. El partido viene embebido (una sola consulta, sin N+1); como la
-   * FK no cascadea, todo visto tiene su partido.
+   * repite. El partido viene embebido y la nota propia sale de la vista: una
+   * sola consulta, sin N+1. Como la FK no cascadea, todo visto tiene su
+   * partido.
    */
   async listHistoryPage(
     userId: string,
@@ -150,16 +161,8 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
       throw new RangeError('El filtro por nota del historial de vistos es inválido.');
     }
 
-    // `match_ratings` no tiene FK hacia `watched_matches`: primero se leen los
-    // partidos que el usuario calificó y después se filtran sus vistos con
-    // `in`/`not in` en la misma consulta que pagina, antes del `limit`.
-    const ratedMatchIds = ratingStatus === 'all' ? [] : await this.findRatedMatchIds(userId);
-    if (ratingStatus === 'rated' && ratedMatchIds.length === 0) {
-      return { items: [], nextCursor: null };
-    }
-
     let query = this.client
-      .from('watched_matches')
+      .from('watched_history')
       .select(teamId === undefined ? HISTORY_SELECT : HISTORY_SELECT_FILTERED_BY_MATCH)
       .eq('user_id', userId);
 
@@ -171,10 +174,12 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
       });
     }
 
+    // Por nota propia (WAT-263), sobre la columna de la vista: el cruce lo
+    // hace la base, sin listas de IDs en la URL ni topes de `max_rows`.
     if (ratingStatus === 'rated') {
-      query = query.in('match_id', ratedMatchIds);
-    } else if (ratingStatus === 'unrated' && ratedMatchIds.length > 0) {
-      query = query.not('match_id', 'in', `(${ratedMatchIds.join(',')})`);
+      query = query.not('rating', 'is', null);
+    } else if (ratingStatus === 'unrated') {
+      query = query.is('rating', null);
     }
 
     if (before) {
@@ -198,10 +203,6 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
     const lastRow = pageRows[pageRows.length - 1];
-    const ownRatings = await this.findOwnRatings(
-      userId,
-      pageRows.map((row) => row.match_id),
-    );
 
     return {
       items: pageRows.map((row) => {
@@ -213,69 +214,11 @@ export class SupabaseWatchedMatchStore implements WatchedMatchStore {
         return {
           match: toMatch(row.match),
           watchedAt: new Date(row.created_at).toISOString(),
-          rating: ownRatings.get(row.match_id) ?? null,
+          rating: toOwnRating(row),
         };
       }),
       nextCursor:
         hasMore && lastRow ? { watchedAt: lastRow.created_at, matchId: lastRow.match_id } : null,
     };
-  }
-
-  /**
-   * IDs de los partidos que `userId` calificó (WAT-263), para filtrar el
-   * historial por nota antes de paginar. Solo las notas de `userId`: la de
-   * otro usuario sobre el mismo partido no lo vuelve "calificado".
-   */
-  private async findRatedMatchIds(userId: string): Promise<string[]> {
-    const { data, error } = await this.client
-      .from('match_ratings')
-      .select('match_id')
-      .eq('user_id', userId);
-
-    if (error) {
-      throw new WatchedMatchPersistenceError(
-        'No se pudieron leer las notas para filtrar el historial de vistos.',
-        error,
-      );
-    }
-
-    return ((data ?? []) as { match_id: string }[]).map((row) => row.match_id);
-  }
-
-  /**
-   * Notas propias de `userId` para los partidos de una página (WAT-260), en
-   * una sola consulta acotada a esos partidos: sin N+1 y sin depender del
-   * tamaño del historial. `match_ratings` no tiene FK hacia `watched_matches`,
-   * por eso no se embebe en `HISTORY_SELECT`. Filtra siempre por `userId`: la
-   * nota de otro usuario sobre el mismo partido nunca entra en el mapa.
-   */
-  private async findOwnRatings(userId: string, matchIds: string[]): Promise<Map<string, number>> {
-    if (matchIds.length === 0) return new Map();
-
-    const { data, error } = await this.client
-      .from('match_ratings')
-      .select('match_id, rating')
-      .eq('user_id', userId)
-      .in('match_id', matchIds);
-
-    if (error) {
-      throw new WatchedMatchPersistenceError(
-        'No se pudieron leer las notas del historial de vistos.',
-        error,
-      );
-    }
-
-    const ratings = new Map<string, number>();
-    for (const row of (data ?? []) as OwnRatingRow[]) {
-      // La base ya garantiza 1..5; un valor distinto es un dato corrupto, no
-      // "sin calificar".
-      if (!isValidMatchRating(row.rating)) {
-        throw new WatchedMatchPersistenceError(
-          `La nota del partido visto ${row.match_id} es inválida.`,
-        );
-      }
-      ratings.set(row.match_id, row.rating);
-    }
-    return ratings;
   }
 }
