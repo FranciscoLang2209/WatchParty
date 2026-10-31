@@ -72,6 +72,21 @@ export async function checkMatchReviewsConstraints(
     { label: 'texto vacío', value: '', code: '23514' },
     { label: 'texto de solo espacios', value: '   \n\t ', code: '23514' },
     { label: 'texto de 501 caracteres', value: 'a'.repeat(501), code: '23514' },
+    {
+      label: '500 caracteres más un espacio al final (501)',
+      value: 'a'.repeat(500) + ' ',
+      code: '23514',
+    },
+    {
+      label: 'un espacio al inicio más 500 caracteres (501)',
+      value: ' ' + 'a'.repeat(500),
+      code: '23514',
+    },
+    {
+      label: 'texto corto rellenado con 1.000.000 de espacios',
+      value: 'a' + ' '.repeat(1_000_000),
+      code: '23514',
+    },
     { label: 'texto null', value: null, code: '23502' },
   ];
   for (const { label, value, code } of invalid) {
@@ -164,6 +179,8 @@ export async function checkMatchReviewsConstraints(
   for (const { label, value } of [
     { label: 'texto vacío', value: '' },
     { label: 'texto de 501 caracteres', value: 'c'.repeat(501) },
+    { label: '500 caracteres más un espacio al final (501)', value: 'c'.repeat(500) + ' ' },
+    { label: 'un espacio al inicio más 500 caracteres (501)', value: ' ' + 'c'.repeat(500) },
   ]) {
     const updateInvalid = await adminClient
       .from('match_reviews')

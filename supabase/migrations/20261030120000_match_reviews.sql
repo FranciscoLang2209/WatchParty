@@ -12,11 +12,11 @@
 create table match_reviews (
     user_id uuid not null references auth.users(id),
     match_id uuid not null references matches(id),
-    -- Texto plano. El largo se mide sin espacios, tabulaciones ni saltos de
-    -- línea en los extremos (btrim solo recorta espacios por defecto), así que
-    -- un texto vacío o de solo blancos se rechaza. Mismo criterio que
-    -- room_comments_body_length (20260923220550_room_comments_constraints.sql),
-    -- ampliado a todos los blancos.
+    -- Texto plano. El límite de 500 se aplica al texto tal como se guarda
+    -- (con sus blancos); el "no vacío" se mide aparte, sin espacios,
+    -- tabulaciones ni saltos de línea en los extremos (btrim solo recorta
+    -- espacios por defecto). Así ni un texto de solo blancos ni uno largo
+    -- rellenado con espacios pasan.
     body text not null,
     -- created_at = cuándo reseñó por primera vez; updated_at = cuándo editó
     -- el texto por última vez (lo mantiene el trigger de abajo).
@@ -26,7 +26,8 @@ create table match_reviews (
     -- concurrentes chocan contra ella en vez de depender de un "leer y
     -- después insertar" con condición de carrera.
     primary key (user_id, match_id),
-    constraint match_reviews_body_length check (char_length(btrim(body, E' \t\r\n')) between 1 and 500)
+    constraint match_reviews_body_max_length check (char_length(body) <= 500),
+    constraint match_reviews_body_not_blank check (char_length(btrim(body, E' \t\r\n')) >= 1)
 );
 
 -- La PK ya cubre consultas por user_id (columna líder). Sin este índice,
