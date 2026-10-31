@@ -10,6 +10,7 @@ import type { RoomCommentStore } from './modules/comments/domain/room-comment-st
 import type { RoomCommentReactionStore } from './modules/comments/domain/room-comment-reaction-store.js';
 import type { WatchedMatchStore } from './modules/watched/domain/watched-match-store.js';
 import type { MatchRatingStore } from './modules/ratings/domain/match-rating-store.js';
+import type { MatchReviewStore } from './modules/reviews/domain/match-review-store.js';
 import type { UserStatisticsStore } from './modules/statistics/domain/user-statistics-store.js';
 
 const noopReactionStore: RoomCommentReactionStore = {
@@ -27,6 +28,10 @@ const noopRatingStore: MatchRatingStore = {
   findRating: async () => null,
   saveRating: async (_userId, _matchId, rating) => rating,
   getSummary: async () => ({ average: null, count: 0 }),
+};
+
+const noopReviewStore: MatchReviewStore = {
+  findReview: async () => null,
 };
 
 process.env.SUPABASE_URL = 'https://example.supabase.co';
@@ -75,6 +80,7 @@ const app = createApp(
   noopRatingStore,
   noopStatisticsStore,
   { search: async () => ({ kind: 'matches', items: [], nextCursor: null }) },
+  noopReviewStore,
 );
 
 describe('GET /health', () => {
