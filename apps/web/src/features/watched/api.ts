@@ -4,6 +4,7 @@ import {
   WatchedApiError,
   type WatchedErrorKind,
   type WatchedHistoryCursor,
+  type WatchedHistoryFilters,
   type WatchedHistoryItem,
   type WatchedHistoryPage,
 } from './types';
@@ -93,16 +94,23 @@ function toWatched(body: unknown): boolean {
   return watched;
 }
 
-/** Se queda con `match` y `watchedAt`, y descarta cualquier extra. */
+/** La nota es un entero de 1 a 5 o `null`; ausente o de otra forma rompe el contrato. */
+function isHistoryRating(value: unknown): value is number | null {
+  return value === null || (Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 5);
+}
+
+/** Se queda con `match`, `watchedAt` y `rating`, y descarta cualquier extra. */
 function toHistoryItem(value: unknown): WatchedHistoryItem {
   if (typeof value !== 'object' || value === null) throw fail('server', HISTORY_MESSAGES);
 
-  const { match: rawMatch, watchedAt } = value as Record<string, unknown>;
+  const { match: rawMatch, watchedAt, rating } = value as Record<string, unknown>;
   const match = parseMatch(rawMatch);
 
-  if (!match || typeof watchedAt !== 'string') throw fail('server', HISTORY_MESSAGES);
+  if (!match || typeof watchedAt !== 'string' || !isHistoryRating(rating)) {
+    throw fail('server', HISTORY_MESSAGES);
+  }
 
-  return { match, watchedAt };
+  return { match, watchedAt, rating };
 }
 
 /** `null` o ausente es «no hay más páginas»; cualquier otra forma es un fallo. */
@@ -194,17 +202,28 @@ export const WATCHED_HISTORY_PAGE_SIZE = 20;
  * es la primera; con `cursor`, la que sigue a esa posición.
  *
  * Los dos campos del cursor viajan siempre juntos, tal cual los devolvió el
- * servidor, y `URLSearchParams` codifica el «+» del offset horario.
+ * servidor, y `URLSearchParams` codifica el «+» del offset horario. Los filtros
+ * se aplican antes de paginar, así que hay que repetirlos en cada página.
  */
 export async function listWatchedHistoryPage(
   accessToken: string,
-  { cursor, signal }: { cursor?: WatchedHistoryCursor; signal?: AbortSignal } = {},
+  {
+    cursor,
+    signal,
+    teamId,
+    ratingStatus,
+  }: { cursor?: WatchedHistoryCursor; signal?: AbortSignal } & WatchedHistoryFilters = {},
 ): Promise<WatchedHistoryPage> {
   const params = new URLSearchParams({ limit: String(WATCHED_HISTORY_PAGE_SIZE) });
 
   if (cursor) {
     params.set('beforeWatchedAt', cursor.watchedAt);
     params.set('beforeMatchId', cursor.matchId);
+  }
+
+  if (teamId !== undefined) params.set('teamId', teamId);
+  if (ratingStatus !== undefined && ratingStatus !== 'all') {
+    params.set('ratingStatus', ratingStatus);
   }
 
   const body = await request(

@@ -4,6 +4,7 @@ import { listWatchedHistoryPage } from './api';
 import {
   WatchedApiError,
   type WatchedHistoryCursor,
+  type WatchedHistoryFilters,
   type WatchedHistoryItem,
   type WatchedHistoryPage,
 } from './types';
@@ -30,6 +31,7 @@ function item(n: number): WatchedHistoryItem {
       score: null,
     },
     watchedAt: `2026-10-${String(20 - n).padStart(2, '0')}T12:00:00.000Z`,
+    rating: null,
   };
 }
 
@@ -55,6 +57,12 @@ function signalOf(callIndex: number): AbortSignal {
 function render(userId: string | null = USER_A, accessToken: string | null = TOKEN) {
   return renderHook(({ userId, accessToken }) => useWatchedHistory(userId, accessToken), {
     initialProps: { userId, accessToken },
+  });
+}
+
+function renderConFiltros(initial: WatchedHistoryFilters, userId = USER_A) {
+  return renderHook(({ filters, userId }) => useWatchedHistory(userId, TOKEN, filters), {
+    initialProps: { filters: initial, userId },
   });
 }
 
@@ -392,5 +400,228 @@ describe('useWatchedHistory', () => {
     unmount();
 
     expect(signalOf(0).aborted).toBe(true);
+  });
+
+  describe('filtros', () => {
+    const CON_NOTA: WatchedHistoryFilters = { teamId: 'team-1', ratingStatus: 'rated' };
+    const SIN_NOTA: WatchedHistoryFilters = { ratingStatus: 'unrated' };
+
+    it('pide la primera página con los filtros', async () => {
+      listMock.mockResolvedValueOnce({ items: [item(1)], nextCursor: null });
+
+      const { result } = renderConFiltros(CON_NOTA);
+
+      await waitFor(() => expect(result.current.state.status).toBe('ready'));
+      expect(listMock).toHaveBeenCalledWith(TOKEN, {
+        teamId: 'team-1',
+        ratingStatus: 'rated',
+        signal: expect.any(AbortSignal),
+      });
+    });
+
+    it('conserva los filtros y el cursor al pedir páginas siguientes', async () => {
+      listMock
+        .mockResolvedValueOnce({ items: [item(1)], nextCursor: cursor(1) })
+        .mockResolvedValueOnce({ items: [item(2)], nextCursor: null });
+
+      const { result } = renderConFiltros(CON_NOTA);
+      await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+      act(() => result.current.loadMore());
+      await waitFor(() => expect(result.current.state).toMatchObject({ hasMore: false }));
+
+      expect(listMock).toHaveBeenLastCalledWith(TOKEN, {
+        cursor: cursor(1),
+        teamId: 'team-1',
+        ratingStatus: 'rated',
+        signal: expect.any(AbortSignal),
+      });
+    });
+
+    it('cambiar filtros reinicia lista y cursor y pide desde la primera página', async () => {
+      const nueva = deferred();
+      listMock
+        .mockResolvedValueOnce({ items: [item(1)], nextCursor: cursor(1) })
+        .mockReturnValueOnce(nueva.promise);
+
+      const { result, rerender } = renderConFiltros(CON_NOTA);
+      await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+      rerender({ filters: SIN_NOTA, userId: USER_A });
+
+      // La lista filtrada anterior ya no se muestra ni su cursor se puede usar.
+      expect(result.current.state).toEqual({ status: 'loading' });
+      act(() => result.current.loadMore());
+      expect(listMock).toHaveBeenCalledTimes(2);
+      expect(listMock).toHaveBeenLastCalledWith(TOKEN, {
+        ratingStatus: 'unrated',
+        signal: expect.any(AbortSignal),
+      });
+
+      await act(async () => nueva.resolve({ items: [item(7)], nextCursor: null }));
+      expect(result.current.state).toMatchObject({ items: [item(7)], hasMore: false });
+    });
+
+    it('un objeto nuevo con los mismos filtros no vuelve a consultar', async () => {
+      listMock.mockResolvedValueOnce({ items: [item(1)], nextCursor: null });
+
+      const { result, rerender } = renderConFiltros({ ...CON_NOTA });
+      await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+      rerender({ filters: { ...CON_NOTA }, userId: USER_A });
+
+      expect(result.current.state).toMatchObject({ items: [item(1)] });
+      expect(listMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('«all» y la ausencia de ratingStatus son la misma consulta', async () => {
+      listMock.mockResolvedValueOnce({ items: [item(1)], nextCursor: null });
+
+      const { result, rerender } = renderConFiltros({});
+      await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+      rerender({ filters: { ratingStatus: 'all' }, userId: USER_A });
+
+      expect(result.current.state).toMatchObject({ items: [item(1)] });
+      expect(listMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('descarta la primera página de los filtros anteriores si llega tarde', async () => {
+      const vieja = deferred();
+      listMock
+        .mockReturnValueOnce(vieja.promise)
+        .mockResolvedValueOnce({ items: [item(7)], nextCursor: null });
+
+      const { result, rerender } = renderConFiltros(CON_NOTA);
+
+      rerender({ filters: SIN_NOTA, userId: USER_A });
+      expect(signalOf(0).aborted).toBe(true);
+      await waitFor(() => expect(result.current.state).toMatchObject({ items: [item(7)] }));
+
+      await act(async () => vieja.resolve({ items: [item(1)], nextCursor: cursor(1) }));
+      expect(result.current.state).toMatchObject({ items: [item(7)], hasMore: false });
+    });
+
+    it('descarta la página siguiente de los filtros anteriores si llega tarde', async () => {
+      const siguiente = deferred();
+      listMock
+        .mockResolvedValueOnce({ items: [item(1)], nextCursor: cursor(1) })
+        .mockReturnValueOnce(siguiente.promise)
+        .mockResolvedValueOnce({ items: [item(7)], nextCursor: null });
+
+      const { result, rerender } = renderConFiltros(CON_NOTA);
+      await waitFor(() => expect(result.current.state.status).toBe('ready'));
+      act(() => result.current.loadMore());
+
+      rerender({ filters: SIN_NOTA, userId: USER_A });
+      expect(signalOf(1).aborted).toBe(true);
+      await waitFor(() => expect(result.current.state).toMatchObject({ items: [item(7)] }));
+
+      await act(async () => siguiente.resolve({ items: [item(2)], nextCursor: null }));
+      expect(result.current.state).toMatchObject({ items: [item(7)], more: 'idle' });
+    });
+
+    it('un fallo tardío de los filtros anteriores no pisa la lista nueva', async () => {
+      const vieja = deferred();
+      listMock
+        .mockReturnValueOnce(vieja.promise)
+        .mockResolvedValueOnce({ items: [item(7)], nextCursor: null });
+
+      const { result, rerender } = renderConFiltros(CON_NOTA);
+
+      rerender({ filters: SIN_NOTA, userId: USER_A });
+      await waitFor(() => expect(result.current.state).toMatchObject({ items: [item(7)] }));
+
+      await act(async () => vieja.reject(new WatchedApiError('server', 'Falló.')));
+      expect(result.current.state).toMatchObject({ status: 'ready', items: [item(7)] });
+    });
+
+    it('volver a los filtros anteriores consulta de nuevo y no recupera el cursor viejo', async () => {
+      listMock
+        .mockResolvedValueOnce({ items: [item(1)], nextCursor: cursor(1) })
+        .mockResolvedValueOnce({ items: [item(7)], nextCursor: null })
+        .mockResolvedValueOnce({ items: [item(2)], nextCursor: null });
+
+      const { result, rerender } = renderConFiltros(CON_NOTA);
+      await waitFor(() => expect(result.current.state).toMatchObject({ items: [item(1)] }));
+
+      rerender({ filters: SIN_NOTA, userId: USER_A });
+      await waitFor(() => expect(result.current.state).toMatchObject({ items: [item(7)] }));
+
+      rerender({ filters: CON_NOTA, userId: USER_A });
+      expect(result.current.state).toEqual({ status: 'loading' });
+      await waitFor(() =>
+        expect(result.current.state).toMatchObject({ items: [item(2)], hasMore: false }),
+      );
+      expect(listMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('un fallo de la página siguiente conserva resultados y filtros al reintentar', async () => {
+      listMock
+        .mockResolvedValueOnce({ items: [item(1)], nextCursor: cursor(1) })
+        .mockRejectedValueOnce(new WatchedApiError('network', 'Sin conexión.'))
+        .mockResolvedValueOnce({ items: [item(2)], nextCursor: null });
+
+      const { result } = renderConFiltros(CON_NOTA);
+      await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+      act(() => result.current.loadMore());
+      await waitFor(() =>
+        expect(result.current.state).toMatchObject({ items: [item(1)], more: 'error' }),
+      );
+
+      act(() => result.current.loadMore());
+      await waitFor(() => expect(result.current.state).toMatchObject({ hasMore: false }));
+      expect(listMock).toHaveBeenLastCalledWith(TOKEN, {
+        cursor: cursor(1),
+        teamId: 'team-1',
+        ratingStatus: 'rated',
+        signal: expect.any(AbortSignal),
+      });
+    });
+
+    it('reintentar la primera página mantiene los filtros', async () => {
+      listMock
+        .mockRejectedValueOnce(new WatchedApiError('server', 'Falló.'))
+        .mockResolvedValueOnce({ items: [item(1)], nextCursor: null });
+
+      const { result } = renderConFiltros(CON_NOTA);
+      await waitFor(() => expect(result.current.state.status).toBe('error'));
+
+      act(() => result.current.retry());
+      await waitFor(() => expect(result.current.state).toMatchObject({ items: [item(1)] }));
+      expect(listMock).toHaveBeenLastCalledWith(TOKEN, {
+        teamId: 'team-1',
+        ratingStatus: 'rated',
+        signal: expect.any(AbortSignal),
+      });
+    });
+
+    it('cambiar de sesión con los mismos filtros descarta los datos de la anterior', async () => {
+      const deB = deferred();
+      listMock
+        .mockResolvedValueOnce({ items: [item(1)], nextCursor: cursor(1) })
+        .mockReturnValueOnce(deB.promise);
+
+      const { result, rerender } = renderConFiltros(CON_NOTA);
+      await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+      rerender({ filters: CON_NOTA, userId: USER_B });
+
+      expect(result.current.state).toEqual({ status: 'loading' });
+      await act(async () => deB.resolve({ items: [item(9)], nextCursor: null }));
+      expect(result.current.state).toMatchObject({ items: [item(9)] });
+    });
+
+    it('expone el rating de cada partido', async () => {
+      const calificado: WatchedHistoryItem = { ...item(1), rating: 5 };
+      listMock.mockResolvedValueOnce({ items: [calificado, item(2)], nextCursor: null });
+
+      const { result } = render();
+
+      await waitFor(() =>
+        expect(result.current.state).toMatchObject({ items: [{ rating: 5 }, { rating: null }] }),
+      );
+    });
   });
 });

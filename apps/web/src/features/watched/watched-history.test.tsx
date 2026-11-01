@@ -33,6 +33,7 @@ function item(
       score,
     },
     watchedAt: `2026-10-${String(20 - n).padStart(2, '0')}T15:00:00.000Z`,
+    rating: null,
   };
 }
 

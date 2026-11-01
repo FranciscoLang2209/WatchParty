@@ -246,7 +246,7 @@ describe('listWatchedHistoryPage', () => {
     status: 'finished',
     score: { home: 3, away: 0 },
   };
-  const ITEM = { match: MATCH, watchedAt: '2026-10-11T12:00:00.000Z' };
+  const ITEM = { match: MATCH, watchedAt: '2026-10-11T12:00:00.000Z', rating: 4 };
   const CURSOR = { watchedAt: '2026-10-11T12:00:00.123456+00:00', matchId: MATCH_ID };
 
   it('manda GET /me/watched-matches con bearer, límite y sin cuerpo', async () => {
@@ -274,6 +274,56 @@ describe('listWatchedHistoryPage', () => {
     expect(url.searchParams.get('beforeWatchedAt')).toBe(CURSOR.watchedAt);
     expect(url.searchParams.get('beforeMatchId')).toBe(CURSOR.matchId);
   });
+
+  it('sin filtros no manda teamId ni ratingStatus', async () => {
+    respondWith({ items: [], nextCursor: null });
+
+    await listWatchedHistoryPage(TOKEN);
+
+    const url = new URL(requestUrl());
+    expect(url.searchParams.has('teamId')).toBe(false);
+    expect(url.searchParams.has('ratingStatus')).toBe(false);
+  });
+
+  it('manda los filtros junto con el cursor de la página siguiente', async () => {
+    respondWith({ items: [], nextCursor: null });
+
+    await listWatchedHistoryPage(TOKEN, {
+      cursor: CURSOR,
+      teamId: 'team-1',
+      ratingStatus: 'unrated',
+    });
+
+    const url = new URL(requestUrl());
+    expect(url.searchParams.get('teamId')).toBe('team-1');
+    expect(url.searchParams.get('ratingStatus')).toBe('unrated');
+    expect(url.searchParams.get('beforeMatchId')).toBe(CURSOR.matchId);
+  });
+
+  it('ratingStatus «all» no viaja: es lo mismo que omitirlo', async () => {
+    respondWith({ items: [], nextCursor: null });
+
+    await listWatchedHistoryPage(TOKEN, { ratingStatus: 'all' });
+
+    expect(new URL(requestUrl()).searchParams.has('ratingStatus')).toBe(false);
+  });
+
+  it('un rating null es un partido sin calificar, no un fallo', async () => {
+    respondWith({ items: [{ ...ITEM, rating: null }], nextCursor: null });
+
+    const page = await listWatchedHistoryPage(TOKEN);
+
+    expect(page.items[0]?.rating).toBeNull();
+  });
+
+  it.each([0, 6, 3.5, '4', undefined])(
+    'un rating %s rompe el contrato y se trata como fallo',
+    async (rating) => {
+      respondWith({ items: [{ ...ITEM, rating }], nextCursor: null });
+
+      await expect(listWatchedHistoryPage(TOKEN)).rejects.toMatchObject({ kind: 'server' });
+    },
+  );
 
   it('devuelve los ítems validados y el cursor siguiente, sin campos extra', async () => {
     respondWith({

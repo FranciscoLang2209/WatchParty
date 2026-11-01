@@ -46,6 +46,18 @@ export interface WatchedHistoryItem {
   match: Match;
   /** ISO 8601 en UTC, truncado a milisegundos. */
   watchedAt: string;
+  /** Nota propia, entero de 1 a 5; `null` si no lo calificó (WAT-261). */
+  rating: number | null;
+}
+
+/** Filtro por nota propia (WAT-263). Omitirlo equivale a `all`. */
+export type WatchedHistoryRatingStatus = 'all' | 'rated' | 'unrated';
+
+/** Filtros opcionales del historial (WAT-262 y WAT-263); se combinan entre sí. */
+export interface WatchedHistoryFilters {
+  /** Id del equipo local o visitante. */
+  teamId?: string;
+  ratingStatus?: WatchedHistoryRatingStatus;
 }
 
 /**

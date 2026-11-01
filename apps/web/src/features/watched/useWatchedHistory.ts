@@ -4,6 +4,7 @@ import {
   WatchedApiError,
   isCancelled,
   type WatchedHistoryCursor,
+  type WatchedHistoryFilters,
   type WatchedHistoryItem,
 } from './types';
 
@@ -31,18 +32,18 @@ export interface UseWatchedHistory {
   retry: () => void;
 }
 
-/** Estado interno: cada resultado recuerda de qué usuario es. */
+/** Estado interno: cada resultado recuerda de qué consulta (usuario y filtros) es. */
 type Estado =
   | { status: 'loading' }
   | {
       status: 'ready';
-      userId: string;
+      consulta: string;
       items: WatchedHistoryItem[];
       nextCursor: WatchedHistoryCursor | null;
       more: 'idle' | 'loading' | 'error';
       moreError: string | null;
     }
-  | { status: 'error'; userId: string; message: string; expired: boolean };
+  | { status: 'error'; consulta: string; message: string; expired: boolean };
 
 const MENSAJE_INESPERADO = 'No pudimos cargar tu historial. Intentá de nuevo.';
 
@@ -77,13 +78,27 @@ function agregarPagina(
 }
 
 /**
+ * Identidad de lo que se está mostrando: `all` y la ausencia de `ratingStatus`
+ * son la misma consulta. `null` sin sesión.
+ */
+function claveDeConsulta(
+  userId: string | null,
+  { teamId, ratingStatus }: WatchedHistoryFilters,
+): string | null {
+  if (userId === null) return null;
+
+  return JSON.stringify([userId, teamId ?? null, ratingStatus ?? 'all']);
+}
+
+/**
  * Historial propio de partidos vistos, paginado (WAT-218). Sólo habla con la
  * Node API con el bearer de la sesión: nunca consulta Supabase directo.
  *
- * Pide la primera página al montarse y cada vez que cambia `userId`. Cambiar
- * de usuario descarta todo lo anterior —lista, cursor y respuestas en
- * camino—, aunque se vuelva a un usuario ya visto: su estado viejo no
- * reaparece. Renovar el token mientras carga la primera página la vuelve a
+ * Pide la primera página al montarse y cada vez que cambia `userId` o los
+ * `filters` (WAT-264), por valor: un objeto nuevo con los mismos filtros no
+ * consulta de nuevo. Cada cambio descarta todo lo anterior —lista, cursor y
+ * respuestas en camino—, aunque se vuelva a un usuario o filtro ya visto: su
+ * estado viejo no reaparece. Las páginas siguientes conservan los filtros. Renovar el token mientras carga la primera página la vuelve a
  * pedir con el token nuevo y descarta la del viejo (p. ej. un 401 tardío);
  * renovarlo con la lista ya cargada la conserva, y la página siguiente se
  * pide con el token vigente. Sin sesión no pide nada.
@@ -91,37 +106,39 @@ function agregarPagina(
 export function useWatchedHistory(
   userId: string | null,
   accessToken: string | null,
+  { teamId, ratingStatus }: WatchedHistoryFilters = {},
 ): UseWatchedHistory {
+  const consulta = claveDeConsulta(userId, { teamId, ratingStatus });
   const [estado, setEstado] = useState<Estado>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
-  const [usuarioPrevio, setUsuarioPrevio] = useState(userId);
-  // Usuario cuya primera página ya llegó: renovar el token no la vuelve a pedir.
+  const [consultaPrevia, setConsultaPrevia] = useState(consulta);
+  // Consulta cuya primera página ya llegó: renovar el token no la vuelve a pedir.
   const cargada = useRef<string | null>(null);
   // Hay un pedido de página en curso: bloquea un segundo pedido aunque todavía
   // no se haya vuelto a renderizar.
   const cargandoMas = useRef(false);
   const pedidoDeMas = useRef<AbortController | null>(null);
 
-  // Cambiar de usuario invalida el estado en el mismo render, antes de que se
-  // pueda mostrar o usar su cursor: ni siquiera vuelve el de un usuario previo.
-  if (usuarioPrevio !== userId) {
-    setUsuarioPrevio(userId);
+  // Cambiar de usuario o de filtros invalida el estado en el mismo render, antes
+  // de que se pueda mostrar o usar su cursor: ni siquiera vuelve uno previo.
+  if (consultaPrevia !== consulta) {
+    setConsultaPrevia(consulta);
     setEstado({ status: 'loading' });
   }
 
   useEffect(() => {
-    if (userId === null || accessToken === null || cargada.current === userId) return;
+    if (consulta === null || accessToken === null || cargada.current === consulta) return;
 
     const controller = new AbortController();
 
-    listWatchedHistoryPage(accessToken, { signal: controller.signal })
+    listWatchedHistoryPage(accessToken, { teamId, ratingStatus, signal: controller.signal })
       .then((page) => {
         if (controller.signal.aborted) return;
 
-        cargada.current = userId;
+        cargada.current = consulta;
         setEstado({
           status: 'ready',
-          userId,
+          consulta,
           items: agregarPagina([], page.items),
           nextCursor: page.nextCursor,
           more: 'idle',
@@ -129,17 +146,17 @@ export function useWatchedHistory(
         });
       })
       .catch((error: unknown) => {
-        // Una respuesta descartada por desmontaje, cambio de usuario o
-        // renovación del token no se anuncia.
+        // Una respuesta descartada por desmontaje, cambio de usuario o filtros,
+        // o renovación del token no se anuncia.
         if (controller.signal.aborted || isCancelled(error)) return;
 
-        setEstado({ status: 'error', userId, ...toFallo(error) });
+        setEstado({ status: 'error', consulta, ...toFallo(error) });
       });
 
     return () => controller.abort();
-  }, [userId, accessToken, intento]);
+  }, [consulta, teamId, ratingStatus, accessToken, intento]);
 
-  // Al salir, cambiar de usuario o renovarse el token se cancela la página que
+  // Al salir, cambiar de consulta o renovarse el token se cancela la página que
   // estuviera en camino: su respuesta (p. ej. un 401 del token viejo) ya no
   // vale. La acción queda libre para volver a pedirla con el token nuevo.
   useEffect(
@@ -155,15 +172,15 @@ export function useWatchedHistory(
           : previo,
       );
     },
-    [userId, accessToken],
+    [consulta, accessToken],
   );
 
-  // Volver a un usuario anterior (A → B → A) pide su primera página de nuevo.
+  // Volver a una consulta anterior (A → B → A) pide su primera página de nuevo.
   useEffect(
     () => () => {
       cargada.current = null;
     },
-    [userId],
+    [consulta],
   );
 
   const retry = useCallback(() => {
@@ -176,7 +193,7 @@ export function useWatchedHistory(
   const loadMore = useCallback(() => {
     if (
       estado.status !== 'ready' ||
-      estado.userId !== userId ||
+      estado.consulta !== consulta ||
       estado.nextCursor === null ||
       accessToken === null ||
       cargandoMas.current
@@ -185,7 +202,7 @@ export function useWatchedHistory(
     }
 
     const cursor = estado.nextCursor;
-    const usuario = estado.userId;
+    const pedida = estado.consulta;
     const controller = new AbortController();
 
     cargandoMas.current = true;
@@ -196,12 +213,17 @@ export function useWatchedHistory(
         : previo,
     );
 
-    listWatchedHistoryPage(accessToken, { cursor, signal: controller.signal })
+    listWatchedHistoryPage(accessToken, {
+      cursor,
+      teamId,
+      ratingStatus,
+      signal: controller.signal,
+    })
       .then((page) => {
         if (controller.signal.aborted) return;
 
         setEstado((previo) =>
-          previo.status === 'ready' && previo.userId === usuario && previo.nextCursor === cursor
+          previo.status === 'ready' && previo.consulta === pedida && previo.nextCursor === cursor
             ? {
                 ...previo,
                 items: agregarPagina(previo.items, page.items),
@@ -221,8 +243,8 @@ export function useWatchedHistory(
         // El fallo conserva la lista y el cursor para reintentar, salvo que la
         // sesión haya vencido: ahí hace falta ofrecer el reingreso.
         setEstado((previo) => {
-          if (previo.status !== 'ready' || previo.userId !== usuario) return previo;
-          if (fallo.expired) return { status: 'error', userId: usuario, ...fallo };
+          if (previo.status !== 'ready' || previo.consulta !== pedida) return previo;
+          if (fallo.expired) return { status: 'error', consulta: pedida, ...fallo };
 
           return previo.nextCursor === cursor
             ? { ...previo, more: 'error', moreError: fallo.message }
@@ -235,14 +257,14 @@ export function useWatchedHistory(
         pedidoDeMas.current = null;
         cargandoMas.current = false;
       });
-  }, [estado, userId, accessToken]);
+  }, [estado, consulta, teamId, ratingStatus, accessToken]);
 
-  return { state: toState(estado, userId), loadMore, retry };
+  return { state: toState(estado, consulta), loadMore, retry };
 }
 
-/** Lo que no es del usuario actual se presenta como carga, nunca como suyo. */
-function toState(estado: Estado, userId: string | null): WatchedHistoryState {
-  if (estado.status === 'loading' || estado.userId !== userId) return { status: 'loading' };
+/** Lo que no es de la consulta actual se presenta como carga, nunca como propio. */
+function toState(estado: Estado, consulta: string | null): WatchedHistoryState {
+  if (estado.status === 'loading' || estado.consulta !== consulta) return { status: 'loading' };
 
   if (estado.status === 'error') {
     return { status: 'error', message: estado.message, expired: estado.expired };
