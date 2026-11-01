@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { MatchCatalog } from '../../matches/domain/match-catalog.js';
-import type { WatchedHistoryItem } from '../domain/watched-match-store.js';
+import type {
+  WatchedHistoryCursor,
+  WatchedHistoryItem,
+  WatchedHistoryRatingStatus,
+} from '../domain/watched-match-store.js';
 import { SupabaseWatchedMatchStore } from './supabase-watched-match-store.js';
 import { WatchedMatchPersistenceError } from './watched-match-persistence-error.js';
 
@@ -29,68 +33,44 @@ interface RatingRow {
   rating: unknown;
 }
 
+/** Fila de la vista `watched_history`: el visto con su nota propia o `null`. */
+type ViewRow = HistoryRow & { rating: unknown };
+
 type FakeError = { message: string };
 
 interface FakeClientOptions {
   selectError?: FakeError;
   ratings?: RatingRow[];
-  ratingsError?: FakeError;
 }
 
 /**
- * Doble de `match_ratings`: interpreta solo lo que arma `listHistoryPage`
- * para las notas propias, `eq` por usuario e `in` por partidos de la página.
- */
-function makeRatingsBuilder(ratings: RatingRow[], ratingsError?: FakeError) {
-  const filters: ((row: RatingRow) => boolean)[] = [];
-
-  const builder = {
-    select: vi.fn(() => builder),
-    eq: vi.fn((column: keyof RatingRow, value: string) => {
-      filters.push((row) => row[column] === value);
-      return builder;
-    }),
-    in: vi.fn((column: keyof RatingRow, values: string[]) => {
-      filters.push((row) => values.includes(row[column] as string));
-      return builder;
-    }),
-    then: (resolve: (value: { data: RatingRow[] | null; error: FakeError | null }) => void) => {
-      if (ratingsError) {
-        resolve({ data: null, error: ratingsError });
-        return;
-      }
-      resolve({
-        data: ratings.filter((row) => filters.every((filter) => filter(row))),
-        error: null,
-      });
-    },
-  };
-
-  return builder;
-}
-
-/**
- * Doble de Supabase con `watched_matches` en memoria (embebiendo su partido,
- * como el select con relación). Interpreta solo lo que arma
- * `listHistoryPage`: `eq` por usuario, el filtro `or` del cursor, el `or`
- * por equipo sobre el partido embebido, `order` descendente por columnas y
- * `limit`.
+ * Doble de Supabase con la vista `watched_history` en memoria: cada visto con
+ * la nota del mismo usuario y partido (como el `left join` de la vista) y su
+ * partido embebido. Interpreta solo lo que arma `listHistoryPage`: `eq` por
+ * usuario, el filtro `or` del cursor, el `or` por equipo sobre el partido
+ * embebido, `is`/`not is` null sobre `rating`, `order` descendente por
+ * columnas y `limit`. No implementa `in`: un filtro por lista de IDs falla.
  *
  * Como PostgREST, un filtro sobre el partido embebido solo excluye vistos si
  * el select usa `!inner`; sin eso el doble falla en vez de filtrar, para que
  * un test no pase con una consulta que en la base real no filtraría.
  */
 function makeFakeClient(rows: HistoryRow[], options: FakeClientOptions = {}) {
+  const viewRows: ViewRow[] = rows.map((row) => ({
+    ...row,
+    rating:
+      (options.ratings ?? []).find(
+        (rating) => rating.user_id === row.user_id && rating.match_id === row.match_id,
+      )?.rating ?? null,
+  }));
+
   const from = vi.fn((table: string) => {
-    if (table === 'match_ratings') {
-      return makeRatingsBuilder(options.ratings ?? [], options.ratingsError);
-    }
-    if (table !== 'watched_matches') {
+    if (table !== 'watched_history') {
       throw new Error(`Tabla inesperada en el fake client: ${table}`);
     }
 
-    const filters: ((row: HistoryRow) => boolean)[] = [];
-    const orderColumns: { column: keyof HistoryRow; ascending: boolean }[] = [];
+    const filters: ((row: ViewRow) => boolean)[] = [];
+    const orderColumns: { column: keyof ViewRow; ascending: boolean }[] = [];
     let limitCount: number | undefined;
 
     let innerJoin = false;
@@ -100,8 +80,20 @@ function makeFakeClient(rows: HistoryRow[], options: FakeClientOptions = {}) {
         innerJoin = /match:matches![a-z_]+!inner\(/.test(columns);
         return builder;
       }),
-      eq: vi.fn((column: keyof HistoryRow, value: string) => {
+      eq: vi.fn((column: keyof ViewRow, value: string) => {
         filters.push((row) => row[column] === value);
+        return builder;
+      }),
+      is: vi.fn((column: keyof ViewRow, value: null) => {
+        if (column !== 'rating' || value !== null) throw new Error(`Filtro is inesperado`);
+        filters.push((row) => row.rating === null);
+        return builder;
+      }),
+      not: vi.fn((column: keyof ViewRow, operator: string, value: null) => {
+        if (column !== 'rating' || operator !== 'is' || value !== null) {
+          throw new Error(`Filtro not inesperado: ${String(column)} ${operator}`);
+        }
+        filters.push((row) => row.rating !== null);
         return builder;
       }),
       or: vi.fn((filter: string, orOptions?: { referencedTable?: string }) => {
@@ -130,7 +122,7 @@ function makeFakeClient(rows: HistoryRow[], options: FakeClientOptions = {}) {
         );
         return builder;
       }),
-      order: vi.fn((column: keyof HistoryRow, { ascending }: { ascending: boolean }) => {
+      order: vi.fn((column: keyof ViewRow, { ascending }: { ascending: boolean }) => {
         orderColumns.push({ column, ascending });
         return builder;
       }),
@@ -138,13 +130,13 @@ function makeFakeClient(rows: HistoryRow[], options: FakeClientOptions = {}) {
         limitCount = count;
         return builder;
       }),
-      then: (resolve: (value: { data: HistoryRow[] | null; error: FakeError | null }) => void) => {
+      then: (resolve: (value: { data: ViewRow[] | null; error: FakeError | null }) => void) => {
         if (options.selectError) {
           resolve({ data: null, error: options.selectError });
           return;
         }
 
-        const sorted = rows
+        const sorted = viewRows
           .filter((row) => filters.every((filter) => filter(row)))
           .sort((a, b) => {
             for (const { column, ascending } of orderColumns) {
@@ -428,12 +420,11 @@ describe('SupabaseWatchedMatchStore.listHistoryPage()', () => {
     expect(page.items.map((item) => item.rating)).toEqual([null]);
   });
 
-  it('lee las notas de toda la página en una sola consulta, solo de los partidos de esa página', async () => {
+  it('lee vistos y notas en una sola consulta a la vista watched_history', async () => {
     const client = makeFakeClient(
       [
         row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'),
         row(USER_ID, 2, '2026-10-02T10:00:00.000000+00:00'),
-        row(USER_ID, 3, '2026-10-03T10:00:00.000000+00:00'),
       ],
       { ratings: [rating(USER_ID, 1, 3)] },
     );
@@ -441,33 +432,7 @@ describe('SupabaseWatchedMatchStore.listHistoryPage()', () => {
 
     await store.listHistoryPage(USER_ID, { limit: 2 });
 
-    const tables = client.from.mock.calls.map(([table]) => table);
-    expect(tables).toEqual(['watched_matches', 'match_ratings']);
-    const ratingsBuilder = client.from.mock.results[1]!.value as ReturnType<
-      typeof makeRatingsBuilder
-    >;
-    expect(ratingsBuilder.eq).toHaveBeenCalledWith('user_id', USER_ID);
-    expect(ratingsBuilder.in).toHaveBeenCalledWith('match_id', [matchId(3), matchId(2)]);
-  });
-
-  it('una página vacía no consulta las notas', async () => {
-    const client = makeFakeClient([]);
-    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
-
-    await store.listHistoryPage(USER_ID, { limit: 10 });
-
-    expect(client.from.mock.calls.map(([table]) => table)).toEqual(['watched_matches']);
-  });
-
-  it('propaga un error al leer las notas como WatchedMatchPersistenceError, no como null', async () => {
-    const client = makeFakeClient([row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00')], {
-      ratingsError: { message: 'fallo simulado' },
-    });
-    const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
-
-    await expect(store.listHistoryPage(USER_ID, { limit: 2 })).rejects.toThrow(
-      WatchedMatchPersistenceError,
-    );
+    expect(client.from.mock.calls.map(([table]) => table)).toEqual(['watched_history']);
   });
 
   it.each([0, 6, 3.5, '4'])(
@@ -593,4 +558,181 @@ describe('SupabaseWatchedMatchStore.listHistoryPage()', () => {
       expect(client.from).not.toHaveBeenCalled();
     },
   );
+  describe('con ratingStatus', () => {
+    // Vistos 1..5 del usuario; calificó 2 y 4. El otro usuario calificó 1.
+    function ratedFixture() {
+      return makeFakeClient(
+        [
+          withTeams(row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'), 1, 2),
+          withTeams(row(USER_ID, 2, '2026-10-02T10:00:00.000000+00:00'), 2, 3),
+          withTeams(row(USER_ID, 3, '2026-10-03T10:00:00.000000+00:00'), 3, 1),
+          withTeams(row(USER_ID, 4, '2026-10-04T10:00:00.000000+00:00'), 1, 3),
+          withTeams(row(USER_ID, 5, '2026-10-05T10:00:00.000000+00:00'), 2, 3),
+          withTeams(row(OTHER_USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'), 1, 2),
+        ],
+        {
+          ratings: [rating(USER_ID, 2, 3), rating(USER_ID, 4, 5), rating(OTHER_USER_ID, 1, 4)],
+        },
+      );
+    }
+
+    it.each([undefined, 'all'] as const)(
+      'con %s devuelve todo el historial propio, calificado o no',
+      async (ratingStatus) => {
+        const store = new SupabaseWatchedMatchStore(
+          asSupabaseClient(ratedFixture()),
+          unusedCatalog,
+        );
+
+        const page = await store.listHistoryPage(USER_ID, { limit: 10, ratingStatus });
+
+        expect(ids(page.items)).toEqual([5, 4, 3, 2, 1].map(matchId));
+      },
+    );
+
+    it('rated devuelve solo los vistos con nota propia', async () => {
+      const store = new SupabaseWatchedMatchStore(asSupabaseClient(ratedFixture()), unusedCatalog);
+
+      const page = await store.listHistoryPage(USER_ID, { limit: 10, ratingStatus: 'rated' });
+
+      expect(page.items.map((item) => [item.match.id, item.rating])).toEqual([
+        [matchId(4), 5],
+        [matchId(2), 3],
+      ]);
+    });
+
+    it('unrated devuelve solo los vistos sin nota propia; la nota de otro usuario no cuenta', async () => {
+      const store = new SupabaseWatchedMatchStore(asSupabaseClient(ratedFixture()), unusedCatalog);
+
+      const page = await store.listHistoryPage(USER_ID, { limit: 10, ratingStatus: 'unrated' });
+
+      expect(page.items.map((item) => [item.match.id, item.rating])).toEqual([
+        [matchId(5), null],
+        [matchId(3), null],
+        [matchId(1), null],
+      ]);
+    });
+
+    it('se combina con teamId', async () => {
+      const store = new SupabaseWatchedMatchStore(asSupabaseClient(ratedFixture()), unusedCatalog);
+
+      const rated = await store.listHistoryPage(USER_ID, {
+        limit: 10,
+        teamId: teamId(1),
+        ratingStatus: 'rated',
+      });
+      const unrated = await store.listHistoryPage(USER_ID, {
+        limit: 10,
+        teamId: teamId(1),
+        ratingStatus: 'unrated',
+      });
+
+      expect(ids(rated.items)).toEqual([matchId(4)]);
+      expect(ids(unrated.items)).toEqual([matchId(3), matchId(1)]);
+    });
+
+    it.each(['rated', 'unrated'] as const)(
+      '%s recorre páginas sucesivas sin duplicados ni huecos',
+      async (ratingStatus) => {
+        const store = new SupabaseWatchedMatchStore(
+          asSupabaseClient(ratedFixture()),
+          unusedCatalog,
+        );
+        const seen: string[] = [];
+        let before: WatchedHistoryCursor | undefined;
+
+        for (let pages = 0; pages < 10; pages++) {
+          const page = await store.listHistoryPage(USER_ID, { limit: 1, ratingStatus, before });
+          seen.push(...ids(page.items));
+          if (!page.nextCursor) break;
+          before = page.nextCursor;
+        }
+
+        expect(seen).toEqual(
+          ratingStatus === 'rated' ? [matchId(4), matchId(2)] : [5, 3, 1].map(matchId),
+        );
+      },
+    );
+
+    it('rated sin ninguna nota propia devuelve vacío real', async () => {
+      const client = makeFakeClient([row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00')], {
+        ratings: [rating(OTHER_USER_ID, 1, 4)],
+      });
+      const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+      expect(await store.listHistoryPage(USER_ID, { limit: 10, ratingStatus: 'rated' })).toEqual({
+        items: [],
+        nextCursor: null,
+      });
+    });
+
+    it('unrated sin ninguna nota propia devuelve todo el historial', async () => {
+      const client = makeFakeClient([
+        row(USER_ID, 1, '2026-10-01T10:00:00.000000+00:00'),
+        row(USER_ID, 2, '2026-10-02T10:00:00.000000+00:00'),
+      ]);
+      const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+      const page = await store.listHistoryPage(USER_ID, { limit: 10, ratingStatus: 'unrated' });
+
+      expect(ids(page.items)).toEqual([matchId(2), matchId(1)]);
+    });
+
+    it.each(['rated', 'unrated'] as const)(
+      '%s con más de 1000 notas filtra en la base, sin listas de IDs ni truncar',
+      async (ratingStatus) => {
+        // 1500 vistos, los pares calificados: más que el `max_rows` de PostgREST
+        // y mucho más de lo que entra en una URL como lista de UUIDs.
+        const total = 1500;
+        const rows = Array.from({ length: total }, (_, i) =>
+          row(USER_ID, i + 1, `2026-10-01T10:00:00.${String(i + 1).padStart(6, '0')}+00:00`),
+        );
+        const ratings = rows
+          .filter((_, i) => (i + 1) % 2 === 0)
+          .map((historyRow) => ({ user_id: USER_ID, match_id: historyRow.match_id, rating: 4 }));
+        const client = makeFakeClient(rows, { ratings });
+        const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+        let count = 0;
+        let before: WatchedHistoryCursor | undefined;
+
+        for (let pages = 0; pages < 100; pages++) {
+          const page = await store.listHistoryPage(USER_ID, { limit: 50, ratingStatus, before });
+          for (const item of page.items) {
+            expect(item.rating === null).toBe(ratingStatus === 'unrated');
+          }
+          count += page.items.length;
+          if (!page.nextCursor) break;
+          before = page.nextCursor;
+        }
+
+        expect(count).toBe(total / 2);
+        expect(client.from.mock.calls.every(([table]) => table === 'watched_history')).toBe(true);
+      },
+    );
+
+    it('propaga un error de la consulta filtrada como WatchedMatchPersistenceError', async () => {
+      const client = makeFakeClient([], { selectError: { message: 'URI too long' } });
+      const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+      await expect(
+        store.listHistoryPage(USER_ID, { limit: 2, ratingStatus: 'unrated' }),
+      ).rejects.toThrow(WatchedMatchPersistenceError);
+    });
+
+    it.each(['RATED', 'none', ''])(
+      'con ratingStatus inválido (%s) lanza RangeError sin consultar la base',
+      async (invalid) => {
+        const client = makeFakeClient([]);
+        const store = new SupabaseWatchedMatchStore(asSupabaseClient(client), unusedCatalog);
+
+        await expect(
+          store.listHistoryPage(USER_ID, {
+            limit: 2,
+            ratingStatus: invalid as WatchedHistoryRatingStatus,
+          }),
+        ).rejects.toThrow(RangeError);
+        expect(client.from).not.toHaveBeenCalled();
+      },
+    );
+  });
 });

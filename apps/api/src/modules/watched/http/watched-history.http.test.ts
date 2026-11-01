@@ -207,6 +207,34 @@ describe('GET /me/watched-matches', () => {
     expect(listHistoryPage).toHaveBeenCalledWith('user-123', { limit: 20, teamId: TEAM_ID });
   });
 
+  it.each(['all', 'rated', 'unrated'] as const)(
+    'pasa ratingStatus=%s al store junto con teamId y el cursor',
+    async (ratingStatus) => {
+      mockAuthenticated('user-123');
+      const listHistoryPage = vi.fn<ListHistoryPage>(async () => EMPTY_PAGE);
+      const app = buildTestApp(listHistoryPage);
+
+      const response = await request(app)
+        .get(URL)
+        .query({
+          ratingStatus,
+          teamId: TEAM_ID,
+          limit: '5',
+          beforeWatchedAt: CURSOR_WATCHED_AT,
+          beforeMatchId: MATCH_ID,
+        })
+        .set('Authorization', 'Bearer good-token');
+
+      expect(response.status).toBe(200);
+      expect(listHistoryPage).toHaveBeenCalledWith('user-123', {
+        limit: 5,
+        before: { watchedAt: CURSOR_WATCHED_AT, matchId: MATCH_ID },
+        teamId: TEAM_ID,
+        ratingStatus,
+      });
+    },
+  );
+
   it('ignora un userId enviado en la query: lista solo los vistos del bearer', async () => {
     mockAuthenticated('user-123');
     const listHistoryPage = vi.fn<ListHistoryPage>(async () => EMPTY_PAGE);
@@ -268,6 +296,10 @@ describe('GET /me/watched-matches', () => {
     ['teamId vacío', { teamId: '' }],
     ['teamId que intenta inyectar un filtro', { teamId: `${TEAM_ID},user_id.neq.x` }],
     ['teamId repetido', `teamId=${TEAM_ID}&teamId=${TEAM_ID}`],
+    ['ratingStatus desconocido', { ratingStatus: 'none' }],
+    ['ratingStatus en mayúsculas', { ratingStatus: 'RATED' }],
+    ['ratingStatus vacío', { ratingStatus: '' }],
+    ['ratingStatus repetido', 'ratingStatus=rated&ratingStatus=unrated'],
   ])('con %s responde 400 VALIDATION_ERROR y no invoca el store', async (_label, query) => {
     mockAuthenticated();
     const listHistoryPage = vi.fn<ListHistoryPage>();
