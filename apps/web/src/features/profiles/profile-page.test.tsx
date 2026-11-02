@@ -202,6 +202,18 @@ describe('ProfilePage: la carga', () => {
     }
   });
 
+  it('el filtro del historial reutiliza los equipos ya consultados', async () => {
+    renderPage();
+    await screen.findByLabelText('Nombre visible');
+
+    const filtro = screen.getByRole('combobox', { name: 'Filtrar por equipo' });
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+
+    expect(within(filtro).getByRole('option', { name: 'River Plate' })).toHaveValue(RIVER);
+    expect(within(filtro).getByRole('option', { name: 'Boca Juniors' })).toHaveValue(BOCA);
+    expect(urls.filter((url) => url.endsWith('/teams'))).toHaveLength(1);
+  });
+
   it('muestra el perfil que devuelve la API', async () => {
     renderPage();
 

@@ -297,6 +297,7 @@ export function ProfilePage() {
         <WatchedHistory
           userId={userId}
           accessToken={accessToken}
+          teams={estado.status === 'ready' ? estado.teams : []}
           onSessionExpired={() => void signOut()}
         />
       </div>
