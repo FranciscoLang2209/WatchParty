@@ -30,6 +30,10 @@ import { createMatchRatingsRouter } from './modules/ratings/http/match-ratings-r
 import { MatchRatingService } from './modules/ratings/application/match-rating-service.js';
 import type { MatchRatingStore } from './modules/ratings/domain/match-rating-store.js';
 import { SupabaseMatchRatingStore } from './modules/ratings/infrastructure/supabase-match-rating-store.js';
+import { createMatchReviewsRouter } from './modules/reviews/http/match-reviews-router.js';
+import { MatchReviewService } from './modules/reviews/application/match-review-service.js';
+import type { MatchReviewStore } from './modules/reviews/domain/match-review-store.js';
+import { SupabaseMatchReviewStore } from './modules/reviews/infrastructure/supabase-match-review-store.js';
 import { createStatisticsRouter } from './modules/statistics/http/statistics-router.js';
 import type { UserStatisticsStore } from './modules/statistics/domain/user-statistics-store.js';
 import { SupabaseUserStatisticsStore } from './modules/statistics/infrastructure/supabase-user-statistics-store.js';
@@ -55,6 +59,7 @@ export function createApp(
   ratingStore: MatchRatingStore,
   statisticsStore: UserStatisticsStore,
   matchSearch: MatchSearch,
+  reviewStore: MatchReviewStore,
 ): Express {
   const app = express();
 
@@ -81,6 +86,7 @@ export function createApp(
     '/matches',
     createMatchRatingsRouter(new MatchRatingService(matchCatalog, watchedStore, ratingStore)),
   );
+  app.use('/matches', createMatchReviewsRouter(new MatchReviewService(matchCatalog, reviewStore)));
   app.use(createProfilesRouter(profileStore));
   app.use('/me', createWatchedHistoryRouter(watchedStore));
   app.use('/me', createStatisticsRouter(statisticsStore));
@@ -115,6 +121,7 @@ const watchedStore = new SupabaseWatchedMatchStore(sportsDataClient, matchCatalo
 const ratingStore = new SupabaseMatchRatingStore(sportsDataClient);
 const statisticsStore = new SupabaseUserStatisticsStore(sportsDataClient);
 const matchSearch = new SupabaseMatchSearch(sportsDataClient);
+const reviewStore = new SupabaseMatchReviewStore(sportsDataClient);
 
 export default createApp(
   matchCatalog,
@@ -126,4 +133,5 @@ export default createApp(
   ratingStore,
   statisticsStore,
   matchSearch,
+  reviewStore,
 );
