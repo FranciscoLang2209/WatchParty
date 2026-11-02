@@ -53,7 +53,10 @@ function failure(status: number, code: string) {
   return Promise.resolve(jsonResponse({ error: { code, message: 'x' } }, status));
 }
 
-function renderHistory() {
+const BOCA = { id: '0a000000-0000-4000-8000-000000000001', name: 'Boca Juniors' };
+const RIVER = { id: '0a000000-0000-4000-8000-000000000002', name: 'River Plate' };
+
+function renderHistory(teams = [BOCA, RIVER]) {
   const user = userEvent.setup();
 
   render(
@@ -62,7 +65,12 @@ function renderHistory() {
         <Route
           path="/profile"
           element={
-            <WatchedHistory userId={USER} accessToken={TOKEN} onSessionExpired={onSessionExpired} />
+            <WatchedHistory
+              userId={USER}
+              accessToken={TOKEN}
+              teams={teams}
+              onSessionExpired={onSessionExpired}
+            />
           }
         />
         <Route path="/matches/:matchId" element={<p>Detalle del partido</p>} />
@@ -79,6 +87,18 @@ function titulos(): string[] {
 }
 
 const cargarMas = () => screen.getByRole('button', { name: 'Cargar más partidos' });
+const selectorEquipo = () => screen.getByRole('combobox', { name: 'Filtrar por equipo' });
+const selectorNota = () => screen.getByRole('combobox', { name: 'Filtrar por nota' });
+const limpiar = () => screen.queryByRole('button', { name: 'Limpiar filtros' });
+
+/** Parámetros de búsqueda del pedido número `n` (desde 0). */
+function pedido(n: number): URLSearchParams {
+  return new URL(String(fetchMock.mock.calls[n]![0])).searchParams;
+}
+
+function conNota(n: number, rating: number): WatchedHistoryItem {
+  return { ...item(n), rating };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -128,6 +148,7 @@ describe('WatchedHistory: estados', () => {
       within(tarjeta).getByText('2 – 1'),
       within(tarjeta).getByText(/sáb.*10.*oct.*18:00/),
       within(tarjeta).getByText(/^Visto el /),
+      within(tarjeta).getByText('Sin calificar'),
       within(tarjeta).getByRole('link'),
     ];
 
@@ -211,6 +232,258 @@ describe('WatchedHistory: estados', () => {
     await user.click(await screen.findByRole('button', { name: 'Iniciar sesión nuevamente' }));
 
     expect(onSessionExpired).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WatchedHistory: nota propia', () => {
+  it('muestra la nota de cada partido y «Sin calificar» cuando no tiene', async () => {
+    fetchMock.mockReturnValueOnce(page([conNota(1, 4), item(2), conNota(3, 1)]));
+    renderHistory();
+
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+    const [calificado, sinCalificar, notaMinima] = screen.getAllByRole('listitem');
+
+    expect(within(calificado!).getByText('Tu nota: 4 de 5')).toBeInTheDocument();
+    expect(within(calificado!).queryByText('Sin calificar')).not.toBeInTheDocument();
+    expect(within(sinCalificar!).getByText('Sin calificar')).toBeInTheDocument();
+    expect(within(sinCalificar!).queryByText(/^Tu nota/)).not.toBeInTheDocument();
+    expect(within(notaMinima!).getByText('Tu nota: 1 de 5')).toBeInTheDocument();
+  });
+
+  it('la nota convive con la fecha, el resultado y el enlace al detalle', async () => {
+    fetchMock.mockReturnValueOnce(
+      page([{ ...item(1, 'finished', { home: 2, away: 1 }), rating: 5 }]),
+    );
+    renderHistory();
+
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+    const tarjeta = screen.getByRole('listitem');
+
+    expect(within(tarjeta).getByText('Tu nota: 5 de 5')).toBeInTheDocument();
+    expect(within(tarjeta).getByText('2 – 1')).toBeInTheDocument();
+    expect(within(tarjeta).getByText(/^Visto el .*19.*oct/)).toBeInTheDocument();
+    expect(
+      within(tarjeta).getByRole('link', { name: 'Ver partido: Local 1 vs. Visitante 1' }),
+    ).toBeInTheDocument();
+  });
+
+  it('el icono de la nota no entra al nombre accesible', async () => {
+    fetchMock.mockReturnValueOnce(page([conNota(1, 3)]));
+    renderHistory();
+
+    const nota = await screen.findByText('Tu nota: 3 de 5');
+
+    expect(nota.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+  });
+});
+
+describe('WatchedHistory: filtros', () => {
+  it('ofrece los equipos recibidos y las opciones de nota, sin filtrar al entrar', async () => {
+    fetchMock.mockReturnValueOnce(page([item(1)]));
+    renderHistory();
+
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    expect(
+      within(selectorEquipo())
+        .getAllByRole('option')
+        .map((opcion) => opcion.textContent),
+    ).toEqual(['Todos los equipos', 'Boca Juniors', 'River Plate']);
+    expect(
+      within(selectorNota())
+        .getAllByRole('option')
+        .map((opcion) => opcion.textContent),
+    ).toEqual(['Todos', 'Con nota', 'Sin nota']);
+    expect(pedido(0).has('teamId')).toBe(false);
+    expect(pedido(0).has('ratingStatus')).toBe(false);
+    expect(limpiar()).not.toBeInTheDocument();
+  });
+
+  it('elegir un equipo consulta por su id y reemplaza la lista', async () => {
+    fetchMock.mockReturnValueOnce(page([item(1)])).mockReturnValueOnce(page([item(2)]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.selectOptions(selectorEquipo(), 'River Plate');
+
+    await screen.findByRole('heading', { name: 'Local 2 vs. Visitante 2' });
+    expect(titulos()).toEqual(['Local 2 vs. Visitante 2']);
+    expect(pedido(1).get('teamId')).toBe(RIVER.id);
+    expect(pedido(1).has('ratingStatus')).toBe(false);
+  });
+
+  it.each([
+    ['Con nota', 'rated'],
+    ['Sin nota', 'unrated'],
+  ])('«%s» consulta con ratingStatus=%s', async (opcion, valor) => {
+    fetchMock.mockReturnValueOnce(page([item(1)])).mockReturnValueOnce(page([item(2)]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.selectOptions(selectorNota(), opcion);
+
+    await screen.findByRole('heading', { name: 'Local 2 vs. Visitante 2' });
+    expect(pedido(1).get('ratingStatus')).toBe(valor);
+    expect(pedido(1).has('teamId')).toBe(false);
+  });
+
+  it('combina los dos filtros y los conserva al cargar más', async () => {
+    fetchMock
+      .mockReturnValueOnce(page([item(1)]))
+      .mockReturnValueOnce(page([item(2)]))
+      .mockReturnValueOnce(page([conNota(3, 4)], cursor(3)))
+      .mockReturnValueOnce(page([conNota(4, 2)]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.selectOptions(selectorEquipo(), 'Boca Juniors');
+    await screen.findByRole('heading', { name: 'Local 2 vs. Visitante 2' });
+    await user.selectOptions(selectorNota(), 'Con nota');
+    await screen.findByRole('heading', { name: 'Local 3 vs. Visitante 3' });
+
+    expect(pedido(2).get('teamId')).toBe(BOCA.id);
+    expect(pedido(2).get('ratingStatus')).toBe('rated');
+
+    await user.click(cargarMas());
+    await screen.findByRole('heading', { name: 'Local 4 vs. Visitante 4' });
+
+    expect(titulos()).toEqual(['Local 3 vs. Visitante 3', 'Local 4 vs. Visitante 4']);
+    expect(pedido(3).get('teamId')).toBe(BOCA.id);
+    expect(pedido(3).get('ratingStatus')).toBe('rated');
+    expect(pedido(3).get('beforeMatchId')).toBe(cursor(3).matchId);
+  });
+
+  it('volver a «Todos los equipos» deja de mandar teamId', async () => {
+    fetchMock
+      .mockReturnValueOnce(page([item(1)]))
+      .mockReturnValueOnce(page([item(2)]))
+      .mockReturnValueOnce(page([item(3)]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.selectOptions(selectorEquipo(), 'Boca Juniors');
+    await screen.findByRole('heading', { name: 'Local 2 vs. Visitante 2' });
+    await user.selectOptions(selectorEquipo(), 'Todos los equipos');
+    await screen.findByRole('heading', { name: 'Local 3 vs. Visitante 3' });
+
+    expect(pedido(2).has('teamId')).toBe(false);
+    expect(limpiar()).not.toBeInTheDocument();
+  });
+
+  it('«Limpiar filtros» restablece los dos selectores y la consulta', async () => {
+    fetchMock
+      .mockReturnValueOnce(page([item(1)]))
+      .mockReturnValueOnce(page([item(2)]))
+      .mockReturnValueOnce(page([item(3)]))
+      .mockReturnValueOnce(page([item(4)]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.selectOptions(selectorEquipo(), 'River Plate');
+    await screen.findByRole('heading', { name: 'Local 2 vs. Visitante 2' });
+    await user.selectOptions(selectorNota(), 'Sin nota');
+    await screen.findByRole('heading', { name: 'Local 3 vs. Visitante 3' });
+
+    await user.click(limpiar()!);
+    await screen.findByRole('heading', { name: 'Local 4 vs. Visitante 4' });
+
+    expect(selectorEquipo()).toHaveValue('');
+    expect(selectorNota()).toHaveValue('all');
+    expect(pedido(3).has('teamId')).toBe(false);
+    expect(pedido(3).has('ratingStatus')).toBe(false);
+    expect(limpiar()).not.toBeInTheDocument();
+  });
+
+  it('sin coincidencias lo dice distinto que un historial vacío, y se puede limpiar', async () => {
+    fetchMock
+      .mockReturnValueOnce(page([item(1)]))
+      .mockReturnValueOnce(page([]))
+      .mockReturnValueOnce(page([item(1)]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.selectOptions(selectorNota(), 'Con nota');
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Ningún partido visto coincide con estos filtros.',
+    );
+    expect(screen.queryByText('Todavía no marcaste partidos como vistos.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    await user.click(limpiar()!);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/coincide con estos filtros/)).not.toBeInTheDocument();
+  });
+
+  it('un historial vacío sin filtros no se presenta como filtros sin coincidencias', async () => {
+    fetchMock.mockReturnValueOnce(page([]));
+    renderHistory();
+
+    await screen.findByText('Todavía no marcaste partidos como vistos.');
+
+    expect(screen.queryByText(/coincide con estos filtros/)).not.toBeInTheDocument();
+  });
+
+  it('mientras carga una consulta filtrada los controles siguen disponibles', async () => {
+    fetchMock.mockReturnValueOnce(page([item(1)])).mockReturnValueOnce(new Promise(() => {}));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.selectOptions(selectorEquipo(), 'Boca Juniors');
+
+    expect(screen.getByRole('status')).toHaveTextContent('Cargando tus partidos vistos…');
+    expect(selectorEquipo()).toHaveValue(BOCA.id);
+    expect(limpiar()).toBeInTheDocument();
+  });
+
+  it('un error con filtros los conserva y el reintento repite la misma consulta', async () => {
+    fetchMock
+      .mockReturnValueOnce(page([item(1)]))
+      .mockReturnValueOnce(failure(500, 'INTERNAL_ERROR'))
+      .mockReturnValueOnce(page([item(2)]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.selectOptions(selectorEquipo(), 'River Plate');
+    await screen.findByRole('alert');
+    expect(selectorEquipo()).toHaveValue(RIVER.id);
+
+    await user.click(screen.getByRole('button', { name: 'Reintentar' }));
+    await screen.findByRole('heading', { name: 'Local 2 vs. Visitante 2' });
+
+    expect(pedido(2).get('teamId')).toBe(RIVER.id);
+  });
+
+  it('sin equipos disponibles el historial funciona y sólo ofrece «Todos los equipos»', async () => {
+    fetchMock.mockReturnValueOnce(page([item(1)]));
+    renderHistory([]);
+
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    expect(
+      within(selectorEquipo())
+        .getAllByRole('option')
+        .map((opcion) => opcion.textContent),
+    ).toEqual(['Todos los equipos']);
+  });
+
+  it('los controles tienen área táctil de 44 px y se apilan en móvil', async () => {
+    fetchMock.mockReturnValueOnce(page([item(1)])).mockReturnValueOnce(page([item(2)]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+    await user.selectOptions(selectorEquipo(), 'Boca Juniors');
+    await screen.findByRole('heading', { name: 'Local 2 vs. Visitante 2' });
+
+    expect(selectorEquipo()).toHaveClass('h-11', 'w-full', 'min-w-0');
+    expect(selectorNota()).toHaveClass('h-11', 'w-full', 'min-w-0');
+    expect(limpiar()).toHaveClass('min-h-11');
+    expect(screen.getByRole('group', { name: 'Filtrar partidos vistos' })).toHaveClass(
+      'grid-cols-1',
+      'sm:grid-cols-2',
+    );
   });
 });
 
@@ -299,6 +572,7 @@ describe('WatchedHistory: navegación y teclado', () => {
     const { user } = renderHistory();
     await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
 
+    selectorNota().focus();
     await user.tab();
     expect(
       screen.getByRole('link', { name: 'Ver partido: Local 1 vs. Visitante 1' }),
@@ -313,5 +587,92 @@ describe('WatchedHistory: navegación y teclado', () => {
         screen.getByRole('link', { name: 'Ver partido: Local 2 vs. Visitante 2' }),
       ).toHaveFocus(),
     );
+  });
+
+  it('los filtros se alcanzan y operan con teclado, antes que los partidos', async () => {
+    fetchMock.mockReturnValueOnce(page([item(1)])).mockReturnValueOnce(page([]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.tab();
+    expect(selectorEquipo()).toHaveFocus();
+    await user.tab();
+    expect(selectorNota()).toHaveFocus();
+    await user.tab();
+    expect(
+      screen.getByRole('link', { name: 'Ver partido: Local 1 vs. Visitante 1' }),
+    ).toHaveFocus();
+
+    await user.tab({ shift: true });
+    await user.selectOptions(selectorNota(), 'Con nota');
+
+    await screen.findByText(/coincide con estos filtros/);
+    expect(pedido(1).get('ratingStatus')).toBe('rated');
+    expect(selectorNota()).toHaveFocus();
+  });
+
+  it('cambiar un filtro con una página en camino no le quita el foco al selector', async () => {
+    fetchMock
+      .mockReturnValueOnce(page([item(1)], cursor(1)))
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockReturnValueOnce(page([item(2), item(3), item(4)]));
+    const { user } = renderHistory();
+
+    await user.click(await screen.findByRole('button', { name: 'Cargar más partidos' }));
+    await user.selectOptions(selectorEquipo(), 'Boca Juniors');
+
+    await screen.findByRole('heading', { name: 'Local 4 vs. Visitante 4' });
+
+    expect(selectorEquipo()).toHaveFocus();
+  });
+
+  it('«Limpiar filtros» desaparece y el foco pasa al selector de equipo', async () => {
+    fetchMock
+      .mockReturnValueOnce(page([item(1)]))
+      .mockReturnValueOnce(page([]))
+      .mockReturnValueOnce(page([item(1)]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.selectOptions(selectorNota(), 'Sin nota');
+    await screen.findByText(/coincide con estos filtros/);
+
+    limpiar()!.focus();
+    await user.keyboard('{Enter}');
+
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+    expect(limpiar()).not.toBeInTheDocument();
+    expect(selectorEquipo()).toHaveFocus();
+  });
+
+  it('limpiar con una página en camino deja el foco en el selector de equipo', async () => {
+    fetchMock
+      .mockReturnValueOnce(page([item(1)]))
+      .mockReturnValueOnce(page([item(2)], cursor(2)))
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockReturnValueOnce(page([item(3), item(4), item(5)]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.selectOptions(selectorEquipo(), 'River Plate');
+    await user.click(await screen.findByRole('button', { name: 'Cargar más partidos' }));
+    await user.click(limpiar()!);
+
+    await screen.findByRole('heading', { name: 'Local 5 vs. Visitante 5' });
+
+    expect(selectorEquipo()).toHaveFocus();
+  });
+
+  it('con filtros activos, la navegación al detalle sigue funcionando', async () => {
+    fetchMock.mockReturnValueOnce(page([item(1)])).mockReturnValueOnce(page([item(2)]));
+    const { user } = renderHistory();
+    await screen.findByRole('heading', { name: 'Local 1 vs. Visitante 1' });
+
+    await user.selectOptions(selectorEquipo(), 'Boca Juniors');
+    await user.click(
+      await screen.findByRole('link', { name: 'Ver partido: Local 2 vs. Visitante 2' }),
+    );
+
+    expect(screen.getByText('Detalle del partido')).toBeInTheDocument();
   });
 });
