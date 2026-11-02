@@ -541,6 +541,7 @@ describe('ProfilePage: historial de partidos vistos', () => {
       status: 'finished',
     },
     watchedAt: '2026-10-11T12:00:00.000Z',
+    rating: null,
   };
 
   it('muestra los vistos propios debajo del formulario, con el bearer de la sesión', async () => {
