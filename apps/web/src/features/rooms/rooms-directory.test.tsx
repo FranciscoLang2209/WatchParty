@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -588,7 +588,7 @@ describe('Directorio de salas — presentación de las tarjetas', () => {
     }
   });
 
-  it('no agrega botones: salvo el reintento, la única acción de cada tarjeta es su enlace', async () => {
+  it('no agrega botones a las tarjetas: su única acción es su enlace', async () => {
     conSesion();
     fetchSpy.mockResolvedValue(jsonResponse({ matches: [river, racing] }));
 
@@ -596,7 +596,15 @@ describe('Directorio de salas — presentación de las tarjetas', () => {
     const m = await directorio();
     await m.findAllByRole('link', { name: /Ver partido/ });
 
-    expect(m.queryByRole('button')).not.toBeInTheDocument();
+    for (const lista of m.getAllByRole('list')) {
+      expect(within(lista).queryByRole('button')).not.toBeInTheDocument();
+    }
+
+    // Fuera de las tarjetas sólo queda el filtro Todos / Mi equipo.
+    expect(m.getAllByRole('button').map((boton) => boton.textContent)).toEqual([
+      'Todos',
+      'Mi equipo',
+    ]);
   });
 });
 
@@ -901,5 +909,444 @@ describe('Directorio de salas — foco al terminar el reintento', () => {
     await m.findByRole('heading', { level: 2, name: 'En vivo' });
 
     expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe('Directorio de salas — filtro Mi equipo', () => {
+  const PERFIL_URL = `${API_BASE}/me/profile`;
+
+  const otraSesion = {
+    access_token: 'token-otro',
+    user: { id: 'user-2', email: 'otra@b.com' },
+  } as Session;
+
+  const partido = (
+    id: string,
+    status: 'live' | 'scheduled',
+    local: [string, string],
+    visitante: [string, string],
+  ) => ({
+    ...river,
+    id,
+    status,
+    homeTeam: local[0],
+    homeTeamId: local[1],
+    awayTeam: visitante[0],
+    awayTeamId: visitante[1],
+  });
+
+  // Boca juega de visitante en `river` (programado) y de local en `bocaLocal` (en vivo).
+  const bocaLocal = partido(
+    'm-boca-local',
+    'live',
+    ['Boca Juniors', 'team-boca-juniors'],
+    ['Lanús', 'team-lanus'],
+  );
+  // Mismo nombre que Boca pero otro id: el favorito se compara por id, nunca por nombre.
+  const homonimo = partido(
+    'm-homonimo',
+    'scheduled',
+    ['Boca Juniors', 'team-otro-boca'],
+    ['Tigre', 'team-tigre'],
+  );
+  const agenda = [river, racing, bocaLocal, homonimo];
+
+  const perfilCon = (favoriteTeamId: string | null) => () =>
+    Promise.resolve(jsonResponse({ profile: { displayName: 'Martu', bio: '', favoriteTeamId } }));
+
+  /** `/matches` responde la agenda y `/me/profile` lo que decida cada prueba, según el bearer. */
+  function servidor(perfil: (bearer: string) => Promise<Response>, partidos: unknown[] = agenda) {
+    fetchSpy.mockImplementation((input: unknown, init?: RequestInit) =>
+      String(input) === PERFIL_URL
+        ? perfil(new Headers(init?.headers).get('Authorization') ?? '')
+        : Promise.resolve(jsonResponse({ matches: partidos })),
+    );
+  }
+
+  function llamadasAlPerfil() {
+    return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
+      ([url]) => String(url) === PERFIL_URL,
+    );
+  }
+
+  async function abrir() {
+    conSesion();
+    renderAt('/rooms');
+    const m = await directorio();
+    await m.findByRole('group', { name: 'Filtrar partidos' });
+
+    return m;
+  }
+
+  function enlacesDe(m: ReturnType<typeof within>) {
+    return m
+      .queryAllByRole('link', { name: /Ver partido/ })
+      .map((enlace: HTMLElement) => enlace.getAttribute('aria-label'));
+  }
+
+  it('ofrece Todos y Mi equipo, con Todos elegido y sin pedir el perfil todavía', async () => {
+    servidor(perfilCon('team-boca-juniors'));
+
+    const m = await abrir();
+
+    expect(m.getByRole('button', { name: 'Todos' })).toHaveAttribute('aria-pressed', 'true');
+    expect(m.getByRole('button', { name: 'Mi equipo' })).toHaveAttribute('aria-pressed', 'false');
+    expect(enlacesDe(m)).toHaveLength(4);
+    expect(llamadasAlPerfil()).toHaveLength(0);
+  });
+
+  it('al elegir Mi equipo pide el perfil con el bearer y deja los partidos del favorito', async () => {
+    const user = userEvent.setup();
+    servidor(perfilCon('team-boca-juniors'));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+
+    await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
+    expect(m.getByRole('button', { name: 'Mi equipo' })).toHaveAttribute('aria-pressed', 'true');
+    expect(m.getByRole('button', { name: 'Todos' })).toHaveAttribute('aria-pressed', 'false');
+
+    const [pedido] = llamadasAlPerfil();
+
+    expect(llamadasAlPerfil()).toHaveLength(1);
+    expect(new Headers(pedido![1].headers).get('Authorization')).toBe(
+      `Bearer ${session.access_token}`,
+    );
+  });
+
+  it('incluye al favorito como local y como visitante, y compara por id y no por nombre', async () => {
+    const user = userEvent.setup();
+    servidor(perfilCon('team-boca-juniors'));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+    await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
+
+    expect(enlacesDe(m)).toEqual(
+      expect.arrayContaining([
+        'Ver partido: Boca Juniors vs. Lanús',
+        'Ver partido: River Plate vs. Boca Juniors',
+      ]),
+    );
+    expect(enlacesDe(m)).not.toContain('Ver partido: Boca Juniors vs. Tigre');
+  });
+
+  it('conserva las secciones En vivo y Próximos dentro del filtro', async () => {
+    const user = userEvent.setup();
+    servidor(perfilCon('team-boca-juniors'));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+
+    const enVivo = await m.findByRole('region', { name: 'En vivo' });
+    const proximos = m.getByRole('region', { name: 'Próximos' });
+
+    expect(within(enVivo).getByText(/Lanús/)).toBeInTheDocument();
+    expect(within(proximos).getByText(/River Plate/)).toBeInTheDocument();
+    expect(within(proximos).queryByText(/Tigre/)).not.toBeInTheDocument();
+  });
+
+  it('no muestra una sección sin partidos del favorito', async () => {
+    const user = userEvent.setup();
+    servidor(perfilCon('team-lanus'));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+
+    await m.findByRole('region', { name: 'En vivo' });
+
+    expect(m.queryByRole('region', { name: 'Próximos' })).not.toBeInTheDocument();
+    expect(enlacesDe(m)).toEqual(['Ver partido: Boca Juniors vs. Lanús']);
+  });
+
+  it('Todos restaura el listado completo sin volver a pedir el perfil', async () => {
+    const user = userEvent.setup();
+    servidor(perfilCon('team-boca-juniors'));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+    await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
+
+    await user.click(m.getByRole('button', { name: 'Todos' }));
+    expect(enlacesDe(m)).toHaveLength(4);
+
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+    await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
+
+    expect(llamadasAlPerfil()).toHaveLength(1);
+    expect(m.getByRole('region', { name: 'En vivo' })).toBeInTheDocument();
+    expect(m.getByRole('region', { name: 'Próximos' })).toBeInTheDocument();
+  });
+
+  it('se puede elegir con el teclado: Enter y Espacio', async () => {
+    const user = userEvent.setup();
+    servidor(perfilCon('team-boca-juniors'));
+
+    const m = await abrir();
+    const miEquipo = m.getByRole('button', { name: 'Mi equipo' });
+
+    miEquipo.focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
+    expect(miEquipo).toHaveFocus();
+
+    const todos = m.getByRole('button', { name: 'Todos' });
+
+    todos.focus();
+    await user.keyboard(' ');
+
+    expect(enlacesDe(m)).toHaveLength(4);
+    expect(todos).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('sin favorito explica cómo elegirlo y enlaza al perfil, sin mostrar partidos', async () => {
+    const user = userEvent.setup();
+    servidor(perfilCon(null));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+
+    const aviso = await m.findByRole('status');
+
+    expect(within(aviso).getByRole('heading', { level: 2 })).toHaveTextContent(
+      'Todavía no elegiste un equipo',
+    );
+    expect(aviso).toHaveTextContent('Elegí tu equipo favorito en tu perfil');
+    expect(within(aviso).getByRole('link', { name: 'Elegir equipo favorito' })).toHaveAttribute(
+      'href',
+      '/profile',
+    );
+    expect(enlacesDe(m)).toEqual([]);
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('un perfil todavía sin completar también es «sin favorito», no un fallo', async () => {
+    const user = userEvent.setup();
+    servidor(() => Promise.resolve(jsonResponse({ profile: null })));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+
+    expect(await m.findByText(/Todavía no elegiste un equipo/)).toBeInTheDocument();
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('sin coincidencias lo dice sin prometer más agenda y permite volver a Todos', async () => {
+    const user = userEvent.setup();
+    servidor(perfilCon('team-sin-partidos'));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+
+    const aviso = await m.findByRole('status');
+
+    expect(aviso).toHaveTextContent(
+      'No hay partidos de tu equipo favorito en la agenda disponible.',
+    );
+    expect(aviso.textContent).not.toMatch(/próxim|temporada|semana|pronto/i);
+    expect(enlacesDe(m)).toEqual([]);
+    expect(m.queryByText(/Todavía no elegiste un equipo/)).not.toBeInTheDocument();
+
+    await user.click(within(aviso).getByRole('button', { name: 'Ver todos los partidos' }));
+
+    expect(enlacesDe(m)).toHaveLength(4);
+    expect(m.getByRole('button', { name: 'Todos' })).toHaveAttribute('aria-pressed', 'true');
+    expect(m.getByRole('button', { name: 'Todos' })).toHaveFocus();
+  });
+
+  it('si falla el perfil conserva el listado general y avisa, sin decir que no hay favorito', async () => {
+    const user = userEvent.setup();
+    servidor(() => Promise.reject(new TypeError('Failed to fetch')));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+
+    const alerta = await m.findByRole('alert');
+
+    expect(within(alerta).getByRole('heading', { level: 2 })).toHaveTextContent(
+      'No pudimos cargar tu equipo',
+    );
+    expect(within(alerta).getByRole('button', { name: 'Reintentar' })).toBeInTheDocument();
+    expect(m.queryByText(/Todavía no elegiste un equipo/)).not.toBeInTheDocument();
+    expect(m.queryByText(/No hay partidos de tu equipo/)).not.toBeInTheDocument();
+    expect(enlacesDe(m)).toHaveLength(4);
+  });
+
+  it('un 500 del perfil se trata igual que una caída de red', async () => {
+    const user = userEvent.setup();
+    servidor(() =>
+      Promise.resolve(jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'Error.' } }, 500)),
+    );
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+
+    expect(await m.findByRole('alert')).toHaveTextContent('No pudimos cargar tu equipo');
+    expect(enlacesDe(m)).toHaveLength(4);
+  });
+
+  it('Reintentar vuelve a pedir sólo el perfil y, si sale bien, filtra y lleva el foco al resultado', async () => {
+    const user = userEvent.setup();
+    let intento = 0;
+    servidor(() =>
+      (intento += 1) === 1
+        ? Promise.reject(new TypeError('Failed to fetch'))
+        : perfilCon('team-boca-juniors')(),
+    );
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+    await m.findByRole('alert');
+    const pedidosAPartidos = () =>
+      (fetchSpy.mock.calls as [string, RequestInit][]).filter(([url]) =>
+        String(url).endsWith('/matches'),
+      ).length;
+    const antes = pedidosAPartidos();
+
+    await user.click(m.getByRole('button', { name: 'Reintentar' }));
+
+    await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
+    await waitFor(() =>
+      expect(m.getByRole('heading', { level: 2, name: 'En vivo' })).toHaveFocus(),
+    );
+    expect(llamadasAlPerfil()).toHaveLength(2);
+    expect(pedidosAPartidos()).toBe(antes);
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('si el reintento del perfil vuelve a fallar, el foco pasa a la nueva alerta', async () => {
+    const user = userEvent.setup();
+    servidor(() => Promise.reject(new TypeError('Failed to fetch')));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+    await m.findByRole('alert');
+
+    await user.click(m.getByRole('button', { name: 'Reintentar' }));
+
+    await waitFor(() => expect(m.getByRole('alert')).toHaveFocus());
+    expect(enlacesDe(m)).toHaveLength(4);
+  });
+
+  it('descarta la respuesta del perfil de otra sesión y usa el de la sesión vigente', async () => {
+    const user = userEvent.setup();
+    let responderDeLaPrimera: (respuesta: Response) => void = () => {};
+    servidor((bearer) =>
+      bearer === `Bearer ${session.access_token}`
+        ? new Promise<Response>((resolve) => (responderDeLaPrimera = resolve))
+        : perfilCon('team-racing-club')(),
+    );
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+    await m.findByRole('status');
+
+    const [[alCambiarSesion]] = authMock.onAuthStateChange.mock.calls as [
+      [(evento: string, sesion: Session | null) => void],
+    ];
+    act(() => alCambiarSesion('SIGNED_IN', otraSesion));
+
+    await waitFor(() =>
+      expect(enlacesDe(m)).toEqual(['Ver partido: Racing Club vs. Independiente']),
+    );
+
+    // La primera sesión contesta tarde, con otro favorito: no se aplica.
+    await act(async () => {
+      responderDeLaPrimera(
+        jsonResponse({
+          profile: { displayName: 'Otro', bio: '', favoriteTeamId: 'team-boca-juniors' },
+        }),
+      );
+    });
+
+    expect(enlacesDe(m)).toEqual(['Ver partido: Racing Club vs. Independiente']);
+    expect(
+      llamadasAlPerfil().map(([, init]) => new Headers(init.headers).get('Authorization')),
+    ).toEqual([`Bearer ${session.access_token}`, 'Bearer token-otro']);
+  });
+
+  it('al cambiar de sesión no queda a la vista el favorito de la anterior', async () => {
+    const user = userEvent.setup();
+    let responderDeLaOtra: (respuesta: Response) => void = () => {};
+    servidor((bearer) =>
+      bearer === `Bearer ${session.access_token}`
+        ? perfilCon('team-boca-juniors')()
+        : new Promise<Response>((resolve) => (responderDeLaOtra = resolve)),
+    );
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+    await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
+
+    const [[alCambiarSesion]] = authMock.onAuthStateChange.mock.calls as [
+      [(evento: string, sesion: Session | null) => void],
+    ];
+    act(() => alCambiarSesion('SIGNED_IN', otraSesion));
+
+    expect(await m.findByText('Buscando las salas de tu equipo…')).toBeInTheDocument();
+    expect(enlacesDe(m)).toEqual([]);
+
+    await act(async () => {
+      responderDeLaOtra(
+        jsonResponse({ profile: { displayName: 'Otra', bio: '', favoriteTeamId: 'team-tigre' } }),
+      );
+    });
+
+    expect(enlacesDe(m)).toEqual(['Ver partido: Boca Juniors vs. Tigre']);
+  });
+
+  it('un cambio de token de la misma persona no pierde el favorito ni vuelve a la carga', async () => {
+    const user = userEvent.setup();
+    servidor(perfilCon('team-boca-juniors'));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+    await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
+
+    const [[alCambiarSesion]] = authMock.onAuthStateChange.mock.calls as [
+      [(evento: string, sesion: Session | null) => void],
+    ];
+    act(() =>
+      alCambiarSesion('TOKEN_REFRESHED', {
+        ...session,
+        access_token: 'token-renovado',
+      } as Session),
+    );
+
+    expect(m.queryByText('Buscando las salas de tu equipo…')).not.toBeInTheDocument();
+    expect(enlacesDe(m)).toHaveLength(2);
+  });
+
+  it('sin partidos o con el catálogo caído no hay filtro que ofrecer', async () => {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [] }));
+
+    const vacio = renderAt('/rooms');
+    const enVacio = await directorio();
+    await enVacio.findByText(/Todavía no hay partidos ni salas disponibles/);
+    expect(enVacio.queryByRole('group', { name: 'Filtrar partidos' })).not.toBeInTheDocument();
+    vacio.unmount();
+
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    renderAt('/rooms');
+    const enError = await directorio();
+    await enError.findByRole('alert');
+    expect(enError.queryByRole('group', { name: 'Filtrar partidos' })).not.toBeInTheDocument();
+  });
+
+  it('el filtro no consulta Supabase ni agrega pedidos al catálogo', async () => {
+    const user = userEvent.setup();
+    servidor(perfilCon('team-boca-juniors'));
+
+    const m = await abrir();
+    await user.click(m.getByRole('button', { name: 'Mi equipo' }));
+    await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
+    await user.click(m.getByRole('button', { name: 'Todos' }));
+
+    const destinos = (fetchSpy.mock.calls as [string, RequestInit][]).map(([url]) => String(url));
+
+    expect(destinos.filter((url) => url.endsWith('/matches'))).toHaveLength(1);
+    expect(destinos.every((url) => url.startsWith(API_BASE))).toBe(true);
+    expect(fromMock).not.toHaveBeenCalled();
   });
 });
