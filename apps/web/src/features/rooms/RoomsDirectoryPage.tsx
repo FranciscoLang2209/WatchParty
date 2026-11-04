@@ -1,4 +1,4 @@
-import { CalendarX, LoaderCircle, LogIn, TriangleAlert } from 'lucide-react';
+import { CalendarX, LoaderCircle, LogIn, RefreshCw, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
@@ -6,11 +6,21 @@ import { MatchCard } from '@/features/matches/MatchCard';
 import { DirectoryStatePanel } from './DirectoryStatePanel';
 import { listMatches } from '@/features/matches/api';
 import { MatchesApiError, isCancelled, type Match } from '@/features/matches/types';
+import { cn } from '@/lib/utils';
+
+type EstadoError = { status: 'error'; message: string; expired: boolean };
 
 type Estado =
   | { status: 'loading' }
-  | { status: 'ready'; matches: Match[] }
-  | { status: 'error'; message: string; expired: boolean };
+  // `actualizando` y `falloActualizacion` no desmontan el listado: las tarjetas
+  // siguen en pantalla mientras se vuelve a consultar y si la consulta falla.
+  | {
+      status: 'ready';
+      matches: Match[];
+      actualizando: boolean;
+      falloActualizacion: string | null;
+    }
+  | EstadoError;
 
 const MENSAJE_INESPERADO = 'No pudimos cargar el directorio. Intentá de nuevo.';
 
@@ -67,7 +77,7 @@ function SeccionPartidos({
   );
 }
 
-function toEstadoError(error: unknown): Estado {
+function toEstadoError(error: unknown): EstadoError {
   if (error instanceof MatchesApiError) {
     return { status: 'error', message: error.message, expired: error.kind === 'unauthorized' };
   }
@@ -93,6 +103,7 @@ export function RoomsDirectoryPage() {
   const panelFoco = useRef<HTMLDivElement>(null);
   const tituloFoco = useRef<HTMLHeadingElement>(null);
   const reintentando = useRef(false);
+  const botonActualizar = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     // Sin token no hay nada que pedir: el guard de rutas privadas se encarga.
@@ -103,12 +114,22 @@ export function RoomsDirectoryPage() {
 
     listMatches(accessToken, controller.signal)
       .then((matches) => {
-        if (vigente) setEstado({ status: 'ready', matches });
+        if (vigente) {
+          setEstado({ status: 'ready', matches, actualizando: false, falloActualizacion: null });
+        }
       })
       .catch((error: unknown) => {
         if (!vigente || isCancelled(error)) return;
 
-        setEstado(toEstadoError(error));
+        const fallo = toEstadoError(error);
+
+        // Un fallo al actualizar conserva el último listado; la sesión vencida sigue
+        // el tratamiento de siempre.
+        setEstado((actual) =>
+          actual.status === 'ready' && !fallo.expired
+            ? { ...actual, actualizando: false, falloActualizacion: fallo.message }
+            : fallo,
+        );
       });
 
     return () => {
@@ -135,11 +156,23 @@ export function RoomsDirectoryPage() {
     setIntento((valor) => valor + 1);
   }, []);
 
+  // Vuelve a consultar el catálogo ya persistido (no dispara ninguna sincronización).
+  // Con una actualización en curso no se pide otra. Quien tenía el foco (el propio
+  // botón o el «Reintentar» del aviso) lo deja en «Actualizar», que no desaparece.
+  const actualizar = useCallback(() => {
+    if (accessToken === null || estado.status !== 'ready' || estado.actualizando) return;
+
+    setEstado({ ...estado, actualizando: true, falloActualizacion: null });
+    setIntento((valor) => valor + 1);
+    botonActualizar.current?.focus();
+  }, [accessToken, estado]);
+
   const secciones = estado.status === 'ready' ? seccionesVisibles(estado.matches) : [];
+  const actualizando = estado.status === 'ready' && estado.actualizando;
 
   return (
     <section
-      aria-busy={estado.status === 'loading'}
+      aria-busy={estado.status === 'loading' || actualizando}
       className="flex w-full flex-1 flex-col overflow-x-hidden"
     >
       <div className="mx-auto flex w-full max-w-5xl min-w-0 flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8">
@@ -151,6 +184,27 @@ export function RoomsDirectoryPage() {
             Elegí un partido en vivo o próximo para entrar a su sala.
           </p>
         </header>
+
+        {estado.status === 'ready' ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              ref={botonActualizar}
+              type="button"
+              variant="outline"
+              className="w-full sm:w-auto"
+              // No se usa `disabled`: sacaría el foco del botón mientras actualiza.
+              aria-disabled={actualizando}
+              aria-busy={actualizando}
+              onClick={actualizar}
+            >
+              <RefreshCw
+                aria-hidden="true"
+                className={cn(actualizando && 'animate-spin motion-reduce:animate-none')}
+              />
+              {actualizando ? 'Actualizando…' : 'Actualizar'}
+            </Button>
+          </div>
+        ) : null}
 
         {estado.status === 'loading' ? (
           <DirectoryStatePanel
@@ -194,6 +248,26 @@ export function RoomsDirectoryPage() {
                 variant="outline"
                 className="w-full sm:w-auto"
                 onClick={reintentar}
+              >
+                Reintentar
+              </Button>
+            }
+          />
+        ) : null}
+
+        {estado.status === 'ready' && estado.falloActualizacion !== null ? (
+          <DirectoryStatePanel
+            role="alert"
+            tone="error"
+            icon={TriangleAlert}
+            title="No pudimos actualizar"
+            message={`${estado.falloActualizacion} Seguimos mostrando el último listado.`}
+            action={
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={actualizar}
               >
                 Reintentar
               </Button>
