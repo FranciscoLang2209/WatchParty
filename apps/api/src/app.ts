@@ -86,7 +86,12 @@ export function createApp(
     '/matches',
     createMatchRatingsRouter(new MatchRatingService(matchCatalog, watchedStore, ratingStore)),
   );
-  app.use('/matches', createMatchReviewsRouter(new MatchReviewService(matchCatalog, reviewStore)));
+  app.use(
+    '/matches',
+    createMatchReviewsRouter(
+      new MatchReviewService(matchCatalog, watchedStore, ratingStore, reviewStore),
+    ),
+  );
   app.use(createProfilesRouter(profileStore));
   app.use('/me', createWatchedHistoryRouter(watchedStore));
   app.use('/me', createStatisticsRouter(statisticsStore));

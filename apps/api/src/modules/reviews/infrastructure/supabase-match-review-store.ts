@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { MatchReview, MatchReviewStore } from '../domain/match-review-store.js';
+import {
+  normalizeMatchReviewBody,
+  type MatchReview,
+  type MatchReviewStore,
+} from '../domain/match-review-store.js';
 import { MatchReviewPersistenceError } from './match-review-persistence-error.js';
 
 /**
@@ -27,6 +31,32 @@ export class SupabaseMatchReviewStore implements MatchReviewStore {
     }
 
     return data === null ? null : this.toStoredReview(data, matchId);
+  }
+
+  async saveReview(userId: string, matchId: string, body: string): Promise<MatchReview> {
+    if (normalizeMatchReviewBody(body) !== body) {
+      throw new RangeError(
+        'La reseña debe ser un texto de 1 a 500 caracteres, sin espacios exteriores.',
+      );
+    }
+
+    // ON CONFLICT (user_id, match_id) DO UPDATE: repetir o editar deja una
+    // sola fila. created_at no va en el payload, así que se conserva; el
+    // trigger de WAT-252 actualiza updated_at en el UPDATE.
+    const { data, error } = await this.client
+      .from('match_reviews')
+      .upsert({ user_id: userId, match_id: matchId, body }, { onConflict: 'user_id,match_id' })
+      .select('body, created_at, updated_at')
+      .single();
+
+    if (error) {
+      throw new MatchReviewPersistenceError(
+        `No se pudo guardar la reseña del partido ${matchId}.`,
+        error,
+      );
+    }
+
+    return this.toStoredReview(data, matchId);
   }
 
   /** La base ya lo garantiza con NOT NULL; esto evita devolver basura si algo cambiara. */
