@@ -32,6 +32,11 @@ const noopRatingStore: MatchRatingStore = {
 
 const noopReviewStore: MatchReviewStore = {
   findReview: async () => null,
+  saveReview: async (_userId, _matchId, body) => ({
+    body,
+    createdAt: '2026-10-30T12:00:00.000Z',
+    updatedAt: '2026-10-30T12:00:00.000Z',
+  }),
 };
 
 process.env.SUPABASE_URL = 'https://example.supabase.co';

@@ -14,11 +14,17 @@ interface ReviewRow {
 interface FakeOptions {
   rows?: ReviewRow[];
   selectError?: { message: string };
+  upsertError?: { message: string };
 }
+
+/** Lo que el trigger de la base pone en `updated_at` al reemplazar una fila. */
+const NOW = '2026-11-02T10:00:00+00:00';
 
 /**
  * Doble de Supabase con `match_reviews` en memoria: select filtra por ambas
  * columnas de la PK, como la base real, y solo devuelve las columnas pedidas.
+ * upsert respeta la PK compuesta: reemplaza el texto en vez de duplicar la
+ * fila, conserva `created_at` y mueve `updated_at` como el trigger.
  */
 function makeFakeClient(options: FakeOptions = {}) {
   const rows = [...(options.rows ?? [])];
@@ -28,6 +34,12 @@ function makeFakeClient(options: FakeOptions = {}) {
 
     const filters: Record<string, string> = {};
     let columns = '';
+    let lastUpserted: ReviewRow | null = null;
+
+    const pick = (row: ReviewRow) =>
+      Object.fromEntries(
+        columns.split(',').map((c) => [c.trim(), row[c.trim() as keyof ReviewRow]]),
+      );
 
     const builder = {
       select: vi.fn((requested: string) => {
@@ -43,11 +55,28 @@ function makeFakeClient(options: FakeOptions = {}) {
         const row = rows.find((r) =>
           Object.entries(filters).every(([c, v]) => r[c as keyof ReviewRow] === v),
         );
-        if (!row) return { data: null, error: null };
-        const picked = Object.fromEntries(
-          columns.split(',').map((c) => [c.trim(), row[c.trim() as keyof ReviewRow]]),
-        );
-        return { data: picked, error: null };
+        return { data: row ? pick(row) : null, error: null };
+      }),
+      upsert: vi.fn((payload: Pick<ReviewRow, 'user_id' | 'match_id' | 'body'>) => {
+        if (!options.upsertError) {
+          const index = rows.findIndex(
+            (r) => r.user_id === payload.user_id && r.match_id === payload.match_id,
+          );
+          const previous = index >= 0 ? rows[index] : undefined;
+          const row: ReviewRow = {
+            ...payload,
+            created_at: previous?.created_at ?? NOW,
+            updated_at: NOW,
+          };
+          if (index >= 0) rows[index] = row;
+          else rows.push(row);
+          lastUpserted = row;
+        }
+        return builder;
+      }),
+      single: vi.fn(async () => {
+        if (options.upsertError) return { data: null, error: options.upsertError };
+        return { data: lastUpserted ? pick(lastUpserted) : null, error: null };
       }),
     };
     return builder;
@@ -124,5 +153,97 @@ describe('SupabaseMatchReviewStore.findReview', () => {
     await expect(
       new SupabaseMatchReviewStore(asClient(fake)).findReview(USER_ID, MATCH_ID),
     ).rejects.toBeInstanceOf(MatchReviewPersistenceError);
+  });
+});
+
+describe('SupabaseMatchReviewStore.saveReview', () => {
+  it('crea la reseña y devuelve la persistida con sus fechas', async () => {
+    const fake = makeFakeClient();
+
+    const review = await new SupabaseMatchReviewStore(asClient(fake)).saveReview(
+      USER_ID,
+      MATCH_ID,
+      'Gran partido',
+    );
+
+    expect(review).toEqual({ body: 'Gran partido', createdAt: NOW, updatedAt: NOW });
+    expect(fake.rows).toHaveLength(1);
+  });
+
+  it('editar reemplaza el texto sin duplicar la fila y conserva created_at', async () => {
+    const fake = makeFakeClient({ rows: [ROW] });
+
+    const review = await new SupabaseMatchReviewStore(asClient(fake)).saveReview(
+      USER_ID,
+      MATCH_ID,
+      'Mejor de lo que recordaba',
+    );
+
+    expect(fake.rows).toHaveLength(1);
+    expect(review).toEqual({
+      body: 'Mejor de lo que recordaba',
+      createdAt: ROW.created_at,
+      updatedAt: NOW,
+    });
+  });
+
+  it('no toca la reseña de otro usuario sobre el mismo partido', async () => {
+    const other: ReviewRow = { ...ROW, user_id: OTHER_USER_ID, body: 'Aburrido' };
+    const fake = makeFakeClient({ rows: [other] });
+
+    await new SupabaseMatchReviewStore(asClient(fake)).saveReview(
+      USER_ID,
+      MATCH_ID,
+      'Gran partido',
+    );
+
+    expect(fake.rows).toHaveLength(2);
+    expect(fake.rows.find((r) => r.user_id === OTHER_USER_ID)?.body).toBe('Aburrido');
+  });
+
+  it('usa onConflict sobre la PK compuesta y escribe solo user_id, match_id y body', async () => {
+    const fake = makeFakeClient();
+    await new SupabaseMatchReviewStore(asClient(fake)).saveReview(
+      USER_ID,
+      MATCH_ID,
+      'Gran partido',
+    );
+    const builder = fake.from.mock.results[0]!.value as {
+      upsert: ReturnType<typeof vi.fn>;
+      select: ReturnType<typeof vi.fn>;
+    };
+
+    expect(builder.upsert).toHaveBeenCalledWith(
+      { user_id: USER_ID, match_id: MATCH_ID, body: 'Gran partido' },
+      { onConflict: 'user_id,match_id' },
+    );
+    expect(builder.select).toHaveBeenCalledWith('body, created_at, updated_at');
+  });
+
+  it.each([
+    ['vacío', ''],
+    ['solo espacios', '   '],
+    ['con espacios exteriores', ' Gran partido '],
+    ['501 caracteres', 'a'.repeat(501)],
+    ['carácter nulo', 'hola\u0000chau'],
+  ])('un texto no normalizado (%s) lanza RangeError y no escribe', async (_label, body) => {
+    const fake = makeFakeClient();
+
+    await expect(
+      new SupabaseMatchReviewStore(asClient(fake)).saveReview(USER_ID, MATCH_ID, body),
+    ).rejects.toBeInstanceOf(RangeError);
+    expect(fake.from).not.toHaveBeenCalled();
+  });
+
+  it('un fallo de escritura se lanza sanitizado como error de persistencia', async () => {
+    const fake = makeFakeClient({ upsertError: { message: 'password=secreto host=db.interno' } });
+
+    const error = await new SupabaseMatchReviewStore(asClient(fake))
+      .saveReview(USER_ID, MATCH_ID, 'Gran partido')
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(MatchReviewPersistenceError);
+    expect((error as Error).message).not.toContain('secreto');
+    expect((error as Error).message).not.toContain('db.interno');
   });
 });
