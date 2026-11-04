@@ -1,4 +1,4 @@
-import { CalendarX, LoaderCircle, LogIn, TriangleAlert } from 'lucide-react';
+import { CalendarX, Check, LoaderCircle, LogIn, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,20 @@ type Estado =
   | { status: 'error'; message: string; expired: boolean };
 
 const MENSAJE_INESPERADO = 'No pudimos cargar el directorio. Intentá de nuevo.';
+
+/** Los estados reales del catálogo que el directorio muestra; `todos` los junta. */
+type FiltroEstado = 'todos' | Match['status'];
+
+const OPCIONES_ESTADO: readonly { valor: FiltroEstado; etiqueta: string }[] = [
+  { valor: 'todos', etiqueta: 'Todos' },
+  { valor: 'live', etiqueta: 'En vivo' },
+  { valor: 'scheduled', etiqueta: 'Próximos' },
+];
+
+const SIN_PARTIDOS: Partial<Record<Match['status'], string>> = {
+  live: 'No hay partidos en vivo por ahora.',
+  scheduled: 'No hay partidos próximos por ahora.',
+};
 
 /**
  * /rooms sólo muestra partidos que todavía pueden tener sala activa, repartidos en
@@ -93,6 +107,8 @@ export function RoomsDirectoryPage() {
   const panelFoco = useRef<HTMLDivElement>(null);
   const tituloFoco = useRef<HTMLHeadingElement>(null);
   const reintentando = useRef(false);
+  const [filtroEstado, setFiltroEstado] = useState<FiltroEstado>('todos');
+  const botonTodos = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     // Sin token no hay nada que pedir: el guard de rutas privadas se encarga.
@@ -136,6 +152,18 @@ export function RoomsDirectoryPage() {
   }, []);
 
   const secciones = estado.status === 'ready' ? seccionesVisibles(estado.matches) : [];
+  // El selector sólo recorta las secciones ya calculadas: no pide ni reordena nada.
+  const mostradas =
+    filtroEstado === 'todos'
+      ? secciones
+      : secciones.filter((seccion) => seccion.estado === filtroEstado);
+
+  // El panel que tenía el foco desaparece al volver: lo recibe «Todos», que sigue
+  // en pantalla.
+  const volverATodos = useCallback(() => {
+    setFiltroEstado('todos');
+    botonTodos.current?.focus();
+  }, []);
 
   return (
     <section
@@ -151,6 +179,25 @@ export function RoomsDirectoryPage() {
             Elegí un partido en vivo o próximo para entrar a su sala.
           </p>
         </header>
+
+        {secciones.length > 0 ? (
+          <div role="group" aria-label="Filtrar por estado" className="flex flex-wrap gap-2">
+            {OPCIONES_ESTADO.map(({ valor, etiqueta }) => (
+              <Button
+                key={valor}
+                ref={valor === 'todos' ? botonTodos : undefined}
+                type="button"
+                variant={filtroEstado === valor ? 'default' : 'outline'}
+                aria-pressed={filtroEstado === valor}
+                className="flex-1 sm:flex-none"
+                onClick={() => setFiltroEstado(valor)}
+              >
+                {filtroEstado === valor ? <Check aria-hidden="true" /> : null}
+                {etiqueta}
+              </Button>
+            ))}
+          </div>
+        ) : null}
 
         {estado.status === 'loading' ? (
           <DirectoryStatePanel
@@ -210,7 +257,27 @@ export function RoomsDirectoryPage() {
           />
         ) : null}
 
-        {secciones.map(({ estado: estadoPartido, titulo, matches }, posicion) => (
+        {secciones.length > 0 && mostradas.length === 0 ? (
+          <DirectoryStatePanel
+            role="status"
+            icon={CalendarX}
+            title="No hay partidos para mostrar"
+            message={SIN_PARTIDOS[filtroEstado as Match['status']] ?? ''}
+            panelRef={panelFoco}
+            action={
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={volverATodos}
+              >
+                Ver todos los partidos
+              </Button>
+            }
+          />
+        ) : null}
+
+        {mostradas.map(({ estado: estadoPartido, titulo, matches }, posicion) => (
           <SeccionPartidos
             key={estadoPartido}
             titulo={titulo}
