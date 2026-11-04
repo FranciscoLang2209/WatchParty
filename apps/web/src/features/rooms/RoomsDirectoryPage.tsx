@@ -2,7 +2,10 @@ import { CalendarX, LoaderCircle, LogIn, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { MatchCard } from '@/features/matches/MatchCard';
+import { kickoffDay } from '@/features/matches/format';
 import { DirectoryStatePanel } from './DirectoryStatePanel';
 import { listMatches } from '@/features/matches/api';
 import { MatchesApiError, isCancelled, type Match } from '@/features/matches/types';
@@ -13,6 +16,20 @@ type Estado =
   | { status: 'error'; message: string; expired: boolean };
 
 const MENSAJE_INESPERADO = 'No pudimos cargar el directorio. Intentá de nuevo.';
+
+// `YYYY-MM-DD` es un día de calendario, no un instante: se arma y se formatea en UTC
+// para que la zona del dispositivo no lo corra un día.
+const diaFormatter = new Intl.DateTimeFormat('es-AR', {
+  timeZone: 'UTC',
+  day: 'numeric',
+  month: 'long',
+});
+
+function formatearDia(fecha: string): string {
+  const [anio, mes, dia] = fecha.split('-').map(Number);
+
+  return diaFormatter.format(new Date(Date.UTC(anio!, mes! - 1, dia!)));
+}
 
 /**
  * /rooms sólo muestra partidos que todavía pueden tener sala activa, repartidos en
@@ -93,6 +110,10 @@ export function RoomsDirectoryPage() {
   const panelFoco = useRef<HTMLDivElement>(null);
   const tituloFoco = useRef<HTMLHeadingElement>(null);
   const reintentando = useRef(false);
+  // Día elegido (`YYYY-MM-DD`); vacío no restringe el listado.
+  const [fecha, setFecha] = useState('');
+  const fechaId = useId();
+  const inputFecha = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     // Sin token no hay nada que pedir: el guard de rutas privadas se encarga.
@@ -136,6 +157,20 @@ export function RoomsDirectoryPage() {
   }, []);
 
   const secciones = estado.status === 'ready' ? seccionesVisibles(estado.matches) : [];
+  // La fecha sólo recorta la agenda ya cargada, por el día en que se juega cada partido
+  // en la zona de presentación de la app: no pide nada y las secciones se recalculan.
+  const mostradas =
+    fecha === '' || estado.status !== 'ready'
+      ? secciones
+      : seccionesVisibles(
+          estado.matches.filter((partido) => kickoffDay(partido.kickoffAt) === fecha),
+        );
+
+  // El control que tenía el foco desaparece al quitar la fecha: lo recibe el campo.
+  const quitarFecha = useCallback(() => {
+    setFecha('');
+    inputFecha.current?.focus();
+  }, []);
 
   return (
     <section
@@ -151,6 +186,27 @@ export function RoomsDirectoryPage() {
             Elegí un partido en vivo o próximo para entrar a su sala.
           </p>
         </header>
+
+        {secciones.length > 0 ? (
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex w-full min-w-0 flex-col gap-2 sm:w-auto">
+              <Label htmlFor={fechaId}>Filtrar por fecha</Label>
+              <Input
+                ref={inputFecha}
+                id={fechaId}
+                type="date"
+                value={fecha}
+                onChange={(evento) => setFecha(evento.target.value)}
+              />
+            </div>
+
+            {fecha !== '' ? (
+              <Button type="button" variant="ghost" onClick={quitarFecha}>
+                Quitar fecha
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
 
         {estado.status === 'loading' ? (
           <DirectoryStatePanel
@@ -210,7 +266,27 @@ export function RoomsDirectoryPage() {
           />
         ) : null}
 
-        {secciones.map(({ estado: estadoPartido, titulo, matches }, posicion) => (
+        {secciones.length > 0 && fecha !== '' && mostradas.length === 0 ? (
+          <DirectoryStatePanel
+            role="status"
+            icon={CalendarX}
+            title="No hay partidos ese día"
+            message={`No hay partidos el ${formatearDia(fecha)} en la agenda disponible.`}
+            panelRef={panelFoco}
+            action={
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={quitarFecha}
+              >
+                Ver todos los días
+              </Button>
+            }
+          />
+        ) : null}
+
+        {mostradas.map(({ estado: estadoPartido, titulo, matches }, posicion) => (
           <SeccionPartidos
             key={estadoPartido}
             titulo={titulo}
