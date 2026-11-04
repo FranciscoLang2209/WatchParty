@@ -32,6 +32,7 @@ const noopRatingStore: MatchRatingStore = {
 
 const noopReviewStore: MatchReviewStore = {
   findReview: async () => null,
+  deleteReview: async () => {},
   saveReview: async (_userId, _matchId, body) => ({
     body,
     createdAt: '2026-10-30T12:00:00.000Z',

@@ -59,6 +59,23 @@ export class SupabaseMatchReviewStore implements MatchReviewStore {
     return this.toStoredReview(data, matchId);
   }
 
+  async deleteReview(userId: string, matchId: string): Promise<void> {
+    // Filtra por ambas columnas de la PK: nunca borra la reseña de otro usuario
+    // ni las de otros partidos. Borrar una fila inexistente no es un error.
+    const { error } = await this.client
+      .from('match_reviews')
+      .delete()
+      .eq('user_id', userId)
+      .eq('match_id', matchId);
+
+    if (error) {
+      throw new MatchReviewPersistenceError(
+        `No se pudo eliminar la reseña del partido ${matchId}.`,
+        error,
+      );
+    }
+  }
+
   /** La base ya lo garantiza con NOT NULL; esto evita devolver basura si algo cambiara. */
   private toStoredReview(row: unknown, matchId: string): MatchReview {
     const { body, created_at, updated_at } = (row ?? {}) as Record<string, unknown>;

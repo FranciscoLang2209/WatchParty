@@ -13,8 +13,10 @@ export type SaveOwnReviewResult =
   | { kind: 'match_not_watched' }
   | { kind: 'match_not_rated' };
 
+export type DeleteOwnReviewResult = { kind: 'ok' } | { kind: 'match_not_found' };
+
 /**
- * Reglas de reseña de un partido (WAT-253, WAT-254). Orquesta puertos ya
+ * Reglas de reseña de un partido (WAT-253, WAT-254, WAT-255). Orquesta puertos ya
  * existentes sin duplicar sus consultas: `MatchCatalog` (existencia y
  * estado), `WatchedMatchStore` (visto por el usuario), `MatchRatingStore`
  * (nota propia, solo lectura) y `MatchReviewStore` (persistencia del texto).
@@ -30,6 +32,12 @@ export type SaveOwnReviewResult =
  * Repetir el mismo texto no reescribe la fila: así `updatedAt` solo cambia
  * cuando el texto cambia de verdad (el trigger de la base lo movería en
  * cualquier UPDATE, aunque el valor fuera idéntico).
+ *
+ * Eliminar la reseña propia (WAT-255) solo exige que el partido exista, como
+ * leerla: no depende del estado del partido, del visto ni de la nota, así que
+ * se puede borrar el texto aunque el usuario haya deshecho "visto". Es
+ * idempotente (sin reseña también es `ok`) y solo toca `match_reviews`: nunca
+ * escribe en `match_ratings` ni en los vistos.
  *
  * Los fallos de persistencia se propagan (nunca se convierten en "sin
  * reseña" ni en elegible).
@@ -73,5 +81,13 @@ export class MatchReviewService {
     if (existing?.body === body) return { kind: 'ok', review: existing };
 
     return { kind: 'ok', review: await this.reviewStore.saveReview(userId, matchId, body) };
+  }
+
+  async deleteOwnReview(userId: string, matchId: string): Promise<DeleteOwnReviewResult> {
+    const match = await this.matchCatalog.findById(matchId);
+    if (!match) return { kind: 'match_not_found' };
+
+    await this.reviewStore.deleteReview(userId, matchId);
+    return { kind: 'ok' };
   }
 }

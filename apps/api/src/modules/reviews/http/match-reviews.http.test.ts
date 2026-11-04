@@ -91,6 +91,9 @@ function buildTestApp(options: Setup = {}) {
       saved.set(userId, review);
       return review;
     }),
+    deleteReview: vi.fn(async (userId) => {
+      saved.delete(userId);
+    }),
   };
 
   const app: Express = express();
@@ -612,16 +615,231 @@ describe('PUT /matches/:matchId/review', () => {
       expect(reviewStore.saveReview).not.toHaveBeenCalled();
     });
   });
+});
 
-  it('no existen otros métodos sobre /review: POST y DELETE responden 404', async () => {
-    mockAuthenticated();
+describe('DELETE /matches/:matchId/review', () => {
+  const del = (app: Express, token = 'Bearer good', url = URL) =>
+    request(app).delete(url).set('Authorization', token);
+
+  describe('autenticación', () => {
+    it('sin token responde 401 y no borra nada', async () => {
+      const { app, catalog, reviewStore, saved } = buildTestApp({
+        reviewsByUser: { 'user-123': REVIEW },
+      });
+
+      const response = await request(app).delete(URL);
+
+      expect(response.status).toBe(401);
+      expect(response.body).toEqual({
+        error: { code: 'UNAUTHORIZED', message: expect.any(String) },
+      });
+      expect(catalog.findById).not.toHaveBeenCalled();
+      expect(reviewStore.deleteReview).not.toHaveBeenCalled();
+      expect(saved.get('user-123')).toEqual(REVIEW);
+    });
+
+    it('con token inválido responde 401 y no borra', async () => {
+      mockInvalidToken();
+      const { app, reviewStore } = buildTestApp({ reviewsByUser: { 'user-123': REVIEW } });
+
+      const response = await del(app, 'Bearer bad');
+
+      expect(response.status).toBe(401);
+      expect(reviewStore.deleteReview).not.toHaveBeenCalled();
+    });
+
+    it('la autenticación va antes que la validación: id inválido sin token es 401', async () => {
+      const { app } = buildTestApp();
+
+      expect((await request(app).delete('/matches/no-es-uuid/review')).status).toBe(401);
+    });
+  });
+
+  describe('eliminar el texto', () => {
+    it('borra la reseña propia con 200 { review: null } y un GET posterior devuelve null', async () => {
+      mockAuthenticated();
+      mockAuthenticated();
+      const { app, reviewStore, saved } = buildTestApp({ reviewsByUser: { 'user-123': REVIEW } });
+
+      const response = await del(app);
+      const after = await request(app).get(URL).set('Authorization', 'Bearer good');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ review: null });
+      expect(reviewStore.deleteReview).toHaveBeenCalledWith('user-123', MATCH_ID);
+      expect(saved.has('user-123')).toBe(false);
+      expect(after.body).toEqual({ review: null });
+    });
+
+    it('repetir el borrado deja el mismo estado y la misma respuesta, sin error', async () => {
+      mockAuthenticated();
+      mockAuthenticated();
+      mockAuthenticated();
+      const { app, saved } = buildTestApp({ reviewsByUser: { 'user-123': REVIEW } });
+
+      const first = await del(app);
+      const second = await del(app);
+      const third = await del(app);
+
+      for (const response of [first, second, third]) {
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual({ review: null });
+      }
+      expect(saved.size).toBe(0);
+    });
+
+    it('sin reseña previa también responde 200 { review: null }', async () => {
+      mockAuthenticated();
+      const { app } = buildTestApp();
+
+      const response = await del(app);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ review: null });
+    });
+
+    it('se puede borrar aunque el usuario haya deshecho "visto"', async () => {
+      mockAuthenticated();
+      const { app, saved, watchedStore } = buildTestApp({
+        watched: false,
+        reviewsByUser: { 'user-123': REVIEW },
+      });
+
+      const response = await del(app);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ review: null });
+      expect(saved.has('user-123')).toBe(false);
+      expect(watchedStore.getWatched).not.toHaveBeenCalled();
+    });
+
+    it('se puede borrar aunque el partido no esté finalizado o el usuario no tenga nota', async () => {
+      mockAuthenticated();
+      mockAuthenticated();
+      const live = buildTestApp({ status: 'live', reviewsByUser: { 'user-123': REVIEW } });
+      const unrated = buildTestApp({ rating: null, reviewsByUser: { 'user-123': REVIEW } });
+
+      expect((await del(live.app)).status).toBe(200);
+      expect((await del(unrated.app)).status).toBe(200);
+      expect(live.saved.size).toBe(0);
+      expect(unrated.saved.size).toBe(0);
+    });
+  });
+
+  describe('autor', () => {
+    it('no puede borrar la reseña de otra cuenta: cada quien solo borra la suya', async () => {
+      mockAuthenticated('user-b');
+      const { app, reviewStore, saved } = buildTestApp({
+        reviewsByUser: { 'user-123': REVIEW, 'user-b': { ...REVIEW, body: 'Otra opinión' } },
+      });
+
+      const response = await del(app);
+
+      expect(response.status).toBe(200);
+      expect(reviewStore.deleteReview).toHaveBeenCalledWith('user-b', MATCH_ID);
+      expect(saved.get('user-123')).toEqual(REVIEW);
+      expect(saved.has('user-b')).toBe(false);
+    });
+
+    it('un usuario sin reseña no afecta la de otro', async () => {
+      mockAuthenticated('user-sin-resena');
+      const { app, saved } = buildTestApp({ reviewsByUser: { 'user-123': REVIEW } });
+
+      expect((await del(app)).status).toBe(200);
+      expect(saved.get('user-123')).toEqual(REVIEW);
+    });
+
+    it('ignora un userId en el body y en la query: la identidad es la del bearer', async () => {
+      mockAuthenticated('user-b');
+      const { app, reviewStore, saved } = buildTestApp({
+        reviewsByUser: { 'user-123': REVIEW },
+      });
+
+      const response = await request(app)
+        .delete(`${URL}?userId=user-123`)
+        .set('Authorization', 'Bearer good')
+        .send({ userId: 'user-123' });
+
+      expect(response.status).toBe(200);
+      expect(reviewStore.deleteReview).toHaveBeenCalledTimes(1);
+      expect(reviewStore.deleteReview).toHaveBeenCalledWith('user-b', MATCH_ID);
+      expect(saved.get('user-123')).toEqual(REVIEW);
+    });
+  });
+
+  describe('nota, visto y agregados intactos', () => {
+    it('borrar el texto nunca escribe notas ni vistos, y la nota propia se conserva', async () => {
+      mockAuthenticated();
+      const { app, ratingStore, watchedStore } = buildTestApp({
+        rating: 4,
+        reviewsByUser: { 'user-123': REVIEW },
+      });
+
+      const response = await del(app);
+
+      expect(response.status).toBe(200);
+      expect(ratingStore.saveRating).not.toHaveBeenCalled();
+      expect(ratingStore.getSummary).not.toHaveBeenCalled();
+      expect(watchedStore.setWatched).not.toHaveBeenCalled();
+      expect(await ratingStore.findRating('user-123', MATCH_ID)).toBe(4);
+    });
+  });
+
+  describe('validación y errores', () => {
+    it('id inválido responde 400 VALIDATION_ERROR y no borra', async () => {
+      mockAuthenticated();
+      const { app, catalog, reviewStore } = buildTestApp({
+        reviewsByUser: { 'user-123': REVIEW },
+      });
+
+      const response = await del(app, 'Bearer good', '/matches/no-es-uuid/review');
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe('VALIDATION_ERROR');
+      expect(catalog.findById).not.toHaveBeenCalled();
+      expect(reviewStore.deleteReview).not.toHaveBeenCalled();
+    });
+
+    it('partido inexistente responde 404 NOT_FOUND y no borra', async () => {
+      mockAuthenticated();
+      const { app, reviewStore } = buildTestApp({
+        matchExists: false,
+        reviewsByUser: { 'user-123': REVIEW },
+      });
+
+      const response = await del(app);
+
+      expect(response.status).toBe(404);
+      expect(response.body.error.code).toBe('NOT_FOUND');
+      expect(reviewStore.deleteReview).not.toHaveBeenCalled();
+    });
+
+    it('un fallo de persistencia responde 500 genérico, sin detalles ni éxito', async () => {
+      mockAuthenticated();
+      const { app, reviewStore } = buildTestApp({ reviewsByUser: { 'user-123': REVIEW } });
+      vi.mocked(reviewStore.deleteReview).mockRejectedValueOnce(
+        new MatchReviewPersistenceError('No se pudo eliminar la reseña.', {
+          message: 'password=secreto host=db.interno',
+        }),
+      );
+
+      const response = await del(app);
+
+      expect(response.status).toBe(500);
+      expect(response.body).not.toHaveProperty('review');
+      expect(JSON.stringify(response.body)).not.toContain('secreto');
+      expect(JSON.stringify(response.body)).not.toContain('db.interno');
+    });
+  });
+});
+
+describe('otros métodos sobre /review', () => {
+  it('POST sigue sin existir y responde 404', async () => {
     mockAuthenticated();
     const { app } = buildTestApp();
 
     const post = await request(app).post(URL).set('Authorization', 'Bearer good').send({});
-    const del = await request(app).delete(URL).set('Authorization', 'Bearer good');
 
     expect(post.status).toBe(404);
-    expect(del.status).toBe(404);
   });
 });
