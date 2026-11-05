@@ -15,6 +15,7 @@ interface FakeOptions {
   rows?: ReviewRow[];
   selectError?: { message: string };
   upsertError?: { message: string };
+  deleteError?: { message: string };
 }
 
 /** Lo que el trigger de la base pone en `updated_at` al reemplazar una fila. */
@@ -42,6 +43,31 @@ function makeFakeClient(options: FakeOptions = {}) {
       );
 
     const builder = {
+      delete: vi.fn(() => {
+        const deleteFilters: Record<string, string> = {};
+        const deleteBuilder = {
+          eq: vi.fn((column: string, value: string) => {
+            deleteFilters[column] = value;
+            return deleteBuilder;
+          }),
+          // Se espera (await) al final de la cadena, como el builder real.
+          then: (resolve: (result: { error: { message: string } | null }) => unknown) => {
+            if (!options.deleteError) {
+              for (let i = rows.length - 1; i >= 0; i--) {
+                if (
+                  Object.entries(deleteFilters).every(
+                    ([c, v]) => rows[i]![c as keyof ReviewRow] === v,
+                  )
+                ) {
+                  rows.splice(i, 1);
+                }
+              }
+            }
+            return Promise.resolve(resolve({ error: options.deleteError ?? null }));
+          },
+        };
+        return deleteBuilder;
+      }),
       select: vi.fn((requested: string) => {
         columns = requested;
         return builder;
@@ -245,5 +271,65 @@ describe('SupabaseMatchReviewStore.saveReview', () => {
     expect(error).toBeInstanceOf(MatchReviewPersistenceError);
     expect((error as Error).message).not.toContain('secreto');
     expect((error as Error).message).not.toContain('db.interno');
+  });
+});
+
+describe('SupabaseMatchReviewStore.deleteReview', () => {
+  it('elimina la reseña propia y findReview ya no la devuelve', async () => {
+    const fake = makeFakeClient({ rows: [ROW] });
+    const store = new SupabaseMatchReviewStore(asClient(fake));
+
+    await store.deleteReview(USER_ID, MATCH_ID);
+
+    expect(fake.rows).toHaveLength(0);
+    expect(await store.findReview(USER_ID, MATCH_ID)).toBeNull();
+  });
+
+  it('borrar de nuevo, sin reseña, no falla y no cambia nada', async () => {
+    const fake = makeFakeClient({ rows: [ROW] });
+    const store = new SupabaseMatchReviewStore(asClient(fake));
+
+    await store.deleteReview(USER_ID, MATCH_ID);
+    await expect(store.deleteReview(USER_ID, MATCH_ID)).resolves.toBeUndefined();
+
+    expect(fake.rows).toHaveLength(0);
+  });
+
+  it('no toca la reseña de otro usuario ni la del mismo usuario en otro partido', async () => {
+    const other: ReviewRow = { ...ROW, user_id: OTHER_USER_ID, body: 'Aburrido' };
+    const otherMatch: ReviewRow = { ...ROW, match_id: 'a2222222-2222-4222-8222-222222222222' };
+    const fake = makeFakeClient({ rows: [ROW, other, otherMatch] });
+
+    await new SupabaseMatchReviewStore(asClient(fake)).deleteReview(USER_ID, MATCH_ID);
+
+    expect(fake.rows).toEqual([other, otherMatch]);
+  });
+
+  it('filtra siempre por user_id y match_id', async () => {
+    const fake = makeFakeClient({ rows: [ROW] });
+    await new SupabaseMatchReviewStore(asClient(fake)).deleteReview(USER_ID, MATCH_ID);
+    const builder = fake.from.mock.results[0]!.value as { delete: ReturnType<typeof vi.fn> };
+    const deleteBuilder = builder.delete.mock.results[0]!.value as {
+      eq: ReturnType<typeof vi.fn>;
+    };
+
+    expect(deleteBuilder.eq).toHaveBeenCalledWith('user_id', USER_ID);
+    expect(deleteBuilder.eq).toHaveBeenCalledWith('match_id', MATCH_ID);
+  });
+
+  it('un fallo de borrado se lanza sanitizado como error de persistencia', async () => {
+    const fake = makeFakeClient({
+      rows: [ROW],
+      deleteError: { message: 'password=secreto host=db.interno' },
+    });
+
+    const error = await new SupabaseMatchReviewStore(asClient(fake))
+      .deleteReview(USER_ID, MATCH_ID)
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(MatchReviewPersistenceError);
+    expect((error as Error).message).not.toContain('secreto');
+    expect((error as Error).message).not.toContain('db.interno');
+    expect(fake.rows).toHaveLength(1);
   });
 });
