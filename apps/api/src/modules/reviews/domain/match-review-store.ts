@@ -38,7 +38,7 @@ export function normalizeMatchReviewBody(value: unknown): string | null {
 }
 
 /**
- * Puerto mínimo para leer y guardar la reseña propia de un partido, sobre la
+ * Puerto mínimo para leer, guardar y eliminar la reseña propia de un partido, sobre la
  * tabla `match_reviews` de WAT-252: PK `(user_id, match_id)`.
  *
  * No conoce bearer ni HTTP, y tampoco decide elegibilidad (partido existente,
@@ -58,4 +58,11 @@ export interface MatchReviewStore {
    * (`normalizeMatchReviewBody`).
    */
   saveReview(userId: string, matchId: string, body: string): Promise<MatchReview>;
+
+  /**
+   * Elimina la reseña de `userId` para `matchId` (WAT-255). Idempotente: si no
+   * había reseña no hace nada y no falla. Solo toca `match_reviews`; la nota,
+   * el visto y los agregados viven en otras tablas y no se ven afectados.
+   */
+  deleteReview(userId: string, matchId: string): Promise<void>;
 }
