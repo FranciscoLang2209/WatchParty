@@ -11,6 +11,7 @@ import type { RoomCommentReactionStore } from './modules/comments/domain/room-co
 import type { WatchedMatchStore } from './modules/watched/domain/watched-match-store.js';
 import type { MatchRatingStore } from './modules/ratings/domain/match-rating-store.js';
 import type { MatchReviewStore } from './modules/reviews/domain/match-review-store.js';
+import { createReviewsCursorCodec } from './modules/reviews/domain/match-review-cursor.js';
 import type { UserStatisticsStore } from './modules/statistics/domain/user-statistics-store.js';
 
 const noopReactionStore: RoomCommentReactionStore = {
@@ -45,6 +46,7 @@ process.env.SUPABASE_URL = 'https://example.supabase.co';
 process.env.SUPABASE_ANON_KEY = 'test-anon-key';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
 process.env.WEB_ORIGIN = 'http://localhost:5173';
+process.env.REVIEWS_CURSOR_SECRET = 'test-reviews-cursor-secret-32-chars!';
 
 const { createApp } = await import('./app.js');
 
@@ -88,6 +90,7 @@ const app = createApp(
   noopStatisticsStore,
   { search: async () => ({ kind: 'matches', items: [], nextCursor: null }) },
   noopReviewStore,
+  createReviewsCursorCodec(process.env.REVIEWS_CURSOR_SECRET),
 );
 
 describe('GET /health', () => {

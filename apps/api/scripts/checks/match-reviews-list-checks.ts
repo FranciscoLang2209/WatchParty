@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { CheckResult } from '../utils/db-checks.js';
 import { createTempUserId } from '../utils/supabase-clients.js';
@@ -11,10 +12,7 @@ import {
   ANONYMOUS_REVIEW_AUTHOR_NAME,
   type PublicMatchReview,
 } from '../../src/modules/reviews/domain/match-review-store.js';
-import {
-  decodeReviewsCursor,
-  encodeReviewsCursor,
-} from '../../src/modules/reviews/domain/match-review-cursor.js';
+import { createReviewsCursorCodec } from '../../src/modules/reviews/domain/match-review-cursor.js';
 
 // Partido finalizado sembrado por supabase/seed.sql (WAT-103).
 const MATCH_ID = 'a3333333-3333-3333-3333-333333333333';
@@ -68,6 +66,9 @@ export async function checkMatchReviewsList(adminClient: SupabaseClient): Promis
       { user_id: tieB, match_id: MATCH_ID, body: `${TAG} empate B`, created_at: TIE },
     ]);
 
+    // Clave descartable solo para este chequeo; el servidor usa REVIEWS_CURSOR_SECRET.
+    const cursorCodec = createReviewsCursorCodec(randomBytes(32).toString('base64'));
+
     const walk = async (limit: number): Promise<PublicMatchReview[] | string> => {
       const all: PublicMatchReview[] = [];
       let after;
@@ -77,7 +78,7 @@ export async function checkMatchReviewsList(adminClient: SupabaseClient): Promis
         all.push(...result.page.items);
         if (!result.page.nextCursor) return all;
         // Pasa por el cursor opaco, como lo haría un cliente real.
-        after = decodeReviewsCursor(encodeReviewsCursor(result.page.nextCursor)) ?? undefined;
+        after = cursorCodec.decode(cursorCodec.encode(result.page.nextCursor)) ?? undefined;
         if (!after) return 'el cursor opaco no sobrevivió al viaje de ida y vuelta';
       }
       return 'la paginación no terminó';

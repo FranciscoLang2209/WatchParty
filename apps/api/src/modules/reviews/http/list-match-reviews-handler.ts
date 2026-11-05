@@ -8,14 +8,17 @@ import {
   MATCH_REVIEWS_PAGE_MIN_LIMIT,
   type ListMatchReviewsOptions,
 } from '../domain/match-review-store.js';
-import { decodeReviewsCursor, encodeReviewsCursor } from '../domain/match-review-cursor.js';
+import type { ReviewsCursorCodec } from '../domain/match-review-cursor.js';
 
 /**
  * Lee y valida `limit` y `cursor` ANTES de tocar el servicio. Devuelve `null`
  * si alguno es inválido. Un parámetro repetido (`?limit=1&limit=2`) llega como
  * array y se rechaza.
  */
-function parsePagination(query: Record<string, unknown>): ListMatchReviewsOptions | null {
+function parsePagination(
+  query: Record<string, unknown>,
+  cursorCodec: ReviewsCursorCodec,
+): ListMatchReviewsOptions | null {
   const { limit: rawLimit, cursor: rawCursor } = query;
 
   if ([rawLimit, rawCursor].some((value) => value !== undefined && typeof value !== 'string')) {
@@ -31,7 +34,7 @@ function parsePagination(query: Record<string, unknown>): ListMatchReviewsOption
 
   if (rawCursor === undefined) return { limit };
 
-  const after = decodeReviewsCursor(rawCursor as string);
+  const after = cursorCodec.decode(rawCursor as string);
   return after ? { limit, after } : null;
 }
 
@@ -42,7 +45,8 @@ function parsePagination(query: Record<string, unknown>): ListMatchReviewsOption
  * - Respuesta: `{ reviews: [{ authorName, body, createdAt }], nextCursor }`.
  *   Se arma campo por campo: nunca sale email, id de cuenta ni nota. Sin
  *   reseñas es `{ reviews: [], nextCursor: null }`.
- * - `nextCursor` es un texto opaco: se pasa tal cual en `?cursor=` para pedir
+ * - `nextCursor` es un texto opaco y cifrado (nunca lleva el id de cuenta
+ *   legible): se pasa tal cual en `?cursor=` para pedir
  *   la página siguiente; `null` cuando no hay más. `limit` es opcional
  *   (1 a 50, por defecto 20).
  * - El id de ruta, `limit` y `cursor` se validan antes de tocar el servicio
@@ -51,6 +55,7 @@ function parsePagination(query: Record<string, unknown>): ListMatchReviewsOption
  */
 export function createListMatchReviewsHandler(
   service: MatchReviewService,
+  cursorCodec: ReviewsCursorCodec,
 ): RequestHandler<{ matchId: string }> {
   return async (req, res, next) => {
     const { matchId } = req.params;
@@ -60,7 +65,7 @@ export function createListMatchReviewsHandler(
       return;
     }
 
-    const options = parsePagination(req.query);
+    const options = parsePagination(req.query, cursorCodec);
 
     if (!options) {
       next(new ValidationError());
@@ -77,7 +82,7 @@ export function createListMatchReviewsHandler(
     const { items, nextCursor } = result.page;
     res.status(200).json({
       reviews: items.map(({ authorName, body, createdAt }) => ({ authorName, body, createdAt })),
-      nextCursor: nextCursor ? encodeReviewsCursor(nextCursor) : null,
+      nextCursor: nextCursor ? cursorCodec.encode(nextCursor) : null,
     });
   };
 }

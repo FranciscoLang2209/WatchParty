@@ -14,7 +14,7 @@ import {
   type MatchReview,
   type MatchReviewStore,
 } from '../domain/match-review-store.js';
-import { encodeReviewsCursor } from '../domain/match-review-cursor.js';
+import { createReviewsCursorCodec } from '../domain/match-review-cursor.js';
 import { MatchReviewPersistenceError } from '../infrastructure/match-review-persistence-error.js';
 
 vi.mock('../../../auth/supabase-auth-client.js', () => ({
@@ -134,18 +134,21 @@ function buildTestApp(options: Setup = {}) {
     }),
   };
 
+  const cursorCodec = createReviewsCursorCodec('secreto-de-prueba-con-32-caracteres!!');
+
   const app: Express = express();
   app.use(express.json());
   app.use(
     '/matches',
     createMatchReviewsRouter(
       new MatchReviewService(catalog, watchedStore, ratingStore, reviewStore),
+      cursorCodec,
     ),
   );
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  return { app, catalog, reviewStore, ratingStore, watchedStore, saved };
+  return { app, catalog, reviewStore, ratingStore, watchedStore, saved, cursorCodec };
 }
 
 beforeEach(() => {
@@ -1052,6 +1055,36 @@ describe('GET /matches/:matchId/reviews', () => {
       expect(serialized).not.toMatch(/user_?id|email|rating/i);
       expect(ratingStore.findRating).not.toHaveBeenCalled();
     });
+
+    it('ningún cursor, ya decodificado de base64url, deja ver el id de cuenta de un autor', async () => {
+      const ids = [U1, U2, U3];
+      const { app } = buildTestApp({
+        reviewsByUser: { [U1]: at(1, 'Uno'), [U2]: at(2, 'Dos'), [U3]: at(3, 'Tres') },
+      });
+      const cursors: string[] = [];
+      let cursor: string | null = null;
+
+      // Recorre con limit=1 y junta cada cursor, como lo haría cualquier usuario autenticado.
+      for (let guard = 0; guard < 10; guard++) {
+        mockAuthenticated();
+        const suffix: string = cursor ? `&cursor=${cursor}` : '';
+        const response = await list(app, `?limit=1${suffix}`);
+        cursor = response.body.nextCursor;
+        if (cursor === null) break;
+        cursors.push(cursor);
+      }
+
+      expect(cursors).toHaveLength(2);
+      for (const token of cursors) {
+        const decoded = Buffer.from(token, 'base64url');
+        for (const id of ids) {
+          expect(decoded.toString('utf8')).not.toContain(id);
+          expect(decoded.toString('latin1')).not.toContain(id);
+          expect(decoded.toString('hex')).not.toContain(Buffer.from(id).toString('hex'));
+        }
+        expect(() => JSON.parse(decoded.toString('utf8'))).toThrow();
+      }
+    });
   });
 
   describe('paginación', () => {
@@ -1106,16 +1139,45 @@ describe('GET /matches/:matchId/reviews', () => {
 
     it('pasa al store el cursor decodificado y el límite pedido', async () => {
       mockAuthenticated();
-      const { app, reviewStore } = buildTestApp();
+      const { app, reviewStore, cursorCodec } = buildTestApp();
       const cursor = { createdAt: '2026-11-01T10:00:00.123456+00:00', userId: U2 };
 
-      const response = await list(app, `?limit=7&cursor=${encodeReviewsCursor(cursor)}`);
+      const response = await list(app, `?limit=7&cursor=${cursorCodec.encode(cursor)}`);
 
       expect(response.status).toBe(200);
       expect(reviewStore.listMatchReviews).toHaveBeenCalledWith(MATCH_ID, {
         limit: 7,
         after: cursor,
       });
+    });
+
+    it.each([
+      ['un cursor viejo en base64url con el user_id en claro', 'legacy'],
+      ['un cursor alterado', 'tampered'],
+      ['un cursor cifrado con otra clave', 'other-key'],
+    ])('rechaza %s con 400 y no toca el store', async (_label, kind) => {
+      mockAuthenticated();
+      const { app, reviewStore, cursorCodec } = buildTestApp();
+      const cursor = { createdAt: '2026-11-01T10:00:00.123456+00:00', userId: U2 };
+      const token = {
+        legacy: Buffer.from(JSON.stringify({ c: cursor.createdAt, u: cursor.userId })).toString(
+          'base64url',
+        ),
+        tampered: (() => {
+          const raw = Buffer.from(cursorCodec.encode(cursor), 'base64url');
+          raw[raw.length - 1] = raw[raw.length - 1]! ^ 0x01;
+          return raw.toString('base64url');
+        })(),
+        'other-key': createReviewsCursorCodec('otro-secreto-distinto-de-32-caracteres').encode(
+          cursor,
+        ),
+      }[kind as 'legacy' | 'tampered' | 'other-key'];
+
+      const response = await list(app, `?cursor=${token}`);
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe('VALIDATION_ERROR');
+      expect(reviewStore.listMatchReviews).not.toHaveBeenCalled();
     });
 
     it('acepta limit 1 y 50 como extremos', async () => {

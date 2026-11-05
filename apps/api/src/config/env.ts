@@ -24,3 +24,20 @@ function readEnv(): Record<RequiredEnvVar, string> {
 }
 
 export const env = readEnv();
+
+/**
+ * Clave con la que se cifra el cursor de `GET /matches/:matchId/reviews`
+ * (WAT-256). Va aparte de `REQUIRED_ENV_VARS` a propósito: `env.ts` también lo
+ * importan los comandos de sincronización, que no usan reseñas y no deben
+ * exigirla. La lee solo la composición de `app.ts`, que falla al arrancar si
+ * falta (mismo criterio que el resto: sin valor por defecto).
+ */
+export function readReviewsCursorSecret(): string {
+  const value = process.env.REVIEWS_CURSOR_SECRET;
+
+  if (!value) {
+    throw new Error('Falta la variable de entorno requerida: REVIEWS_CURSOR_SECRET');
+  }
+
+  return value;
+}
