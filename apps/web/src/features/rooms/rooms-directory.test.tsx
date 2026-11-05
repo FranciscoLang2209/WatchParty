@@ -600,10 +600,11 @@ describe('Directorio de salas — presentación de las tarjetas', () => {
       expect(within(lista).queryByRole('button')).not.toBeInTheDocument();
     }
 
-    // Fuera de las tarjetas sólo queda el filtro Todos / Mi equipo.
+    // Fuera de las tarjetas sólo quedan el filtro Todos / Mi equipo y Actualizar.
     expect(m.getAllByRole('button').map((boton) => boton.textContent)).toEqual([
       'Todos',
       'Mi equipo',
+      'Actualizar',
     ]);
   });
 });
@@ -642,7 +643,7 @@ describe('Directorio de salas — carga, vacío y error', () => {
     expect(m.queryByRole('status')).not.toBeInTheDocument();
   });
 
-  it('la lista vacía es un panel informativo: sin alerta, sin estado y sin botones', async () => {
+  it('la lista vacía es un panel informativo: sin alerta, sin estado y sin acciones propias', async () => {
     conSesion();
     fetchSpy.mockResolvedValue(jsonResponse({ matches: [] }));
 
@@ -656,7 +657,8 @@ describe('Directorio de salas — carga, vacío y error', () => {
     expect(m.getByText(/Todavía no hay partidos ni salas disponibles/)).toBeInTheDocument();
     expect(m.queryByRole('alert')).not.toBeInTheDocument();
     expect(m.queryByRole('status')).not.toBeInTheDocument();
-    expect(m.queryByRole('button')).not.toBeInTheDocument();
+    // El panel no agrega acciones: la única es Actualizar, que vive fuera de él.
+    expect(m.getAllByRole('button').map((boton) => boton.textContent)).toEqual(['Actualizar']);
   });
 
   it('un fallo recuperable se anuncia como alerta, con título, mensaje y Reintentar', async () => {
@@ -1348,5 +1350,437 @@ describe('Directorio de salas — filtro Mi equipo', () => {
     expect(destinos.filter((url) => url.endsWith('/matches'))).toHaveLength(1);
     expect(destinos.every((url) => url.startsWith(API_BASE))).toBe(true);
     expect(fromMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('Directorio de salas — actualizar', () => {
+  const MATCHES_URL = `${API_BASE}/matches`;
+
+  const otraSesion = {
+    access_token: 'token-otro',
+    user: { id: 'user-2', email: 'otra@b.com' },
+  } as Session;
+
+  const nuevo = {
+    ...river,
+    id: 'match-nuevo',
+    homeTeam: 'Lanús',
+    homeTeamId: 'team-lanus',
+    awayTeam: 'Tigre',
+    awayTeamId: 'team-tigre',
+  };
+
+  interface Pedido {
+    resolver: (respuesta: Response) => void;
+    rechazar: (error: Error) => void;
+    signal: AbortSignal | null | undefined;
+    bearer: string;
+  }
+
+  /**
+   * La primera consulta (la carga inicial) responde `inicial` al instante; las
+   * siguientes quedan pendientes y cada prueba decide cómo contestarlas.
+   */
+  function servidor(inicial: unknown[]) {
+    const pedidos: Pedido[] = [];
+    let primera = true;
+
+    fetchSpy.mockImplementation((_input: unknown, init?: RequestInit) => {
+      if (primera) {
+        primera = false;
+
+        return Promise.resolve(jsonResponse({ matches: inicial }));
+      }
+
+      return new Promise<Response>((resolver, rechazar) => {
+        pedidos.push({
+          resolver,
+          rechazar,
+          signal: init?.signal,
+          bearer: new Headers(init?.headers).get('Authorization') ?? '',
+        });
+      });
+    });
+
+    return pedidos;
+  }
+
+  async function abrir(inicial: unknown[] = [river, racing]) {
+    const pedidos = servidor(inicial);
+
+    conSesion();
+    const vista = renderAt('/rooms');
+    const m = await directorio();
+    await m.findByRole('button', { name: 'Actualizar' });
+
+    return { m, pedidos, vista };
+  }
+
+  function enlaces(m: ReturnType<typeof within>) {
+    return m
+      .queryAllByRole('link', { name: /Ver partido/ })
+      .map((enlace: HTMLElement) => enlace.getAttribute('aria-label'));
+  }
+
+  function alCambiarSesion() {
+    const [[callback]] = authMock.onAuthStateChange.mock.calls as [
+      [(evento: string, sesion: Session | null) => void],
+    ];
+
+    return callback;
+  }
+
+  it('ofrece Actualizar con el listado cargado, y no durante la carga ni ante un error', async () => {
+    conSesion();
+    fetchSpy.mockReturnValue(new Promise(() => {}));
+
+    const cargando = renderAt('/rooms');
+    const enCarga = await directorio();
+    await enCarga.findByRole('status');
+    expect(enCarga.queryByRole('button', { name: /Actualiza/ })).not.toBeInTheDocument();
+    cargando.unmount();
+
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    renderAt('/rooms');
+    const enError = await directorio();
+    await enError.findByRole('alert');
+    expect(enError.queryByRole('button', { name: /Actualiza/ })).not.toBeInTheDocument();
+  });
+
+  it('también se ofrece con la lista vacía, para buscar partidos nuevos', async () => {
+    const { m, pedidos } = await abrir([]);
+
+    await userEvent.setup().click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(1));
+    await act(async () => pedidos[0]!.resolver(jsonResponse({ matches: [nuevo] })));
+
+    expect(await m.findByText(/Lanús/)).toBeInTheDocument();
+    expect(m.queryByText(/Todavía no hay partidos ni salas disponibles/)).not.toBeInTheDocument();
+  });
+
+  it('al pulsar muestra Actualizando…, mantiene las tarjetas y consulta el catálogo con el bearer', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir();
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+
+    const boton = await m.findByRole('button', { name: 'Actualizando…' });
+
+    expect(boton).toHaveAttribute('aria-disabled', 'true');
+    expect(boton).toHaveAttribute('aria-busy', 'true');
+    expect(enlaces(m)).toHaveLength(2);
+    expect(screen.getByRole('main').querySelector('section')).toHaveAttribute('aria-busy', 'true');
+    expect(pedidos).toHaveLength(1);
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(MATCHES_URL);
+    expect(pedidos[0]!.bearer).toBe(`Bearer ${session.access_token}`);
+
+    await act(async () => pedidos[0]!.resolver(jsonResponse({ matches: [river, racing] })));
+
+    expect(await m.findByRole('button', { name: 'Actualizar' })).toHaveAttribute(
+      'aria-disabled',
+      'false',
+    );
+  });
+
+  it('al completar reemplaza los datos y recalcula las secciones, quitando lo que ya no corresponde', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir([river, racing]);
+
+    expect(m.getByRole('region', { name: 'En vivo' })).toBeInTheDocument();
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(1));
+
+    // Racing terminó (ya no es del directorio), River sigue y llegó un partido nuevo.
+    await act(async () =>
+      pedidos[0]!.resolver(
+        jsonResponse({ matches: [{ ...racing, status: 'finished' }, river, nuevo] }),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(m.queryByRole('region', { name: 'En vivo' })).not.toBeInTheDocument(),
+    );
+    expect(enlaces(m)).toEqual([
+      'Ver partido: River Plate vs. Boca Juniors',
+      'Ver partido: Lanús vs. Tigre',
+    ]);
+    expect(m.getByRole('region', { name: 'Próximos' })).toBeInTheDocument();
+  });
+
+  it('si ya no queda ningún partido visible muestra el vacío y conserva Actualizar', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir([river]);
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(1));
+    await act(async () =>
+      pedidos[0]!.resolver(jsonResponse({ matches: [{ ...river, status: 'finished' }] })),
+    );
+
+    expect(
+      await m.findByRole('heading', { level: 2, name: 'No hay partidos por ahora' }),
+    ).toBeInTheDocument();
+    expect(enlaces(m)).toEqual([]);
+    expect(m.getByRole('button', { name: 'Actualizar' })).toBeInTheDocument();
+  });
+
+  it('evita solicitudes simultáneas: mientras actualiza, otro clic o Enter no piden de nuevo', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir();
+    const llamadasAntes = fetchSpy.mock.calls.length;
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    const boton = await m.findByRole('button', { name: 'Actualizando…' });
+
+    await user.click(boton);
+    await user.dblClick(boton);
+    boton.focus();
+    await user.keyboard('{Enter}');
+
+    expect(pedidos).toHaveLength(1);
+    expect(fetchSpy.mock.calls.length).toBe(llamadasAntes + 1);
+
+    await act(async () => pedidos[0]!.resolver(jsonResponse({ matches: [river] })));
+    await user.click(await m.findByRole('button', { name: 'Actualizar' }));
+
+    await waitFor(() => expect(pedidos).toHaveLength(2));
+  });
+
+  it('el foco se queda en el botón mientras actualiza y se activa con el teclado', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir();
+    const boton = m.getByRole('button', { name: 'Actualizar' });
+
+    boton.focus();
+    await user.keyboard('{Enter}');
+
+    expect(await m.findByRole('button', { name: 'Actualizando…' })).toHaveFocus();
+    expect(pedidos).toHaveLength(1);
+  });
+
+  it('el icono gira mientras actualiza y no lo hace con movimiento reducido', async () => {
+    const user = userEvent.setup();
+    const { m } = await abrir();
+
+    expect(m.getByRole('button', { name: 'Actualizar' }).querySelector('svg')).not.toHaveClass(
+      'animate-spin',
+    );
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+
+    expect(
+      (await m.findByRole('button', { name: 'Actualizando…' })).querySelector('svg'),
+    ).toHaveClass('animate-spin', 'motion-reduce:animate-none');
+  });
+
+  it('si falla conserva las tarjetas y muestra un error recuperable con Reintentar', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir();
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(1));
+    await act(async () => pedidos[0]!.rechazar(new TypeError('Failed to fetch')));
+
+    const alerta = await m.findByRole('alert');
+
+    expect(
+      within(alerta).getByRole('heading', { level: 2, name: 'No pudimos actualizar' }),
+    ).toBeInTheDocument();
+    expect(alerta).toHaveTextContent('No pudimos conectarnos.');
+    expect(alerta).toHaveTextContent('Seguimos mostrando el último listado.');
+    expect(within(alerta).getByRole('button', { name: 'Reintentar' })).toBeInTheDocument();
+    expect(enlaces(m)).toEqual([
+      'Ver partido: Racing Club vs. Independiente',
+      'Ver partido: River Plate vs. Boca Juniors',
+    ]);
+    expect(m.queryByRole('heading', { name: 'Algo salió mal' })).not.toBeInTheDocument();
+    expect(m.getByRole('button', { name: 'Actualizar' })).toHaveAttribute('aria-disabled', 'false');
+  });
+
+  it('un 500 al actualizar también conserva las tarjetas', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir();
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(1));
+    await act(async () =>
+      pedidos[0]!.resolver(
+        jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'Ocurrió un error.' } }, 500),
+      ),
+    );
+
+    expect(await m.findByRole('alert')).toHaveTextContent('No pudimos actualizar');
+    expect(enlaces(m)).toHaveLength(2);
+  });
+
+  it('Reintentar vuelve a consultar, reemplaza los datos, quita el aviso y deja el foco en Actualizar', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir();
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(1));
+    await act(async () => pedidos[0]!.rechazar(new TypeError('Failed to fetch')));
+    await user.click(
+      within(await m.findByRole('alert')).getByRole('button', { name: 'Reintentar' }),
+    );
+
+    await waitFor(() => expect(pedidos).toHaveLength(2));
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
+    expect(await m.findByRole('button', { name: 'Actualizando…' })).toHaveFocus();
+    expect(enlaces(m)).toHaveLength(2);
+
+    await act(async () => pedidos[1]!.resolver(jsonResponse({ matches: [nuevo] })));
+
+    expect(await m.findByText(/Lanús/)).toBeInTheDocument();
+    expect(enlaces(m)).toEqual(['Ver partido: Lanús vs. Tigre']);
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
+    expect(m.getByRole('button', { name: 'Actualizar' })).toHaveFocus();
+  });
+
+  it('una actualización exitosa no deja el aviso de un fallo anterior', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir();
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(1));
+    await act(async () => pedidos[0]!.rechazar(new TypeError('Failed to fetch')));
+    await m.findByRole('alert');
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(2));
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
+    await act(async () => pedidos[1]!.resolver(jsonResponse({ matches: [river] })));
+
+    await m.findByRole('button', { name: 'Actualizar' });
+    expect(m.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('la sesión vencida durante una actualización sigue el tratamiento de siempre', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir();
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(1));
+    await act(async () =>
+      pedidos[0]!.resolver(
+        jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'No autenticado.' } }, 401),
+      ),
+    );
+
+    const alerta = await m.findByRole('alert');
+
+    expect(
+      within(alerta).getByRole('heading', { level: 2, name: 'Necesitás ingresar de nuevo' }),
+    ).toBeInTheDocument();
+    expect(m.queryByRole('button', { name: 'Reintentar' })).not.toBeInTheDocument();
+
+    await user.click(within(alerta).getByRole('button', { name: 'Iniciar sesión nuevamente' }));
+
+    expect(authMock.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('al desmontar cancela la actualización en curso y descarta su respuesta', async () => {
+    const user = userEvent.setup();
+    const errores = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { m, pedidos, vista } = await abrir();
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(1));
+    expect(pedidos[0]!.signal?.aborted).toBe(false);
+
+    vista.unmount();
+
+    await waitFor(() => expect(pedidos[0]!.signal?.aborted).toBe(true));
+    await act(async () => pedidos[0]!.resolver(jsonResponse({ matches: [nuevo] })));
+
+    expect(errores).not.toHaveBeenCalled();
+    errores.mockRestore();
+  });
+
+  it('descarta la respuesta de una sesión anterior y usa la de la sesión vigente', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir();
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(1));
+
+    act(() => alCambiarSesion()('SIGNED_IN', otraSesion));
+
+    // El cambio de sesión cancela la consulta anterior y dispara la de la nueva.
+    await waitFor(() => expect(pedidos).toHaveLength(2));
+    expect(pedidos[0]!.signal?.aborted).toBe(true);
+    expect(pedidos[1]!.bearer).toBe('Bearer token-otro');
+
+    await act(async () => pedidos[1]!.resolver(jsonResponse({ matches: [nuevo] })));
+    expect(await m.findByText(/Lanús/)).toBeInTheDocument();
+
+    // La respuesta tardía de la sesión anterior no pisa lo vigente.
+    await act(async () => pedidos[0]!.resolver(jsonResponse({ matches: [racing] })));
+
+    expect(enlaces(m)).toEqual(['Ver partido: Lanús vs. Tigre']);
+    expect(m.getByRole('button', { name: 'Actualizar' })).toBeInTheDocument();
+  });
+
+  it('sólo consulta el catálogo persistido: una petición por pulsación, sin Supabase ni otras rutas', async () => {
+    const user = userEvent.setup();
+    const { m, pedidos } = await abrir();
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+    await waitFor(() => expect(pedidos).toHaveLength(1));
+    await act(async () => pedidos[0]!.resolver(jsonResponse({ matches: [river] })));
+    await m.findByRole('button', { name: 'Actualizar' });
+
+    const destinos = (fetchSpy.mock.calls as [string, RequestInit][]).map(([url]) => String(url));
+
+    expect(destinos).toEqual([MATCHES_URL, MATCHES_URL]);
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+
+  it('conserva el filtro Mi equipo al actualizar y lo aplica a los datos nuevos', async () => {
+    const user = userEvent.setup();
+    const perfilUrl = `${API_BASE}/me/profile`;
+    let actualizacion: (respuesta: Response) => void = () => {};
+    let consultasAlCatalogo = 0;
+
+    conSesion();
+    fetchSpy.mockImplementation((input: unknown) => {
+      if (String(input) === perfilUrl) {
+        return Promise.resolve(
+          jsonResponse({
+            profile: { displayName: 'M', bio: '', favoriteTeamId: 'team-river-plate' },
+          }),
+        );
+      }
+
+      consultasAlCatalogo += 1;
+
+      return consultasAlCatalogo === 1
+        ? Promise.resolve(jsonResponse({ matches: [river, racing] }))
+        : new Promise<Response>((resolver) => (actualizacion = resolver));
+    });
+
+    renderAt('/rooms');
+    const m = await directorio();
+    await user.click(await m.findByRole('button', { name: 'Mi equipo' }));
+    await waitFor(() => expect(enlaces(m)).toEqual(['Ver partido: River Plate vs. Boca Juniors']));
+
+    await user.click(m.getByRole('button', { name: 'Actualizar' }));
+
+    // Mientras actualiza el filtro sigue elegido y las tarjetas filtradas siguen a la vista.
+    expect(await m.findByRole('button', { name: 'Actualizando…' })).toBeInTheDocument();
+    expect(m.getByRole('button', { name: 'Mi equipo' })).toHaveAttribute('aria-pressed', 'true');
+    expect(enlaces(m)).toEqual(['Ver partido: River Plate vs. Boca Juniors']);
+
+    // River pasó a jugarse en vivo y llegó un partido nuevo que no es del favorito.
+    await act(async () =>
+      actualizacion(jsonResponse({ matches: [{ ...river, status: 'live' }, racing, nuevo] })),
+    );
+
+    await waitFor(() => expect(m.getByRole('region', { name: 'En vivo' })).toBeInTheDocument());
+    expect(m.getByRole('button', { name: 'Mi equipo' })).toHaveAttribute('aria-pressed', 'true');
+    expect(m.queryByRole('region', { name: 'Próximos' })).not.toBeInTheDocument();
+    expect(enlaces(m)).toEqual(['Ver partido: River Plate vs. Boca Juniors']);
+    expect(consultasAlCatalogo).toBe(2);
   });
 });
