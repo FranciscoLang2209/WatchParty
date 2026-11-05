@@ -1,7 +1,12 @@
 import type { MatchCatalog } from '../../matches/domain/match-catalog.js';
 import type { MatchRatingStore } from '../../ratings/domain/match-rating-store.js';
 import type { WatchedMatchStore } from '../../watched/domain/watched-match-store.js';
-import type { MatchReview, MatchReviewStore } from '../domain/match-review-store.js';
+import type {
+  ListMatchReviewsOptions,
+  MatchReview,
+  MatchReviewsPage,
+  MatchReviewStore,
+} from '../domain/match-review-store.js';
 
 export type GetOwnReviewResult =
   { kind: 'ok'; review: MatchReview | null } | { kind: 'match_not_found' };
@@ -13,10 +18,13 @@ export type SaveOwnReviewResult =
   | { kind: 'match_not_watched' }
   | { kind: 'match_not_rated' };
 
+export type ListMatchReviewsResult =
+  { kind: 'ok'; page: MatchReviewsPage } | { kind: 'match_not_found' };
+
 export type DeleteOwnReviewResult = { kind: 'ok' } | { kind: 'match_not_found' };
 
 /**
- * Reglas de reseña de un partido (WAT-253, WAT-254, WAT-255). Orquesta puertos ya
+ * Reglas de reseña de un partido (WAT-253 a WAT-256). Orquesta puertos ya
  * existentes sin duplicar sus consultas: `MatchCatalog` (existencia y
  * estado), `WatchedMatchStore` (visto por el usuario), `MatchRatingStore`
  * (nota propia, solo lectura) y `MatchReviewStore` (persistencia del texto).
@@ -38,6 +46,10 @@ export type DeleteOwnReviewResult = { kind: 'ok' } | { kind: 'match_not_found' }
  * se puede borrar el texto aunque el usuario haya deshecho "visto". Es
  * idempotente (sin reseña también es `ok`) y solo toca `match_reviews`: nunca
  * escribe en `match_ratings` ni en los vistos.
+ *
+ * Listar las opiniones de un partido (WAT-256) también solo exige que el
+ * partido exista; la privacidad de los autores (sin id, email ni nota) la
+ * garantiza la forma de `PublicMatchReview`.
  *
  * Los fallos de persistencia se propagan (nunca se convierten en "sin
  * reseña" ni en elegible).
@@ -89,5 +101,15 @@ export class MatchReviewService {
 
     await this.reviewStore.deleteReview(userId, matchId);
     return { kind: 'ok' };
+  }
+
+  async listMatchReviews(
+    matchId: string,
+    options: ListMatchReviewsOptions,
+  ): Promise<ListMatchReviewsResult> {
+    const match = await this.matchCatalog.findById(matchId);
+    if (!match) return { kind: 'match_not_found' };
+
+    return { kind: 'ok', page: await this.reviewStore.listMatchReviews(matchId, options) };
   }
 }

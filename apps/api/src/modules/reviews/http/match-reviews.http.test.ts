@@ -9,7 +9,12 @@ import type { Match, MatchStatus } from '../../matches/domain/match.js';
 import type { MatchCatalog } from '../../matches/domain/match-catalog.js';
 import type { WatchedMatchStore } from '../../watched/domain/watched-match-store.js';
 import type { MatchRatingStore } from '../../ratings/domain/match-rating-store.js';
-import type { MatchReview, MatchReviewStore } from '../domain/match-review-store.js';
+import {
+  ANONYMOUS_REVIEW_AUTHOR_NAME,
+  type MatchReview,
+  type MatchReviewStore,
+} from '../domain/match-review-store.js';
+import { encodeReviewsCursor } from '../domain/match-review-cursor.js';
 import { MatchReviewPersistenceError } from '../infrastructure/match-review-persistence-error.js';
 
 vi.mock('../../../auth/supabase-auth-client.js', () => ({
@@ -46,6 +51,8 @@ interface Setup {
   matchExists?: boolean;
   /** Reseñas guardadas por usuario: el doble solo devuelve la del que pregunta. */
   reviewsByUser?: Record<string, MatchReview>;
+  /** Nombre visible por usuario (tabla `profiles`); sin entrada = sin perfil. */
+  profileNames?: Record<string, string>;
   /** El usuario marcó el partido como visto (por defecto sí). */
   watched?: boolean;
   /** Nota propia ya guardada (por defecto 4); `null` = todavía sin calificar. */
@@ -93,6 +100,37 @@ function buildTestApp(options: Setup = {}) {
     }),
     deleteReview: vi.fn(async (userId) => {
       saved.delete(userId);
+    }),
+    // Doble con el mismo orden que la base: created_at desc y user_id desc.
+    listMatchReviews: vi.fn(async (_matchId, { limit, after }) => {
+      const entries = [...saved.entries()]
+        .map(([userId, review]) => ({ userId, review }))
+        .sort(
+          (a, b) =>
+            b.review.createdAt.localeCompare(a.review.createdAt) ||
+            b.userId.localeCompare(a.userId),
+        );
+      const rest = after
+        ? entries.filter(
+            (e) =>
+              e.review.createdAt < after.createdAt ||
+              (e.review.createdAt === after.createdAt && e.userId < after.userId),
+          )
+        : entries;
+      const page = rest.slice(0, limit);
+      const last = page[page.length - 1];
+
+      return {
+        items: page.map((e) => ({
+          authorName: options.profileNames?.[e.userId] ?? ANONYMOUS_REVIEW_AUTHOR_NAME,
+          body: e.review.body,
+          createdAt: e.review.createdAt,
+        })),
+        nextCursor:
+          rest.length > limit && last
+            ? { createdAt: last.review.createdAt, userId: last.userId }
+            : null,
+      };
     }),
   };
 
@@ -841,5 +879,355 @@ describe('otros métodos sobre /review', () => {
     const post = await request(app).post(URL).set('Authorization', 'Bearer good').send({});
 
     expect(post.status).toBe(404);
+  });
+});
+
+describe('GET /matches/:matchId/reviews', () => {
+  const LIST_URL = `/matches/${MATCH_ID}/reviews`;
+  const U1 = 'c1111111-1111-4111-8111-111111111111';
+  const U2 = 'c2222222-2222-4222-8222-222222222222';
+  const U3 = 'c3333333-3333-4333-8333-333333333333';
+  const U4 = 'c4444444-4444-4444-8444-444444444444';
+  const U5 = 'c5555555-5555-4555-8555-555555555555';
+
+  const at = (day: number, body: string): MatchReview => ({
+    body,
+    createdAt: `2026-11-0${day}T10:00:00.000Z`,
+    updatedAt: `2026-11-0${day}T10:00:00.000Z`,
+  });
+
+  const list = (app: Express, query = '', url = LIST_URL) =>
+    request(app).get(`${url}${query}`).set('Authorization', 'Bearer good');
+
+  /** Recorre todas las páginas con `limit` y devuelve los textos en orden. */
+  async function walk(app: Express, limit: number): Promise<string[]> {
+    const bodies: string[] = [];
+    let cursor: string | null = null;
+
+    for (let guard = 0; guard < 20; guard++) {
+      mockAuthenticated();
+      const suffix: string = cursor ? `&cursor=${cursor}` : '';
+      const response = await list(app, `?limit=${limit}${suffix}`);
+      expect(response.status).toBe(200);
+      bodies.push(...response.body.reviews.map((r: { body: string }) => r.body));
+      cursor = response.body.nextCursor;
+      if (cursor === null) return bodies;
+    }
+    throw new Error('La paginación no terminó');
+  }
+
+  describe('autenticación', () => {
+    it('sin token responde 401 y no consulta nada', async () => {
+      const { app, catalog, reviewStore } = buildTestApp();
+
+      const response = await request(app).get(LIST_URL);
+
+      expect(response.status).toBe(401);
+      expect(response.body).toEqual({
+        error: { code: 'UNAUTHORIZED', message: expect.any(String) },
+      });
+      expect(catalog.findById).not.toHaveBeenCalled();
+      expect(reviewStore.listMatchReviews).not.toHaveBeenCalled();
+    });
+
+    it('con token inválido responde 401', async () => {
+      mockInvalidToken();
+      const { app, reviewStore } = buildTestApp();
+
+      expect((await list(app)).status).toBe(401);
+      expect(reviewStore.listMatchReviews).not.toHaveBeenCalled();
+    });
+
+    it('la autenticación va antes que la validación: id y cursor inválidos sin token son 401', async () => {
+      const { app } = buildTestApp();
+
+      expect((await request(app).get('/matches/no-es-uuid/reviews?cursor=%%')).status).toBe(401);
+    });
+  });
+
+  describe('contenido', () => {
+    it('partido sin reseñas responde 200 con lista vacía y sin cursor', async () => {
+      mockAuthenticated();
+      const { app } = buildTestApp();
+
+      const response = await list(app);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ reviews: [], nextCursor: null });
+    });
+
+    it('lista de la más reciente a la más antigua, con nombre, texto y fecha', async () => {
+      mockAuthenticated();
+      const { app, reviewStore } = buildTestApp({
+        reviewsByUser: { [U1]: at(1, 'Primera'), [U2]: at(3, 'Tercera'), [U3]: at(2, 'Segunda') },
+        profileNames: { [U1]: 'Ana', [U2]: 'Beto', [U3]: 'Cami' },
+      });
+
+      const response = await list(app);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        reviews: [
+          { authorName: 'Beto', body: 'Tercera', createdAt: '2026-11-03T10:00:00.000Z' },
+          { authorName: 'Cami', body: 'Segunda', createdAt: '2026-11-02T10:00:00.000Z' },
+          { authorName: 'Ana', body: 'Primera', createdAt: '2026-11-01T10:00:00.000Z' },
+        ],
+        nextCursor: null,
+      });
+      expect(reviewStore.listMatchReviews).toHaveBeenCalledWith(MATCH_ID, { limit: 20 });
+    });
+
+    it('incluye la reseña del propio usuario como una más', async () => {
+      mockAuthenticated(U1);
+      const { app } = buildTestApp({
+        reviewsByUser: { [U1]: at(1, 'Mía'), [U2]: at(2, 'Ajena') },
+        profileNames: { [U1]: 'Ana', [U2]: 'Beto' },
+      });
+
+      const response = await list(app);
+
+      expect(response.body.reviews.map((r: { body: string }) => r.body)).toEqual(['Ajena', 'Mía']);
+    });
+
+    it('autor sin perfil: usa la etiqueta neutra, nunca algo derivado del email', async () => {
+      mockAuthenticated('lector');
+      const { app } = buildTestApp({
+        reviewsByUser: { 'maria-lopez': at(1, 'Sin perfil') },
+      });
+
+      const response = await list(app);
+
+      expect(response.body.reviews).toEqual([
+        {
+          authorName: ANONYMOUS_REVIEW_AUTHOR_NAME,
+          body: 'Sin perfil',
+          createdAt: '2026-11-01T10:00:00.000Z',
+        },
+      ]);
+      expect(JSON.stringify(response.body)).not.toContain('maria');
+      expect(JSON.stringify(response.body)).not.toContain('example.com');
+    });
+
+    it('expone solo { authorName, body, createdAt }: ignora cualquier dato extra del store', async () => {
+      mockAuthenticated();
+      const { app, reviewStore } = buildTestApp();
+      vi.mocked(reviewStore.listMatchReviews).mockResolvedValueOnce({
+        items: [
+          {
+            authorName: 'Ana',
+            body: 'Hola',
+            createdAt: '2026-11-01T10:00:00.000Z',
+            userId: U1,
+            email: 'ana@example.com',
+            rating: 5,
+          } as never,
+        ],
+        nextCursor: null,
+      });
+
+      const response = await list(app);
+
+      expect(Object.keys(response.body.reviews[0]).sort()).toEqual([
+        'authorName',
+        'body',
+        'createdAt',
+      ]);
+      for (const secret of [U1, 'ana@example.com', 'userId', 'email', 'rating']) {
+        expect(JSON.stringify(response.body)).not.toContain(secret);
+      }
+    });
+
+    it('no revela ids de cuenta ni notas, ni siquiera en el cursor en claro', async () => {
+      mockAuthenticated();
+      const { app, ratingStore } = buildTestApp({
+        reviewsByUser: { [U1]: at(1, 'Uno'), [U2]: at(2, 'Dos'), [U3]: at(3, 'Tres') },
+        rating: 5,
+      });
+
+      const response = await list(app, '?limit=1');
+      const serialized = JSON.stringify(response.body);
+
+      expect(response.body.nextCursor).toEqual(expect.any(String));
+      for (const id of [U1, U2, U3]) expect(serialized).not.toContain(id);
+      expect(serialized).not.toMatch(/user_?id|email|rating/i);
+      expect(ratingStore.findRating).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('paginación', () => {
+    const FIVE = {
+      [U1]: at(1, 'r1'),
+      [U2]: at(2, 'r2'),
+      [U3]: at(3, 'r3'),
+      [U4]: at(4, 'r4'),
+      [U5]: at(5, 'r5'),
+    };
+
+    it('recorre todas las páginas sin repetir ni saltear reseñas, siempre en el mismo orden', async () => {
+      const { app } = buildTestApp({ reviewsByUser: FIVE });
+
+      expect(await walk(app, 2)).toEqual(['r5', 'r4', 'r3', 'r2', 'r1']);
+      expect(await walk(app, 2)).toEqual(['r5', 'r4', 'r3', 'r2', 'r1']);
+      expect(await walk(app, 1)).toEqual(['r5', 'r4', 'r3', 'r2', 'r1']);
+    });
+
+    it('la última página no trae cursor, y una página exacta tampoco', async () => {
+      mockAuthenticated();
+      mockAuthenticated();
+      const { app } = buildTestApp({ reviewsByUser: FIVE });
+
+      const exact = await list(app, '?limit=5');
+      const more = await list(app, '?limit=4');
+
+      expect(exact.body.reviews).toHaveLength(5);
+      expect(exact.body.nextCursor).toBeNull();
+      expect(more.body.reviews).toHaveLength(4);
+      expect(more.body.nextCursor).toEqual(expect.any(String));
+    });
+
+    it('con empates de fecha el orden y las páginas son estables', async () => {
+      const sameInstant = (body: string): MatchReview => ({
+        body,
+        createdAt: '2026-11-01T10:00:00.000Z',
+        updatedAt: '2026-11-01T10:00:00.000Z',
+      });
+      const { app } = buildTestApp({
+        reviewsByUser: {
+          [U1]: sameInstant('t1'),
+          [U2]: sameInstant('t2'),
+          [U3]: sameInstant('t3'),
+          [U4]: sameInstant('t4'),
+        },
+      });
+
+      expect(await walk(app, 1)).toEqual(['t4', 't3', 't2', 't1']);
+      expect(await walk(app, 3)).toEqual(['t4', 't3', 't2', 't1']);
+    });
+
+    it('pasa al store el cursor decodificado y el límite pedido', async () => {
+      mockAuthenticated();
+      const { app, reviewStore } = buildTestApp();
+      const cursor = { createdAt: '2026-11-01T10:00:00.123456+00:00', userId: U2 };
+
+      const response = await list(app, `?limit=7&cursor=${encodeReviewsCursor(cursor)}`);
+
+      expect(response.status).toBe(200);
+      expect(reviewStore.listMatchReviews).toHaveBeenCalledWith(MATCH_ID, {
+        limit: 7,
+        after: cursor,
+      });
+    });
+
+    it('acepta limit 1 y 50 como extremos', async () => {
+      mockAuthenticated();
+      mockAuthenticated();
+      const { app } = buildTestApp();
+
+      expect((await list(app, '?limit=1')).status).toBe(200);
+      expect((await list(app, '?limit=50')).status).toBe(200);
+    });
+  });
+
+  describe('borrado', () => {
+    it('una reseña eliminada deja de aparecer en el listado', async () => {
+      mockAuthenticated(U1);
+      mockAuthenticated(U1);
+      mockAuthenticated(U3);
+      const { app } = buildTestApp({
+        reviewsByUser: { [U1]: at(1, 'Se borra'), [U2]: at(2, 'Queda') },
+        profileNames: { [U1]: 'Ana', [U2]: 'Beto' },
+      });
+
+      const before = await list(app);
+      const removed = await request(app).delete(URL).set('Authorization', 'Bearer good');
+      const after = await list(app);
+
+      expect(before.body.reviews.map((r: { body: string }) => r.body)).toEqual([
+        'Queda',
+        'Se borra',
+      ]);
+      expect(removed.status).toBe(200);
+      expect(after.body.reviews.map((r: { body: string }) => r.body)).toEqual(['Queda']);
+    });
+  });
+
+  describe('validación y errores', () => {
+    it('id de partido inválido responde 400 VALIDATION_ERROR y no consulta', async () => {
+      mockAuthenticated();
+      const { app, catalog, reviewStore } = buildTestApp();
+
+      const response = await list(app, '', '/matches/no-es-uuid/reviews');
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe('VALIDATION_ERROR');
+      expect(catalog.findById).not.toHaveBeenCalled();
+      expect(reviewStore.listMatchReviews).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['limit 0', '?limit=0'],
+      ['limit 51', '?limit=51'],
+      ['limit negativo', '?limit=-1'],
+      ['limit decimal', '?limit=2.5'],
+      ['limit no numérico', '?limit=abc'],
+      ['limit vacío', '?limit='],
+      ['limit repetido', '?limit=1&limit=2'],
+      ['cursor repetido', '?cursor=a&cursor=b'],
+      ['cursor que no es un cursor', '?cursor=hola'],
+      ['cursor vacío', '?cursor='],
+      ['cursor con un user_id suelto', `?cursor=${U1}`],
+    ])('%s responde 400 y no consulta el store', async (_label, query) => {
+      mockAuthenticated();
+      const { app, reviewStore } = buildTestApp({ reviewsByUser: { [U1]: at(1, 'x') } });
+
+      const response = await list(app, query);
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe('VALIDATION_ERROR');
+      expect(reviewStore.listMatchReviews).not.toHaveBeenCalled();
+    });
+
+    it('partido inexistente responde 404 NOT_FOUND y no lista', async () => {
+      mockAuthenticated();
+      const { app, reviewStore } = buildTestApp({
+        matchExists: false,
+        reviewsByUser: { [U1]: at(1, 'x') },
+      });
+
+      const response = await list(app);
+
+      expect(response.status).toBe(404);
+      expect(response.body.error.code).toBe('NOT_FOUND');
+      expect(reviewStore.listMatchReviews).not.toHaveBeenCalled();
+    });
+
+    it('lista aunque el partido no esté finalizado y sin importar el visto o la nota del lector', async () => {
+      mockAuthenticated();
+      const { app } = buildTestApp({
+        status: 'live',
+        watched: false,
+        rating: null,
+        reviewsByUser: { [U1]: at(1, 'x') },
+      });
+
+      expect((await list(app)).status).toBe(200);
+    });
+
+    it('un fallo de persistencia responde 500 genérico, sin detalles ni lista vacía', async () => {
+      mockAuthenticated();
+      const { app, reviewStore } = buildTestApp();
+      vi.mocked(reviewStore.listMatchReviews).mockRejectedValueOnce(
+        new MatchReviewPersistenceError('No se pudo listar.', {
+          message: 'password=secreto host=db.interno',
+        }),
+      );
+
+      const response = await list(app);
+
+      expect(response.status).toBe(500);
+      expect(response.body).not.toHaveProperty('reviews');
+      expect(JSON.stringify(response.body)).not.toContain('secreto');
+      expect(JSON.stringify(response.body)).not.toContain('db.interno');
+    });
   });
 });
