@@ -1,9 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
+  ANONYMOUS_REVIEW_AUTHOR_NAME,
   normalizeMatchReviewBody,
+  type ListMatchReviewsOptions,
   type MatchReview,
+  type MatchReviewsPage,
   type MatchReviewStore,
 } from '../domain/match-review-store.js';
+import { isValidReviewsCursor } from '../domain/match-review-cursor.js';
 import { MatchReviewPersistenceError } from './match-review-persistence-error.js';
 
 /**
@@ -74,6 +78,102 @@ export class SupabaseMatchReviewStore implements MatchReviewStore {
         error,
       );
     }
+  }
+
+  async listMatchReviews(
+    matchId: string,
+    { limit, after }: ListMatchReviewsOptions,
+  ): Promise<MatchReviewsPage> {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new RangeError('El límite de la página de reseñas debe ser un entero >= 1.');
+    }
+    if (after && !isValidReviewsCursor(after)) {
+      throw new RangeError('El cursor de reseñas es inválido.');
+    }
+
+    let query = this.client
+      .from('match_reviews')
+      .select('user_id, body, created_at')
+      .eq('match_id', matchId);
+
+    if (after) {
+      // (created_at, user_id) < (after.createdAt, after.userId): anterior en
+      // fecha, o misma fecha y user_id menor. El cursor ya está validado.
+      query = query.or(
+        `created_at.lt.${after.createdAt},and(created_at.eq.${after.createdAt},user_id.lt.${after.userId})`,
+      );
+    }
+
+    const { data, error } = await query
+      .order('created_at', { ascending: false })
+      .order('user_id', { ascending: false })
+      .limit(limit + 1);
+
+    if (error) {
+      throw new MatchReviewPersistenceError(
+        `No se pudo listar las reseñas del partido ${matchId}.`,
+        error,
+      );
+    }
+
+    const rows = (data ?? []).map((row) => this.toListedRow(row, matchId));
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const lastRow = pageRows[pageRows.length - 1];
+    const names = await this.findDisplayNames(pageRows.map((row) => row.userId));
+
+    return {
+      items: pageRows.map((row) => ({
+        authorName: names.get(row.userId) ?? ANONYMOUS_REVIEW_AUTHOR_NAME,
+        body: row.body,
+        createdAt: row.createdAt,
+      })),
+      nextCursor:
+        hasMore && lastRow ? { createdAt: lastRow.createdAt, userId: lastRow.userId } : null,
+    };
+  }
+
+  /**
+   * Nombres visibles de `userIds`. Selecciona solo `user_id, display_name`
+   * (nunca `*`: `profiles` tiene bio y equipo favorito). Un autor sin perfil,
+   * o con el nombre vacío, no aparece en el mapa.
+   */
+  private async findDisplayNames(userIds: string[]): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    if (userIds.length === 0) return names;
+
+    const { data, error } = await this.client
+      .from('profiles')
+      .select('user_id, display_name')
+      .in('user_id', userIds);
+
+    if (error) {
+      throw new MatchReviewPersistenceError(
+        'No se pudieron leer los nombres de los autores.',
+        error,
+      );
+    }
+
+    for (const row of data ?? []) {
+      const { user_id, display_name } = (row ?? {}) as Record<string, unknown>;
+      if (typeof user_id !== 'string' || typeof display_name !== 'string') continue;
+      const name = display_name.trim();
+      if (name.length > 0) names.set(user_id, name);
+    }
+
+    return names;
+  }
+
+  private toListedRow(row: unknown, matchId: string) {
+    const { user_id, body, created_at } = (row ?? {}) as Record<string, unknown>;
+
+    if (typeof user_id !== 'string' || typeof body !== 'string' || typeof created_at !== 'string') {
+      throw new MatchReviewPersistenceError(
+        `Una reseña persistida del partido ${matchId} es inválida.`,
+      );
+    }
+
+    return { userId: user_id, body, createdAt: created_at };
   }
 
   /** La base ya lo garantiza con NOT NULL; esto evita devolver basura si algo cambiara. */
