@@ -181,6 +181,42 @@ describe('AuthPage en modo login', () => {
     expect(screen.getByRole('button', { name: 'Ingresar' })).toBeEnabled();
   });
 
+  it('ante un fallo de red no culpa a las credenciales y permite reintentar', async () => {
+    authMock.signInWithPassword.mockResolvedValue({
+      data: { user: null, session: null },
+      error: {
+        name: 'AuthRetryableFetchError',
+        message: 'Failed to fetch',
+        status: 0,
+      } as AuthError,
+    });
+
+    const { user } = renderAuth('/login');
+    await fillAndSubmit(user, 'login');
+
+    const alert = await screen.findByRole('alert');
+
+    expect(alert).toHaveTextContent(
+      'No pudimos conectarnos. Revisá tu conexión e intentá de nuevo.',
+    );
+    expect(alert).not.toHaveTextContent('El email o la contraseña no son correctos.');
+    expect(screen.getByRole('button', { name: 'Ingresar' })).toBeEnabled();
+  });
+
+  it('ante un error del servidor no culpa a las credenciales', async () => {
+    authMock.signInWithPassword.mockResolvedValue({
+      data: { user: null, session: null },
+      error: { name: 'AuthApiError', message: 'Internal error', status: 500 } as AuthError,
+    });
+
+    const { user } = renderAuth('/login');
+    await fillAndSubmit(user, 'login');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'No pudimos completar la operación. Intentá de nuevo en unos instantes.',
+    );
+  });
+
   it('muestra un error recuperable si el login no devuelve sesión', async () => {
     authMock.signInWithPassword.mockResolvedValue({
       data: { user: session.user, session: null },
