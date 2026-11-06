@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AuthError, Session } from '@supabase/supabase-js';
+import { AuthRetryableFetchError, type AuthError, type Session } from '@supabase/supabase-js';
 import type { AuthMode } from './auth-mode';
 import { REMEMBER_SESSION_KEY } from '../../lib/session-storage';
 
@@ -179,6 +179,64 @@ describe('AuthPage en modo login', () => {
     expect(fields().email).toHaveValue('persona@watchparty.test');
     expect(fields().email).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Ingresar' })).toBeEnabled();
+  });
+
+  it('ante un fallo de red no culpa a las credenciales y permite reintentar', async () => {
+    authMock.signInWithPassword.mockResolvedValue({
+      data: { user: null, session: null },
+      error: {
+        name: 'AuthRetryableFetchError',
+        message: 'Failed to fetch',
+        status: 0,
+      } as AuthError,
+    });
+
+    const { user } = renderAuth('/login');
+    await fillAndSubmit(user, 'login');
+
+    const alert = await screen.findByRole('alert');
+
+    expect(alert).toHaveTextContent(
+      'No pudimos conectarnos. Revisá tu conexión e intentá de nuevo.',
+    );
+    expect(alert).not.toHaveTextContent('El email o la contraseña no son correctos.');
+    expect(screen.getByRole('button', { name: 'Ingresar' })).toBeEnabled();
+  });
+
+  // `@supabase/auth-js` convierte 500–504 y 520–530 en `AuthRetryableFetchError`
+  // con el status real: tiene que leerse como error del servidor, no de red.
+  it.each([500, 502, 503, 504, 522])(
+    'ante un %i del servidor no culpa a las credenciales ni a la conexión',
+    async (status) => {
+      authMock.signInWithPassword.mockResolvedValue({
+        data: { user: null, session: null },
+        error: new AuthRetryableFetchError('Service Unavailable', status),
+      });
+
+      const { user } = renderAuth('/login');
+      await fillAndSubmit(user, 'login');
+
+      const alert = await screen.findByRole('alert');
+
+      expect(alert).toHaveTextContent(
+        'No pudimos completar la operación. Intentá de nuevo en unos instantes.',
+      );
+      expect(alert).not.toHaveTextContent('Revisá tu conexión');
+    },
+  );
+
+  it('ante un 5xx que el cliente no reintenta tampoco culpa a las credenciales', async () => {
+    authMock.signInWithPassword.mockResolvedValue({
+      data: { user: null, session: null },
+      error: { name: 'AuthApiError', message: 'Internal error', status: 505 } as AuthError,
+    });
+
+    const { user } = renderAuth('/login');
+    await fillAndSubmit(user, 'login');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'No pudimos completar la operación. Intentá de nuevo en unos instantes.',
+    );
   });
 
   it('muestra un error recuperable si el login no devuelve sesión', async () => {
