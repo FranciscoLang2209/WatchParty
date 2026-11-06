@@ -52,13 +52,23 @@ pnpm dev:web   # sólo la web
 
 ## Validación local
 
-Antes de abrir un Pull Request, correr:
+Antes de subir cambios, correr:
 
 ```sh
 pnpm validate
 ```
 
-Este comando ejecuta, en orden: formato (`prettier --check`), lint (`eslint`), chequeo de tipos, tests y build de todos los paquetes del monorepo (`apps/*`).
+Este comando ejecuta, en orden: formato (`prettier --check`), lint (`eslint`), chequeo de tipos, tests y build de todos los paquetes del monorepo (`apps/*`). Es el único comando para reproducir toda la validación en local.
+
+### Hook pre-push
+
+`.husky/pre-push` ejecuta `pnpm validate` en cada `git push`: si algún paso falla, el push se cancela; si todo pasa, se envía. El hook queda instalado solo al correr `pnpm install` (el script `prepare` activa Husky), así que no requiere pasos extra en un checkout nuevo. Para ejecutarlo a mano, sin pushear: `pnpm validate`.
+
+Los hooks locales **pueden omitirse** (`git push --no-verify`, `HUSKY=0`, o un clon sin dependencias instaladas) y no son una garantía remota: nada en GitHub asegura que cada commit haya pasado los tests. Por eso la política es:
+
+- Correr `pnpm validate` antes de subir, también quien trabaje con agentes: el agente debe ejecutarlo y reportar su resultado, no asumirlo.
+- Si se omite el hook, decirlo en el PR y correr la validación completa manual (ver abajo).
+- La cobertura remota final es la del evento `pull_request` (ver más abajo).
 
 También podés correr cada paso por separado:
 
@@ -73,16 +83,17 @@ pnpm build          # compila todas las apps
 
 ## Integración continua
 
-Cada push, Pull Request y ejecución manual dispara el workflow **CI** en GitHub Actions
-(`.github/workflows/ci.yml`), visible como el check **`CI / quality`**. Ejecuta, en orden:
-instalación reproducible (`pnpm install --frozen-lockfile`), formato, lint, typecheck, tests
-y build — sin secretos, despliegues ni Docker/Supabase.
+El workflow **CI** (`.github/workflows/ci.yml`, job `quality`, visible como el check **`CI / quality`**) corre sin secretos, despliegues ni Docker/Supabase. Qué ejecuta cada evento:
 
-El mismo chequeo se reproduce en local con:
+| Evento              | Qué corre                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------ |
+| `push`              | Controles rápidos: instalación reproducible, formato, lint y typecheck               |
+| `pull_request`      | Validación completa: lo anterior más tests y build (cobertura remota antes de merge) |
+| `workflow_dispatch` | Validación completa a pedido, para diagnóstico (Actions → CI → Run workflow)         |
 
-```sh
-pnpm validate
-```
+Una actualización de una rama con PR dispara una corrida liviana (`push`) y una completa (`pull_request`), nunca dos completas. Se conservan el cache de pnpm y la cancelación de corridas obsoletas por ref. Los fallos se ven siempre: ningún paso usa `continue-on-error`.
+
+El nombre del job (`quality`) y del workflow (`CI`) no cambian, así que el check requerido `CI / quality` sigue existiendo en `pull_request`. En `push` el mismo check corre solo los controles rápidos.
 
 ## Estructura
 
