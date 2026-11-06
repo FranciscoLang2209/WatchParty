@@ -1,4 +1,4 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { setRememberSession } from '../../lib/session-storage';
 import { AuthForm, type AuthCredentials } from './AuthForm';
@@ -10,9 +10,30 @@ interface AuthPageProps {
   mode: AuthMode;
 }
 
+/**
+ * `RequireAuth` deja en `state.from` la ruta privada que se pidió sin sesión.
+ * Sólo se acepta una ruta interna (`/…`, nunca `//…`); cualquier otra cosa
+ * vuelve al inicio.
+ */
+function redirectTarget(state: unknown): string {
+  const from = (state as { from?: { pathname?: unknown; search?: unknown; hash?: unknown } } | null)
+    ?.from;
+  const pathname = from?.pathname;
+
+  if (typeof pathname !== 'string' || !pathname.startsWith('/') || pathname.startsWith('//')) {
+    return '/';
+  }
+
+  const search = typeof from?.search === 'string' ? from.search : '';
+  const hash = typeof from?.hash === 'string' ? from.hash : '';
+
+  return `${pathname}${search}${hash}`;
+}
+
 export function AuthPage({ mode }: AuthPageProps) {
   const copy = AUTH_COPY[mode];
   const navigate = useNavigate();
+  const location = useLocation();
 
   async function handleSubmit({ email, password, username, remember }: AuthCredentials) {
     // La preferencia se guarda antes de pedir la sesión: define en qué store la
@@ -36,7 +57,7 @@ export function AuthPage({ mode }: AuthPageProps) {
       throw new Error(MISSING_SESSION_MESSAGE[mode]);
     }
 
-    navigate('/', { replace: true });
+    navigate(redirectTarget(location.state), { replace: true });
   }
 
   return (

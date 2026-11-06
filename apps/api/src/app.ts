@@ -1,6 +1,6 @@
 import express, { type Express } from 'express';
 import cors from 'cors';
-import { env } from './config/env.js';
+import { env, readReviewsCursorSecret } from './config/env.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 import { createMatchesRouter } from './modules/matches/http/matches-router.js';
 import type { MatchCatalog } from './modules/matches/domain/match-catalog.js';
@@ -33,6 +33,10 @@ import { SupabaseMatchRatingStore } from './modules/ratings/infrastructure/supab
 import { createMatchReviewsRouter } from './modules/reviews/http/match-reviews-router.js';
 import { MatchReviewService } from './modules/reviews/application/match-review-service.js';
 import type { MatchReviewStore } from './modules/reviews/domain/match-review-store.js';
+import {
+  createReviewsCursorCodec,
+  type ReviewsCursorCodec,
+} from './modules/reviews/domain/match-review-cursor.js';
 import { SupabaseMatchReviewStore } from './modules/reviews/infrastructure/supabase-match-review-store.js';
 import { createStatisticsRouter } from './modules/statistics/http/statistics-router.js';
 import type { UserStatisticsStore } from './modules/statistics/domain/user-statistics-store.js';
@@ -60,6 +64,7 @@ export function createApp(
   statisticsStore: UserStatisticsStore,
   matchSearch: MatchSearch,
   reviewStore: MatchReviewStore,
+  reviewsCursorCodec: ReviewsCursorCodec,
 ): Express {
   const app = express();
 
@@ -90,6 +95,7 @@ export function createApp(
     '/matches',
     createMatchReviewsRouter(
       new MatchReviewService(matchCatalog, watchedStore, ratingStore, reviewStore),
+      reviewsCursorCodec,
     ),
   );
   app.use(createProfilesRouter(profileStore));
@@ -127,6 +133,7 @@ const ratingStore = new SupabaseMatchRatingStore(sportsDataClient);
 const statisticsStore = new SupabaseUserStatisticsStore(sportsDataClient);
 const matchSearch = new SupabaseMatchSearch(sportsDataClient);
 const reviewStore = new SupabaseMatchReviewStore(sportsDataClient);
+const reviewsCursorCodec = createReviewsCursorCodec(readReviewsCursorSecret());
 
 export default createApp(
   matchCatalog,
@@ -139,4 +146,5 @@ export default createApp(
   statisticsStore,
   matchSearch,
   reviewStore,
+  reviewsCursorCodec,
 );
