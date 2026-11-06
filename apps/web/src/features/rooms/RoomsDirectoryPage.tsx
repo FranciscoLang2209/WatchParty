@@ -52,6 +52,20 @@ type Favorito =
 
 const MENSAJE_INESPERADO = 'No pudimos cargar el directorio. Intentá de nuevo.';
 
+/** Los estados reales del catálogo que el directorio muestra; `todos` los junta. */
+type FiltroEstado = 'todos' | Match['status'];
+
+const OPCIONES_ESTADO: readonly { valor: FiltroEstado; etiqueta: string }[] = [
+  { valor: 'todos', etiqueta: 'Todos' },
+  { valor: 'live', etiqueta: 'En vivo' },
+  { valor: 'scheduled', etiqueta: 'Próximos' },
+];
+
+const SIN_PARTIDOS: Partial<Record<Match['status'], string>> = {
+  live: 'No hay partidos en vivo por ahora.',
+  scheduled: 'No hay partidos próximos por ahora.',
+};
+
 /**
  * /rooms sólo muestra partidos que todavía pueden tener sala activa, repartidos en
  * secciones por el estado que ya devuelve el catálogo. Un partido pertenece a una
@@ -150,6 +164,8 @@ export function RoomsDirectoryPage() {
   const tituloFoco = useRef<HTMLHeadingElement>(null);
   const botonTodos = useRef<HTMLButtonElement>(null);
   const reintentando = useRef(false);
+  const [filtroEstado, setFiltroEstado] = useState<FiltroEstado>('todos');
+  const botonTodosEstado = useRef<HTMLButtonElement>(null);
   const botonActualizar = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -284,13 +300,26 @@ export function RoomsDirectoryPage() {
   // Con el perfil caído se conserva el listado general; con el favorito resuelto,
   // sólo el suyo; mientras se pide o sin favorito no hay partidos que mostrar. Al
   // actualizar se recalcula sobre los datos nuevos y el filtro elegido se conserva.
-  const mostradas = !enMiEquipo
+  const porEquipo = !enMiEquipo
     ? todas
     : favorito.status === 'error'
       ? todas
       : favorito.status === 'ready'
         ? propias
         : [];
+  // El selector de estado sólo recorta las secciones ya calculadas: no pide ni
+  // reordena nada.
+  const mostradas =
+    filtroEstado === 'todos'
+      ? porEquipo
+      : porEquipo.filter((seccion) => seccion.estado === filtroEstado);
+
+  // El panel que tenía el foco desaparece al volver: lo recibe el «Todos» del
+  // selector de estado, que sigue en pantalla.
+  const volverATodosLosEstados = useCallback(() => {
+    setFiltroEstado('todos');
+    botonTodosEstado.current?.focus();
+  }, []);
 
   return (
     <section
@@ -312,21 +341,40 @@ export function RoomsDirectoryPage() {
         {estado.status === 'ready' ? (
           <div className="flex flex-wrap items-center justify-between gap-3">
             {hayPartidos ? (
-              <div role="group" aria-label="Filtrar partidos" className="flex flex-wrap gap-2">
-                {FILTROS.map(({ valor, etiqueta }) => (
-                  <Button
-                    key={valor}
-                    ref={valor === 'todos' ? botonTodos : undefined}
-                    type="button"
-                    variant={filtro === valor ? 'default' : 'outline'}
-                    aria-pressed={filtro === valor}
-                    className="flex-1 sm:flex-none"
-                    onClick={() => elegirFiltro(valor)}
-                  >
-                    {filtro === valor ? <Check aria-hidden="true" /> : null}
-                    {etiqueta}
-                  </Button>
-                ))}
+              <div className="flex flex-wrap items-center gap-3">
+                <div role="group" aria-label="Filtrar partidos" className="flex flex-wrap gap-2">
+                  {FILTROS.map(({ valor, etiqueta }) => (
+                    <Button
+                      key={valor}
+                      ref={valor === 'todos' ? botonTodos : undefined}
+                      type="button"
+                      variant={filtro === valor ? 'default' : 'outline'}
+                      aria-pressed={filtro === valor}
+                      className="flex-1 sm:flex-none"
+                      onClick={() => elegirFiltro(valor)}
+                    >
+                      {filtro === valor ? <Check aria-hidden="true" /> : null}
+                      {etiqueta}
+                    </Button>
+                  ))}
+                </div>
+
+                <div role="group" aria-label="Filtrar por estado" className="flex flex-wrap gap-2">
+                  {OPCIONES_ESTADO.map(({ valor, etiqueta }) => (
+                    <Button
+                      key={valor}
+                      ref={valor === 'todos' ? botonTodosEstado : undefined}
+                      type="button"
+                      variant={filtroEstado === valor ? 'default' : 'outline'}
+                      aria-pressed={filtroEstado === valor}
+                      className="flex-1 sm:flex-none"
+                      onClick={() => setFiltroEstado(valor)}
+                    >
+                      {filtroEstado === valor ? <Check aria-hidden="true" /> : null}
+                      {etiqueta}
+                    </Button>
+                  ))}
+                </div>
               </div>
             ) : null}
 
@@ -492,6 +540,26 @@ export function RoomsDirectoryPage() {
                 variant="outline"
                 className="w-full sm:w-auto"
                 onClick={volverATodos}
+              >
+                Ver todos los partidos
+              </Button>
+            }
+          />
+        ) : null}
+
+        {porEquipo.length > 0 && mostradas.length === 0 ? (
+          <DirectoryStatePanel
+            role="status"
+            icon={CalendarX}
+            title="No hay partidos para mostrar"
+            message={SIN_PARTIDOS[filtroEstado as Match['status']] ?? ''}
+            panelRef={panelFoco}
+            action={
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={volverATodosLosEstados}
               >
                 Ver todos los partidos
               </Button>
