@@ -169,7 +169,7 @@ Dos proyectos Vercel independientes, ambos conectados al mismo repositorio de Gi
 | Production | https://watchparty-api-ten.vercel.app |
 | Preview    | se genera una por cada pull request   |
 
-**Variables de entorno (Production y Preview)**: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `WEB_ORIGIN` — sin
+**Variables de entorno (Production y Preview)**: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `WEB_ORIGIN`, `REVIEWS_CURSOR_SECRET` (cifra el cursor de las opiniones) — sin
 valores reales documentados acá (se configuran directo en Vercel). `SUPABASE_SERVICE_ROLE_KEY` todavía no
 está configurada; cuando se agregue (ticket de persistencia), va exclusivamente en este proyecto — nunca
 en `apps/web`, y nunca con el prefijo `VITE_`.

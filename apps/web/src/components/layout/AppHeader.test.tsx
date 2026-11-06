@@ -199,6 +199,8 @@ describe('AppHeader — cerrar sesión', () => {
     await user.click(screen.getByRole('button', { name: 'Cerrar sesión' }));
 
     expect(signOut).toHaveBeenCalledTimes(1);
+    // Cierre explícito: el próximo login no vuelve a la ruta actual.
+    expect(signOut).toHaveBeenCalledWith({ explicit: true });
   });
 
   it('se deshabilita y comunica el estado mientras el cierre está pendiente', () => {
