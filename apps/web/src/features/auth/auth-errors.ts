@@ -9,9 +9,12 @@ const NETWORK_MESSAGE = 'No pudimos conectarnos. Revisá tu conexión e intentá
  * Nunca se devuelven objetos, stack traces ni detalles internos del proveedor.
  */
 export function toPresentableAuthError(error: AuthError, mode: AuthMode): string {
-  // Sin respuesta del servidor (red caída, timeout) o con un 5xx, la culpa no
-  // es de las credenciales: decir que lo son haría reintentar con otra clave.
-  if (error.name === 'AuthRetryableFetchError' || error.status === 0) {
+  // Ni la red caída ni un 5xx son culpa de las credenciales: decir que lo son
+  // haría reintentar con otra clave. El cliente lanza `AuthRetryableFetchError`
+  // en los dos casos, así que se distinguen por status: 0 es que no hubo
+  // respuesta; un 5xx es que el servidor respondió con error, y pedir que se
+  // revise la conexión sería otra pista falsa.
+  if (error.status === 0) {
     return NETWORK_MESSAGE;
   }
 
