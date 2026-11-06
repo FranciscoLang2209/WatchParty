@@ -28,16 +28,17 @@ function authError(code: string, message: string): AuthError {
   return { name: 'AuthApiError', message, code, status: 400 } as AuthError;
 }
 
-function renderAuth(path: '/login' | '/register') {
+function renderAuth(path: '/login' | '/register', state?: unknown) {
   const user = userEvent.setup();
 
   render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter initialEntries={[{ pathname: path, state }]}>
       <Routes>
         <Route path="/login" element={<AuthPage mode="login" />} />
         <Route path="/register" element={<AuthPage mode="register" />} />
         <Route path="/forgot-password" element={<h1>¿Olvidaste tu contraseña?</h1>} />
         <Route path="/" element={<h1>Inicio</h1>} />
+        <Route path="/rooms/:roomId" element={<h1>Sala</h1>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -158,6 +159,24 @@ describe('AuthPage en modo login', () => {
       email: 'persona@watchparty.test',
       password: 'contrasena-segura',
     });
+    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
+  });
+
+  it('vuelve a la ruta privada que se pidió antes del login', async () => {
+    const { user } = renderAuth('/login', {
+      from: { pathname: '/rooms/room-1', search: '?tab=chat', hash: '' },
+    });
+
+    await fillAndSubmit(user, 'login');
+
+    expect(await screen.findByRole('heading', { name: 'Sala' })).toBeInTheDocument();
+  });
+
+  it('ignora un origen que no es una ruta interna y navega a /', async () => {
+    const { user } = renderAuth('/login', { from: { pathname: '//evil.example/x' } });
+
+    await fillAndSubmit(user, 'login');
+
     expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
   });
 
