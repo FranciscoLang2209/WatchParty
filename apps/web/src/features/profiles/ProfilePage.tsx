@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -76,9 +76,20 @@ export function ProfilePage() {
   const [errorGuardado, setErrorGuardado] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
 
+  // La carga depende de la cuenta, no del token: Supabase lo renueva cada hora
+  // y recargar en ese momento pisaría lo que la persona está editando. La
+  // petición usa el token vigente al arrancar.
+  const accessTokenRef = useRef(accessToken);
+
   useEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
+
+  useEffect(() => {
+    const accessToken = accessTokenRef.current;
+
     // Sin token no hay nada que pedir: el guard de rutas privadas se encarga.
-    if (accessToken === null) return;
+    if (userId === null || accessToken === null) return;
 
     const controller = new AbortController();
     let vigente = true;
@@ -105,7 +116,7 @@ export function ProfilePage() {
       vigente = false;
       controller.abort();
     };
-  }, [accessToken, intento]);
+  }, [userId, intento]);
 
   const reintentar = useCallback(() => {
     setEstado({ status: 'loading' });

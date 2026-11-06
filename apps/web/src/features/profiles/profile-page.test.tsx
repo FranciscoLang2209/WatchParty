@@ -23,13 +23,16 @@ vi.mock('../../lib/env', () => ({
 
 const session = { access_token: TOKEN, user: { id: 'user-1', email: 'a@b.com' } } as Session;
 
+// La sesión vigente. Un caso puede reemplazarla para simular la renovación del token.
+let currentSession: Session = session;
+
 // La página consume la sesión por `useAuth`: acá se le da una ya resuelta para
 // no reimplementar el AuthProvider en cada caso.
 vi.mock('../../auth/useAuth', () => ({
   useAuth: () => ({
     status: 'authenticated',
-    session,
-    user: session.user,
+    session: currentSession,
+    user: currentSession.user,
     signOut: signOutMock,
     isSigningOut: false,
     isRecovering: false,
@@ -170,6 +173,7 @@ function guardado(): Record<string, unknown> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  currentSession = session;
   vi.stubGlobal('fetch', fetchMock);
   stubApi();
 });
@@ -336,6 +340,52 @@ describe('ProfilePage: formulario separado del resumen', () => {
     expect(favorito()).toHaveValue(BOCA);
     // El resumen sigue mostrando lo guardado, no el borrador que falló.
     expect(screen.getByRole('heading', { level: 2, name: 'Martina' })).toBeInTheDocument();
+  });
+});
+
+describe('ProfilePage: renovación del token', () => {
+  const perfilGets = () =>
+    fetchMock.mock.calls.filter(
+      ([url, init]) => String(url).endsWith('/me/profile') && (init?.method ?? 'GET') === 'GET',
+    );
+
+  it('conserva lo que se está editando y no vuelve a pedir el perfil', async () => {
+    const { user, view } = renderPage();
+    await screen.findByLabelText('Nombre visible');
+
+    await user.clear(nombre());
+    await user.type(nombre(), 'Martu');
+    await user.selectOptions(favorito(), BOCA);
+
+    currentSession = { ...session, access_token: 'token-renovado' } as Session;
+    view.rerender(
+      <MemoryRouter initialEntries={['/profile']}>
+        <ProfilePage />
+      </MemoryRouter>,
+    );
+
+    // Deja correr cualquier recarga que la renovación hubiera disparado.
+    await waitFor(() => expect(perfilGets()).toHaveLength(1));
+    expect(nombre()).toHaveValue('Martu');
+    expect(favorito()).toHaveValue(BOCA);
+  });
+
+  it('guarda con el token vigente', async () => {
+    const { user, view } = renderPage();
+    await screen.findByLabelText('Nombre visible');
+
+    currentSession = { ...session, access_token: 'token-renovado' } as Session;
+    view.rerender(
+      <MemoryRouter initialEntries={['/profile']}>
+        <ProfilePage />
+      </MemoryRouter>,
+    );
+
+    await user.click(guardar());
+
+    await screen.findByText('Guardamos tu perfil.');
+    const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
+    expect((put![1].headers as Record<string, string>).Authorization).toBe('Bearer token-renovado');
   });
 });
 
