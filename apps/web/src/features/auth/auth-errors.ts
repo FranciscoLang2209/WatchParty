@@ -2,12 +2,26 @@ import type { AuthError } from '@supabase/supabase-js';
 import type { AuthMode } from './auth-mode';
 
 const GENERIC_MESSAGE = 'No pudimos completar la operación. Intentá de nuevo en unos instantes.';
+const NETWORK_MESSAGE = 'No pudimos conectarnos. Revisá tu conexión e intentá de nuevo.';
 
 /**
  * Traduce un error de Supabase Auth a un mensaje presentable.
  * Nunca se devuelven objetos, stack traces ni detalles internos del proveedor.
  */
 export function toPresentableAuthError(error: AuthError, mode: AuthMode): string {
+  // Ni la red caída ni un 5xx son culpa de las credenciales: decir que lo son
+  // haría reintentar con otra clave. El cliente lanza `AuthRetryableFetchError`
+  // en los dos casos, así que se distinguen por status: 0 es que no hubo
+  // respuesta; un 5xx es que el servidor respondió con error, y pedir que se
+  // revise la conexión sería otra pista falsa.
+  if (error.status === 0) {
+    return NETWORK_MESSAGE;
+  }
+
+  if (typeof error.status === 'number' && error.status >= 500) {
+    return GENERIC_MESSAGE;
+  }
+
   switch (error.code) {
     case 'invalid_credentials':
       return 'El email o la contraseña no son correctos.';
