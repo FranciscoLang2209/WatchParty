@@ -56,6 +56,13 @@ const kickoffTimeFormatter = new Intl.DateTimeFormat(LOCALE, {
   hour12: false,
 });
 
+const kickoffDayFormatter = new Intl.DateTimeFormat(LOCALE, {
+  timeZone: TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
 function format(formatter: Intl.DateTimeFormat, kickoffAt: string): string {
   const date = new Date(kickoffAt);
 
@@ -74,4 +81,24 @@ export function formatKickoffDate(kickoffAt: string): string {
 
 export function formatKickoffTime(kickoffAt: string): string {
   return format(kickoffTimeFormatter, kickoffAt);
+}
+
+/**
+ * Día de calendario `YYYY-MM-DD` en que se juega el partido, en la misma zona en
+ * que se muestra su horario. Es lo que permite comparar contra un día elegido sin
+ * convertir ese día a un instante: un partido a las 23:30 en Buenos Aires ya es
+ * del día siguiente en UTC, y no por eso cambia de día para quien lo ve.
+ *
+ * Una fecha ilegible devuelve `null`: ese partido no pertenece a ningún día.
+ */
+export function kickoffDay(kickoffAt: string): string | null {
+  const date = new Date(kickoffAt);
+
+  if (Number.isNaN(date.getTime())) return null;
+
+  const parts = kickoffDayFormatter.formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value;
+
+  return `${part('year')}-${part('month')}-${part('day')}`;
 }
