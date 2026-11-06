@@ -8,10 +8,12 @@ interface RequireAuthProps {
 
 /**
  * Guard de rutas privadas: mientras la sesión se restaura no se renderiza el
- * contenido protegido, y sin sesión se redirige a `/login`.
+ * contenido protegido, y sin sesión se redirige a `/login`. La ruta pedida
+ * viaja en `state.from` para volver a ella después del login, salvo que la
+ * persona haya cerrado sesión a propósito.
  */
 export function RequireAuth({ children }: RequireAuthProps) {
-  const { status } = useAuth();
+  const { status, signedOutExplicitly } = useAuth();
   const location = useLocation();
 
   if (status === 'loading') {
@@ -23,7 +25,9 @@ export function RequireAuth({ children }: RequireAuthProps) {
   }
 
   if (status === 'unauthenticated') {
-    return <Navigate to="/login" replace state={{ from: location }} />;
+    return (
+      <Navigate to="/login" replace state={signedOutExplicitly ? undefined : { from: location }} />
+    );
   }
 
   return <>{children}</>;

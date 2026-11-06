@@ -9,6 +9,7 @@ const { authMock } = vi.hoisted(() => ({
     getSession: vi.fn(),
     onAuthStateChange: vi.fn(),
     signOut: vi.fn(),
+    signInWithPassword: vi.fn(),
   },
 }));
 
@@ -275,5 +276,60 @@ describe('AppRoutes', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' }),
     ).toBeInTheDocument();
+  });
+
+  describe('ruta a la que vuelve el login', () => {
+    let emit: (event: AuthChangeEvent, next: Session | null) => void = () => {};
+
+    beforeEach(() => {
+      authMock.onAuthStateChange.mockImplementation((callback) => {
+        emit = callback;
+        return { data: { subscription: { unsubscribe: vi.fn() } } };
+      });
+      authMock.getSession.mockResolvedValue({ data: { session }, error: null });
+      // Como el cliente real: avisa `SIGNED_OUT` antes de resolver.
+      authMock.signOut.mockImplementation(async () => {
+        emit('SIGNED_OUT', null);
+        return { error: null };
+      });
+      authMock.signInWithPassword.mockImplementation(async () => {
+        emit('SIGNED_IN', session);
+        return { data: { user: session.user, session }, error: null };
+      });
+    });
+
+    async function logIn(user: ReturnType<typeof userEvent.setup>) {
+      expect(
+        await screen.findByRole('heading', { name: 'Entrá a la tribuna' }),
+      ).toBeInTheDocument();
+      await user.type(screen.getByLabelText('Correo electrónico'), 'otra@watchparty.test');
+      await user.type(screen.getByLabelText('Contraseña'), 'contrasena-segura');
+      await user.click(screen.getByRole('button', { name: 'Ingresar' }));
+    }
+
+    it('después de cerrar sesión desde el header, el próximo login va a Inicio', async () => {
+      const user = userEvent.setup();
+      renderAt('/search?q=boca#resultados');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Buscar' })).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Cerrar sesión' }));
+      await logIn(user);
+
+      expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { level: 1, name: 'Buscar' })).not.toBeInTheDocument();
+    });
+
+    it('si la sesión se pierde sin cerrarla, el login vuelve a la ruta en la que estaba', async () => {
+      const user = userEvent.setup();
+      renderAt('/search');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Buscar' })).toBeInTheDocument();
+
+      act(() => {
+        emit('SIGNED_OUT', null);
+      });
+      await logIn(user);
+
+      expect(await screen.findByRole('heading', { level: 1, name: 'Buscar' })).toBeInTheDocument();
+    });
   });
 });

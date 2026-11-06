@@ -26,8 +26,9 @@ export function AppHeader({ hasUnreadNotifications = false }: AppHeaderProps) {
     setSignOutError(null);
 
     // Único flujo de logout de la aplicación: el guard de rutas privadas se
-    // encarga de la redirección cuando la sesión pasa a ser nula.
-    const { error } = await signOut();
+    // encarga de la redirección cuando la sesión pasa a ser nula. Es un cierre
+    // explícito, así que el próximo login no vuelve a esta ruta.
+    const { error } = await signOut({ explicit: true });
 
     if (error) setSignOutError(error);
   }
