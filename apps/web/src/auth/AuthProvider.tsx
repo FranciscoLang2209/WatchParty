@@ -67,8 +67,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     try {
       const { error } = await supabase.auth.signOut();
 
+      // Aunque falle el `POST /logout`, el cliente ya borró la sesión local y
+      // emitió `SIGNED_OUT`: la marca se mantiene y se apaga al volver a entrar.
       if (error) {
-        setSignedOutExplicitly(false);
         return { error: 'No pudimos cerrar la sesión. Intentá de nuevo.' };
       }
 

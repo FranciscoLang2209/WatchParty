@@ -319,6 +319,26 @@ describe('AppRoutes', () => {
       expect(screen.queryByRole('heading', { level: 1, name: 'Buscar' })).not.toBeInTheDocument();
     });
 
+    it('si falla el pedido de logout, el próximo login también va a Inicio', async () => {
+      // Como el cliente real: espera la respuesta del `POST /logout` y, aunque
+      // falle, borra la sesión local y avisa `SIGNED_OUT` antes de devolver el
+      // error.
+      authMock.signOut.mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        emit('SIGNED_OUT', null);
+        return { error: { name: 'AuthApiError', message: 'Internal error', status: 500 } };
+      });
+      const user = userEvent.setup();
+      renderAt('/search');
+      expect(await screen.findByRole('heading', { level: 1, name: 'Buscar' })).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Cerrar sesión' }));
+      await logIn(user);
+
+      expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { level: 1, name: 'Buscar' })).not.toBeInTheDocument();
+    });
+
     it('si la sesión se pierde sin cerrarla, el login vuelve a la ruta en la que estaba', async () => {
       const user = userEvent.setup();
       renderAt('/search');
