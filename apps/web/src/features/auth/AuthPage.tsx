@@ -1,9 +1,10 @@
+import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { setRememberSession } from '../../lib/session-storage';
 import { AuthForm, type AuthCredentials } from './AuthForm';
 import { AuthShell } from './AuthShell';
-import { AUTH_COPY, type AuthMode } from './auth-mode';
+import { AUTH_COPY, PENDING_CONFIRMATION_MESSAGE, type AuthMode } from './auth-mode';
 import { MISSING_SESSION_MESSAGE, toPresentableAuthError } from './auth-errors';
 
 interface AuthPageProps {
@@ -30,10 +31,20 @@ function redirectTarget(state: unknown): string {
   return `${pathname}${search}${hash}`;
 }
 
+/**
+ * `/login` y `/register` montan `AuthPage` en la misma posición del árbol, así
+ * que React conservaría su estado al cambiar de ruta: un alta pendiente dejaría
+ * el login sin formulario. La `key` por modo descarta ese estado en cada cambio.
+ */
 export function AuthPage({ mode }: AuthPageProps) {
+  return <AuthPageContent key={mode} mode={mode} />;
+}
+
+function AuthPageContent({ mode }: AuthPageProps) {
   const copy = AUTH_COPY[mode];
   const navigate = useNavigate();
   const location = useLocation();
+  const [pendingConfirmation, setPendingConfirmation] = useState(false);
 
   async function handleSubmit({ email, password, username, remember }: AuthCredentials) {
     // La preferencia se guarda antes de pedir la sesión: define en qué store la
@@ -51,6 +62,14 @@ export function AuthPage({ mode }: AuthPageProps) {
 
     if (error) {
       throw new Error(toPresentableAuthError(error, mode));
+    }
+
+    // Usuario sin sesión en el registro: el alta existe y espera la
+    // confirmación por correo. Se reemplaza el formulario para que no se
+    // reenvíe por error y vuelva a gastar el cupo de correos.
+    if (!data.session && mode === 'register' && data.user) {
+      setPendingConfirmation(true);
+      return;
     }
 
     if (!data.session) {
@@ -77,7 +96,15 @@ export function AuthPage({ mode }: AuthPageProps) {
         </>
       }
     >
-      <AuthForm mode={mode} onSubmit={handleSubmit} />
+      {pendingConfirmation ? (
+        <div role="status" aria-live="polite" className="w-full">
+          <p className="rounded-sm border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-foreground">
+            {PENDING_CONFIRMATION_MESSAGE}
+          </p>
+        </div>
+      ) : (
+        <AuthForm mode={mode} onSubmit={handleSubmit} />
+      )}
     </AuthShell>
   );
 }

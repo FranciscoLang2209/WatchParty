@@ -33,9 +33,15 @@ export function toPresentableAuthError(error: AuthError, mode: AuthMode): string
       return 'Ya existe una cuenta con ese email. Probá iniciar sesión.';
     case 'weak_password':
       return 'La contraseña es demasiado débil. Usá al menos 6 caracteres.';
+    // Los dos límites responden 429, pero piden cosas distintas: el primero es
+    // de la persona (frenar), el segundo es del envío de correos y reintentar
+    // no lo destraba. Ninguno promete un plazo: el proveedor no lo informa.
     case 'over_request_rate_limit':
+      return 'Hiciste demasiados intentos seguidos. Esperá un rato antes de volver a intentar.';
     case 'over_email_send_rate_limit':
-      return 'Demasiados intentos. Esperá unos minutos y volvé a intentar.';
+      return 'Por ahora no podemos enviar correos de confirmación. Probá más tarde.';
+    case 'email_not_confirmed':
+      return 'Tu cuenta todavía no está confirmada. Revisá tu correo para confirmarla.';
     case 'signup_disabled':
       return 'El registro no está disponible en este momento.';
     default:
