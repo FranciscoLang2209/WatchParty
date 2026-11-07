@@ -60,6 +60,12 @@ export const MIN_PASSWORD_LENGTH = 8;
 
 export const PASSWORD_MISMATCH_MESSAGE = 'Las contraseñas no coinciden.';
 
+/**
+ * Alta creada pero sin sesión: con la confirmación por correo activa, Supabase
+ * espera que la persona abra el enlace. Es un estado informativo, no un fallo.
+ */
+export const PENDING_CONFIRMATION_MESSAGE = 'Revisá tu correo para confirmar tu cuenta.';
+
 /** Controles que sólo existen en el login. */
 export const LOGIN_EXTRAS = {
   rememberLabel: 'Recordarme',

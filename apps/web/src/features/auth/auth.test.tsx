@@ -24,8 +24,8 @@ const SUBMIT_LABEL: Record<AuthMode, string> = {
   register: 'Crear cuenta',
 };
 
-function authError(code: string, message: string): AuthError {
-  return { name: 'AuthApiError', message, code, status: 400 } as AuthError;
+function authError(code: string, message: string, status = 400): AuthError {
+  return { name: 'AuthApiError', message, code, status } as AuthError;
 }
 
 function renderAuth(path: '/login' | '/register', state?: unknown) {
@@ -365,9 +365,90 @@ describe('AuthPage en modo registro', () => {
     expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
   });
 
-  it('no navega y muestra un error si el registro es exitoso pero no devuelve sesión', async () => {
+  it('si el alta queda pendiente de confirmación lo informa sin presentarlo como fallo', async () => {
     authMock.signUp.mockResolvedValue({
       data: { user: session.user, session: null },
+      error: null,
+    });
+
+    const { user } = renderAuth('/register');
+    await fillAndSubmit(user, 'register');
+
+    const status = await screen.findByRole('status');
+
+    expect(status).toHaveTextContent('Revisá tu correo para confirmar tu cuenta');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(/no pudimos/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/intent(á|a) de nuevo/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Inicio' })).not.toBeInTheDocument();
+  });
+
+  it('con el alta pendiente no ofrece reenviar el formulario', async () => {
+    authMock.signUp.mockResolvedValue({
+      data: { user: session.user, session: null },
+      error: null,
+    });
+
+    const { user } = renderAuth('/register');
+    await fillAndSubmit(user, 'register');
+    await screen.findByRole('status');
+
+    expect(screen.queryByRole('button', { name: 'Crear cuenta' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Contraseña')).not.toBeInTheDocument();
+    expect(authMock.signUp).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('link', { name: 'Ingresar' })).toHaveAttribute('href', '/login');
+  });
+
+  it('con el alta pendiente, «Ingresar» lleva a un login con formulario', async () => {
+    authMock.signUp.mockResolvedValue({
+      data: { user: session.user, session: null },
+      error: null,
+    });
+
+    const { user } = renderAuth('/register');
+    await fillAndSubmit(user, 'register');
+    await screen.findByRole('status');
+
+    await user.click(screen.getByRole('link', { name: 'Ingresar' }));
+
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
+    expect(
+      screen.queryByText('Revisá tu correo para confirmar tu cuenta.'),
+    ).not.toBeInTheDocument();
+    expect(fields().email).toBeEnabled();
+    expect(fields().password).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Ingresar' })).toBeEnabled();
+
+    await fillAndSubmit(user, 'login');
+
+    expect(authMock.signInWithPassword).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
+  });
+
+  it('al volver al registro después del login, el formulario de registro está disponible', async () => {
+    authMock.signUp.mockResolvedValue({
+      data: { user: session.user, session: null },
+      error: null,
+    });
+
+    const { user } = renderAuth('/register');
+    await fillAndSubmit(user, 'register');
+    await screen.findByRole('status');
+
+    await user.click(screen.getByRole('link', { name: 'Ingresar' }));
+    await screen.findByRole('heading', { name: 'Entrá a la tribuna' });
+    await user.click(screen.getByRole('link', { name: 'Crear cuenta' }));
+
+    expect(await screen.findByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Crear cuenta' })).toBeEnabled();
+    expect(
+      screen.queryByText('Revisá tu correo para confirmar tu cuenta.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('muestra un error recuperable si el registro no devuelve usuario ni sesión', async () => {
+    authMock.signUp.mockResolvedValue({
+      data: { user: null, session: null },
       error: null,
     });
 
@@ -378,7 +459,6 @@ describe('AuthPage en modo registro', () => {
       'Creamos tu cuenta pero no pudimos iniciar la sesión automáticamente.',
     );
     expect(screen.queryByRole('heading', { name: 'Inicio' })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
   });
 
   it('no expone detalles internos de un error de Supabase', async () => {
@@ -394,6 +474,71 @@ describe('AuthPage en modo registro', () => {
 
     expect(alert).toHaveTextContent('Ya existe una cuenta con ese email.');
     expect(alert).not.toHaveTextContent('/auth/v1/signup');
+  });
+});
+
+describe('Límites del proveedor y cuentas sin confirmar', () => {
+  const RATE_LIMITS = [
+    ['over_request_rate_limit', /demasiados intentos seguidos/i],
+    ['over_email_send_rate_limit', /no podemos enviar correos/i],
+  ] as const;
+
+  it.each(RATE_LIMITS)('en el registro, %s tiene un mensaje propio', async (code, expected) => {
+    authMock.signUp.mockResolvedValue({
+      data: { user: null, session: null },
+      error: authError(code, `internal ${code}`, 429),
+    });
+
+    const { user } = renderAuth('/register');
+    await fillAndSubmit(user, 'register');
+
+    const alert = await screen.findByRole('alert');
+
+    expect(alert).toHaveTextContent(expected);
+    expect(alert).not.toHaveTextContent(code);
+    // No se conoce cuánto dura el bloqueo: el mensaje no promete un plazo.
+    expect(alert).not.toHaveTextContent(/\d|\b(minutos?|segundos?|horas?)\b/i);
+  });
+
+  it('los dos límites no comparten el mismo mensaje', async () => {
+    const { toPresentableAuthError } = await import('./auth-errors');
+    const messages = RATE_LIMITS.map(([code]) =>
+      toPresentableAuthError(authError(code, code, 429), 'register'),
+    );
+
+    expect(new Set(messages).size).toBe(2);
+  });
+
+  it('el límite de solicitudes también se informa en el login', async () => {
+    authMock.signInWithPassword.mockResolvedValue({
+      data: { user: null, session: null },
+      error: authError('over_request_rate_limit', 'rate limit', 429),
+    });
+
+    const { user } = renderAuth('/login');
+    await fillAndSubmit(user, 'login');
+
+    const alert = await screen.findByRole('alert');
+
+    expect(alert).toHaveTextContent(/demasiados intentos seguidos/i);
+    expect(alert).not.toHaveTextContent('El email o la contraseña no son correctos.');
+  });
+
+  it('un login con la cuenta sin confirmar pide revisar el correo', async () => {
+    authMock.signInWithPassword.mockResolvedValue({
+      data: { user: null, session: null },
+      error: authError('email_not_confirmed', 'Email not confirmed'),
+    });
+
+    const { user } = renderAuth('/login');
+    await fillAndSubmit(user, 'login');
+
+    const alert = await screen.findByRole('alert');
+
+    expect(alert).toHaveTextContent('Tu cuenta todavía no está confirmada.');
+    expect(alert).toHaveTextContent(/revisá tu correo/i);
+    expect(alert).not.toHaveTextContent('Email not confirmed');
+    expect(alert).not.toHaveTextContent('El email o la contraseña no son correctos.');
   });
 });
 
