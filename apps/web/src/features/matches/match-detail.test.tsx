@@ -56,6 +56,11 @@ function esResumen(url: RequestInfo | URL): boolean {
   return String(url).endsWith('/rating-summary');
 }
 
+/** El listado público de opiniones (WAT-259) también corre aparte del detalle. */
+function esListado(url: RequestInfo | URL): boolean {
+  return String(url).split('?')[0]!.endsWith('/reviews');
+}
+
 /**
  * Cada llamada devuelve una `Response` nueva: el cuerpo se consume una sola vez.
  * La lectura de «visto» confirma que no hay marca y el resumen que no hay votos,
@@ -68,7 +73,9 @@ function responderCon(body: unknown, status = 200) {
         ? jsonResponse({ watched: false })
         : esResumen(url)
           ? jsonResponse({ average: null, count: 0 })
-          : jsonResponse(body, status),
+          : esListado(url)
+            ? jsonResponse({ reviews: [], nextCursor: null })
+            : jsonResponse(body, status),
     ),
   );
 }
@@ -94,7 +101,7 @@ async function detalle() {
 /** Pedidos del detalle y la sala, sin las lecturas de «visto» ni del resumen. */
 function llamadasSinVisto(): [string, RequestInit][] {
   return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
-    ([url]) => !esVisto(url) && !esResumen(url),
+    ([url]) => !esVisto(url) && !esResumen(url) && !esListado(url),
   );
 }
 
@@ -1048,6 +1055,7 @@ describe('Calificación del partido (WAT-213)', () => {
   const URL_NOTA = `${URL_PARTIDO}/rating`;
   const URL_RESUMEN = `${URL_PARTIDO}/rating-summary`;
   const URL_RESENA = `${URL_PARTIDO}/review`;
+  const URL_LISTADO = `${URL_PARTIDO}/reviews`;
 
   interface OpcionesServidor {
     status?: string;
@@ -1063,6 +1071,10 @@ describe('Calificación del partido (WAT-213)', () => {
     guardadoNota?: (rating: number, init?: RequestInit) => Promise<Response>;
     /** Texto de la reseña propia ya publicada (WAT-258); sin él, todavía no reseñó. */
     resena?: string | null;
+    /** Opiniones de OTRAS personas en el listado público (WAT-259); la propia se suma sola. */
+    opiniones?: { authorName: string; body: string; createdAt: string }[];
+    /** Reemplaza el listado público (por ejemplo, para dejarlo pendiente o fallar). */
+    lecturaListado?: (pedido: number, init?: RequestInit) => Promise<Response>;
   }
 
   /**
@@ -1080,10 +1092,13 @@ describe('Calificación del partido (WAT-213)', () => {
     lecturaResumen,
     guardadoNota,
     resena: resenaInicial = null,
+    opiniones = [],
+    lecturaListado,
   }: OpcionesServidor = {}) {
     let visto = vistoInicial;
     let nota = notaInicial;
     let lecturasResumen = 0;
+    let lecturasListado = 0;
     let resena: string | null = resenaInicial;
     const fechaResena = '2026-11-01T10:00:00.000Z';
     const cuerpoResena = () =>
@@ -1132,6 +1147,25 @@ describe('Calificación del partido (WAT-213)', () => {
           jsonResponse({
             average: votos.length === 0 ? null : Math.round(promedio * 100) / 100,
             count: votos.length,
+          }),
+        );
+      }
+
+      // El listado público (WAT-259): la reseña propia ya publicada va primera,
+      // como la más reciente, y las de otras personas detrás.
+      if (destino.split('?')[0] === URL_LISTADO) {
+        lecturasListado += 1;
+        if (lecturaListado) return lecturaListado(lecturasListado, init);
+
+        return Promise.resolve(
+          jsonResponse({
+            reviews: [
+              ...(resena === null
+                ? []
+                : [{ authorName: 'Ignacio', body: resena, createdAt: fechaResena }]),
+              ...opiniones,
+            ],
+            nextCursor: null,
           }),
         );
       }
@@ -1964,6 +1998,157 @@ describe('Calificación del partido (WAT-213)', () => {
       expect(JSON.parse(String(init.body))).toEqual({ body: 'Gran partido' });
     });
 
+    describe('listado público de opiniones (WAT-259)', () => {
+      const OTRA = { authorName: 'Martina', body: 'Qué final', createdAt: '2026-10-31T10:00:00Z' };
+
+      function pedidosListado(): [string, RequestInit][] {
+        return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
+          ([url]) => String(url).split('?')[0] === URL_LISTADO,
+        );
+      }
+
+      it('finalizado: pide el listado del partido con GET y bearer y muestra las opiniones', async () => {
+        servidor({ nota: 4, opiniones: [OTRA] });
+
+        const m = await abrirDetalle();
+
+        const region = await m.findByRole('region', { name: 'Opiniones del partido' });
+        expect(await within(region).findByText('Qué final')).toBeInTheDocument();
+        expect(within(region).getByText('Martina')).toBeInTheDocument();
+        const [url, init] = pedidosListado()[0]!;
+        expect(url).toBe(URL_LISTADO);
+        expect(init.method).toBe('GET');
+        expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-123');
+      });
+
+      it('sin ninguna opinión informa el vacío', async () => {
+        servidor({ nota: 4 });
+
+        const m = await abrirDetalle();
+
+        expect(await m.findByText('Todavía no hay opiniones para este partido.')).toBeVisible();
+      });
+
+      it.each(['scheduled', 'live'])(
+        'con el partido «%s» no se pide ni se muestra',
+        async (status) => {
+          servidor({ status });
+
+          const m = await abrirDetalle();
+          await m.findByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' });
+
+          expect(
+            m.queryByRole('region', { name: 'Opiniones del partido' }),
+          ).not.toBeInTheDocument();
+          expect(pedidosListado()).toHaveLength(0);
+        },
+      );
+
+      it('un fallo del listado no tapa el resto del detalle y permite reintentar', async () => {
+        servidor({
+          nota: 4,
+          lecturaListado: (pedido) =>
+            Promise.resolve(
+              pedido === 1
+                ? jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500)
+                : jsonResponse({ reviews: [OTRA], nextCursor: null }),
+            ),
+        });
+        const user = userEvent.setup();
+
+        const m = await abrirDetalle();
+        const region = await m.findByRole('region', { name: 'Opiniones del partido' });
+
+        expect(await within(region).findByRole('alert')).toHaveTextContent(
+          'No pudimos cargar las opiniones. Intentá de nuevo.',
+        );
+        expect(await campoResena(m)).toBeInTheDocument();
+
+        await user.click(within(region).getByRole('button', { name: 'Reintentar' }));
+        expect(await within(region).findByText('Qué final')).toBeInTheDocument();
+      });
+
+      it('al publicar la reseña propia el listado se vuelve a pedir y la muestra una sola vez', async () => {
+        servidor({ nota: 4, opiniones: [OTRA] });
+        const user = userEvent.setup();
+
+        const m = await abrirDetalle();
+        const region = await m.findByRole('region', { name: 'Opiniones del partido' });
+        await within(region).findByText('Qué final');
+        expect(within(region).queryByText('Gran partido')).not.toBeInTheDocument();
+        const antes = pedidosListado().length;
+
+        await user.type(await campoResena(m), 'Gran partido');
+        await user.click(m.getByRole('button', { name: 'Publicar reseña' }));
+        await m.findByText('Reseña publicada.');
+
+        expect(await within(region).findByText('Gran partido')).toBeInTheDocument();
+        expect(pedidosListado()).toHaveLength(antes + 1);
+        expect(within(region).getAllByText('Gran partido')).toHaveLength(1);
+        expect(within(region).getAllByText('Qué final')).toHaveLength(1);
+        expect(within(region).getAllByRole('listitem')).toHaveLength(2);
+      });
+
+      it('al editar la reseña el listado muestra el texto nuevo y no el viejo', async () => {
+        servidor({ nota: 4, resena: 'Gran partido', opiniones: [OTRA] });
+        const user = userEvent.setup();
+
+        const m = await abrirDetalle();
+        const region = await m.findByRole('region', { name: 'Opiniones del partido' });
+        await within(region).findByText('Gran partido');
+
+        const campo = await campoResena(m);
+        await user.clear(campo);
+        await user.type(campo, 'Mejor de lo que pensaba');
+        await user.click(m.getByRole('button', { name: 'Guardar cambios' }));
+
+        expect(await within(region).findByText('Mejor de lo que pensaba')).toBeInTheDocument();
+        expect(within(region).queryByText('Gran partido')).not.toBeInTheDocument();
+        expect(within(region).getAllByRole('listitem')).toHaveLength(2);
+      });
+
+      it('al eliminar la reseña desaparece del listado y quedan las demás', async () => {
+        servidor({ nota: 4, resena: 'Gran partido', opiniones: [OTRA] });
+        const user = userEvent.setup();
+
+        const m = await abrirDetalle();
+        const region = await m.findByRole('region', { name: 'Opiniones del partido' });
+        await within(region).findByText('Gran partido');
+
+        await user.click(await m.findByRole('button', { name: 'Eliminar reseña' }));
+        await m.findByText('Reseña eliminada.');
+
+        await waitFor(() =>
+          expect(within(region).queryByText('Gran partido')).not.toBeInTheDocument(),
+        );
+        expect(within(region).getByText('Qué final')).toBeInTheDocument();
+      });
+
+      it('un guardado que falla no vuelve a pedir el listado', async () => {
+        servidor({ nota: 4, opiniones: [OTRA] });
+        const user = userEvent.setup();
+
+        const m = await abrirDetalle();
+        const region = await m.findByRole('region', { name: 'Opiniones del partido' });
+        await within(region).findByText('Qué final');
+        const antes = pedidosListado().length;
+        // Sólo falla el guardado de la reseña: el resto del servidor sigue igual.
+        const base = fetchSpy.getMockImplementation()!;
+        fetchSpy.mockImplementation((url: RequestInfo | URL, init?: RequestInit) =>
+          String(url) === URL_RESENA && init?.method === 'PUT'
+            ? Promise.reject(new TypeError('sin red'))
+            : base(url, init),
+        );
+
+        await user.type(await campoResena(m), 'Gran partido');
+        await user.click(m.getByRole('button', { name: 'Publicar reseña' }));
+        await m.findByRole('alert');
+
+        expect(pedidosListado()).toHaveLength(antes);
+        expect(within(region).queryByText('Gran partido')).not.toBeInTheDocument();
+      });
+    });
+
     describe('nota y resumen intactos', () => {
       /** Abre con nota 4 y otra persona con 2, y devuelve lo necesario para comparar. */
       async function abrirConNota() {
@@ -2084,13 +2269,15 @@ describe('Calificación del partido (WAT-213)', () => {
       ).toBeInTheDocument();
       expect(m.queryByRole('textbox')).not.toBeInTheDocument();
       expect(m.queryByRole('button', { name: 'Guardar cambios' })).not.toBeInTheDocument();
-      expect(m.getByText('Gran partido')).toBeInTheDocument();
+      // La reseña propia se ve en su bloque y también en el listado público (WAT-259).
+      expect(m.getAllByText('Gran partido')).toHaveLength(2);
 
       await user.click(m.getByRole('button', { name: 'Eliminar reseña' }));
 
       expect(await m.findByText('Reseña eliminada.')).toBeInTheDocument();
       expect(mutacionesResena().at(-1)![1].method).toBe('DELETE');
-      expect(m.queryByText('Gran partido')).not.toBeInTheDocument();
+      // El listado se vuelve a pedir con la señal del borrado: el texto desaparece de ambos.
+      await waitFor(() => expect(m.queryByText('Gran partido')).not.toBeInTheDocument());
     });
 
     it('volver a marcar «visto» recupera el borrador sin volver a leer la reseña', async () => {
