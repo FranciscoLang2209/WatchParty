@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { env } from '../../../config/env.js';
+import { retryOnClockSkew } from './retry-on-clock-skew.js';
 
 /**
  * Cliente Supabase para persistir datos deportivos (`teams`, `matches`,
@@ -17,6 +18,10 @@ import { env } from '../../../config/env.js';
  *
  * No persiste sesión ni intenta refrescar tokens: no representa a ningún
  * usuario, es una credencial de servicio.
+ *
+ * Los pedidos reintentan una vez ante `PGRST303` (diferencia de reloj entre
+ * servidores de Supabase, ver `retry-on-clock-skew.ts`): sin eso, la primera
+ * carga del catálogo fallaba a veces con un 500 (WAT-283).
  */
 export function createSupabaseSportsDataClient(): SupabaseClient {
   return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -24,5 +29,6 @@ export function createSupabaseSportsDataClient(): SupabaseClient {
       persistSession: false,
       autoRefreshToken: false,
     },
+    global: { fetch: retryOnClockSkew() },
   });
 }
