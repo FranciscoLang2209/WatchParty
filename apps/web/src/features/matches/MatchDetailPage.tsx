@@ -7,6 +7,7 @@ import { enterRoom } from '@/features/rooms/api';
 import { RoomsApiError, isCancelled as isRoomCancelled } from '@/features/rooms/types';
 import { MatchRating } from '@/features/ratings/MatchRating';
 import { MatchRatingSummary } from '@/features/ratings/MatchRatingSummary';
+import { MatchReviewForm } from '@/features/reviews/MatchReviewForm';
 import { getWatched, setWatched } from '@/features/watched/api';
 import { WatchedApiError, isCancelled as isWatchedCancelled } from '@/features/watched/types';
 import { formatKickoff, matchStatusLabel } from './format';
@@ -296,6 +297,54 @@ function Calificacion({
   );
 }
 
+interface ResenaProps {
+  match: Match;
+  /** `partido:usuario` actual: con él se descarta un «visto» de otro usuario. */
+  clave: string;
+  vistoConfirmado: VistoConfirmado | null;
+  accessToken: string | null;
+  onSessionExpired: () => void;
+  /** Cuenta las notas propias confirmadas: la reseña exige haber calificado. */
+  notasGuardadas: number;
+  /** Se avisa cuando la persona publica, edita o elimina su reseña y el servidor lo confirma. */
+  onCambio: () => void;
+}
+
+/**
+ * Reseña propia del partido (WAT-258). Igual que la calificación, sólo existe
+ * con el partido finalizado y según el «visto» que confirmó el servidor para
+ * esta persona: mientras se desconoce (carga, error), o si lo leyó otro
+ * usuario, no se muestra nada.
+ *
+ * A diferencia de la calificación, el formulario NO se desmonta al deshacer
+ * «visto»: sigue montado para conservar el borrador y para que una reseña ya
+ * publicada se pueda eliminar. Qué ofrece en cada caso lo decide él mismo.
+ */
+function Resena({
+  match,
+  clave,
+  vistoConfirmado,
+  accessToken,
+  onSessionExpired,
+  notasGuardadas,
+  onCambio,
+}: ResenaProps) {
+  if (match.status !== 'finished') return null;
+  if (vistoConfirmado === null || vistoConfirmado.clave !== clave) return null;
+
+  return (
+    <MatchReviewForm
+      key={clave}
+      matchId={match.id}
+      visto={vistoConfirmado.visto}
+      accessToken={accessToken}
+      onSessionExpired={onSessionExpired}
+      ratingRefreshKey={notasGuardadas}
+      onChanged={onCambio}
+    />
+  );
+}
+
 /**
  * Detalle mínimo de un partido.
  *
@@ -329,6 +378,10 @@ function DetallePartido({ matchId }: { matchId: string }) {
   // Cuenta los guardados de la nota propia que confirmó el servidor: cada uno
   // hace que el resumen del partido se vuelva a pedir (WAT-215).
   const [notasGuardadas, setNotasGuardadas] = useState(0);
+  // Señal local de reseñas (WAT-258): cuenta las publicaciones, ediciones y
+  // borrados de la reseña propia que confirmó el servidor. El listado de
+  // opiniones del partido la tomará como `refreshKey`; por ahora sólo se emite.
+  const [, setResenasConfirmadas] = useState(0);
   const salaController = useRef<AbortController | null>(null);
 
   // Al desmontar (salir o cambiar de partido) se cancela el pedido de la sala.
@@ -470,6 +523,16 @@ function DetallePartido({ matchId }: { matchId: string }) {
               accessToken={accessToken}
               onSessionExpired={() => void signOut()}
               onGuardada={() => setNotasGuardadas((valor) => valor + 1)}
+            />
+
+            <Resena
+              match={estado.match}
+              clave={`${estado.match.id}:${userId}`}
+              vistoConfirmado={vistoConfirmado}
+              accessToken={accessToken}
+              onSessionExpired={() => void signOut()}
+              notasGuardadas={notasGuardadas}
+              onCambio={() => setResenasConfirmadas((valor) => valor + 1)}
             />
           </>
         ) : null}

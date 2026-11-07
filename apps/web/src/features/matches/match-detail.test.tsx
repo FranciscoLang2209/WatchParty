@@ -1047,6 +1047,7 @@ describe('Calificación del partido (WAT-213)', () => {
   const URL_VISTO = `${URL_PARTIDO}/watched`;
   const URL_NOTA = `${URL_PARTIDO}/rating`;
   const URL_RESUMEN = `${URL_PARTIDO}/rating-summary`;
+  const URL_RESENA = `${URL_PARTIDO}/review`;
 
   interface OpcionesServidor {
     status?: string;
@@ -1060,6 +1061,8 @@ describe('Calificación del partido (WAT-213)', () => {
     /** Recibe el número de pedido (1, 2…) para poder fallar sólo el segundo. */
     lecturaResumen?: (pedido: number, init?: RequestInit) => Promise<Response>;
     guardadoNota?: (rating: number, init?: RequestInit) => Promise<Response>;
+    /** Texto de la reseña propia ya publicada (WAT-258); sin él, todavía no reseñó. */
+    resena?: string | null;
   }
 
   /**
@@ -1076,10 +1079,18 @@ describe('Calificación del partido (WAT-213)', () => {
     lecturaNota,
     lecturaResumen,
     guardadoNota,
+    resena: resenaInicial = null,
   }: OpcionesServidor = {}) {
     let visto = vistoInicial;
     let nota = notaInicial;
     let lecturasResumen = 0;
+    let resena: string | null = resenaInicial;
+    const fechaResena = '2026-11-01T10:00:00.000Z';
+    const cuerpoResena = () =>
+      jsonResponse({
+        review:
+          resena === null ? null : { body: resena, createdAt: fechaResena, updatedAt: fechaResena },
+      });
 
     fetchSpy.mockImplementation((url: RequestInfo | URL, init?: RequestInit) => {
       const destino = String(url);
@@ -1123,6 +1134,20 @@ describe('Calificación del partido (WAT-213)', () => {
             count: votos.length,
           }),
         );
+      }
+
+      // La reseña propia (WAT-258), con la misma persistencia y reglas que la API.
+      if (destino === URL_RESENA) {
+        if (metodo === 'GET') return Promise.resolve(cuerpoResena());
+        if (metodo === 'DELETE') {
+          resena = null;
+          return Promise.resolve(cuerpoResena());
+        }
+        if (nota === null || !visto) {
+          return Promise.resolve(jsonResponse({ error: { code: 'CONFLICT', message: 'x' } }, 409));
+        }
+        resena = (JSON.parse(String(init?.body)) as { body: string }).body;
+        return Promise.resolve(cuerpoResena());
       }
 
       return Promise.resolve(jsonResponse({ error: { code: 'NOT_FOUND', message: 'x' } }, 404));
@@ -1248,14 +1273,13 @@ describe('Calificación del partido (WAT-213)', () => {
       ).toBeInTheDocument();
     });
 
-    it('no agrega reseñas ni calificaciones de jugadores', async () => {
+    it('no agrega calificaciones de jugadores', async () => {
       servidor({ nota: null });
 
       const m = await abrirDetalle();
       await m.findByText('Todavía no calificaste este partido.');
 
-      expect(m.queryByRole('textbox')).not.toBeInTheDocument();
-      expect(m.queryByText(/reseña|jugador/i)).not.toBeInTheDocument();
+      expect(m.queryByText(/jugador/i)).not.toBeInTheDocument();
       expect(m.getAllByRole('button', { name: /de 5$/ })).toHaveLength(5);
     });
   });
@@ -1826,6 +1850,302 @@ describe('Calificación del partido (WAT-213)', () => {
       for (const boton of within(grupo).getAllByRole('button')) {
         expect(boton).toHaveClass('size-11');
       }
+    });
+  });
+
+  describe('reseña propia (WAT-258)', () => {
+    function pedidosResena(): [string, RequestInit][] {
+      return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
+        ([url]) => String(url) === URL_RESENA,
+      );
+    }
+
+    function mutacionesResena(): [string, RequestInit][] {
+      return pedidosResena().filter(([, init]) => init.method !== 'GET');
+    }
+
+    const campoResena = (m: Awaited<ReturnType<typeof abrirDetalle>>) =>
+      m.findByRole('textbox', { name: 'Tu reseña' });
+
+    it('finalizado, visto y calificado: lee la reseña con GET y bearer y ofrece publicar', async () => {
+      servidor({ nota: 4 });
+
+      const m = await abrirDetalle();
+
+      expect(await campoResena(m)).toHaveValue('');
+      expect(m.getByRole('button', { name: 'Publicar reseña' })).toBeInTheDocument();
+      const [url, init] = pedidosResena()[0]!;
+      expect(url).toBe(URL_RESENA);
+      expect(init.method).toBe('GET');
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-123');
+    });
+
+    it('avisa antes de publicar que otros usuarios autenticados podrán leerla', async () => {
+      servidor({ nota: 4 });
+
+      const m = await abrirDetalle();
+      await campoResena(m);
+
+      expect(m.getByText(/otros usuarios con sesión iniciada podrán leerla/i)).toBeInTheDocument();
+    });
+
+    it('con una reseña ya publicada la carga para editarla y permite eliminarla', async () => {
+      servidor({ nota: 4, resena: 'Gran partido' });
+
+      const m = await abrirDetalle();
+
+      expect(await campoResena(m)).toHaveValue('Gran partido');
+      expect(m.getByRole('button', { name: 'Guardar cambios' })).toBeInTheDocument();
+      expect(m.getByRole('button', { name: 'Eliminar reseña' })).toBeInTheDocument();
+    });
+
+    it.each(['scheduled', 'live', 'postponed', 'cancelled'])(
+      'con el partido %s no ofrece reseñar ni pide la reseña',
+      async (status) => {
+        servidor({ status, visto: true, nota: 4 });
+
+        const m = await abrirDetalle();
+        await m.findByRole('button', { name: 'Deshacer visto' });
+
+        expect(m.queryByRole('textbox')).not.toBeInTheDocument();
+        expect(m.queryByText(/reseñar/i)).not.toBeInTheDocument();
+        expect(pedidosResena()).toHaveLength(0);
+      },
+    );
+
+    it('finalizado pero no visto: indica el paso que falta y no ofrece el campo', async () => {
+      servidor({ visto: false, nota: null });
+
+      const m = await abrirDetalle();
+
+      expect(
+        await m.findByText('Marcá el partido como visto para poder reseñarlo.'),
+      ).toBeInTheDocument();
+      expect(m.queryByRole('textbox')).not.toBeInTheDocument();
+    });
+
+    it('mientras se desconoce «visto» no ofrece reseñar ni lo da por no visto', async () => {
+      servidor({ lecturaVisto: () => new Promise<Response>(() => {}) });
+
+      const m = await abrirDetalle();
+      await m.findByText('Consultando si ya viste este partido…');
+
+      expect(m.queryByRole('textbox')).not.toBeInTheDocument();
+      expect(m.queryByText(/para poder reseñarlo/i)).not.toBeInTheDocument();
+      expect(pedidosResena()).toHaveLength(0);
+    });
+
+    it('visto pero sin calificar: indica calificar y, al calificar, aparece el formulario', async () => {
+      servidor({ nota: null });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      expect(await m.findByText('Calificá el partido para poder reseñarlo.')).toBeInTheDocument();
+      expect(m.queryByRole('textbox')).not.toBeInTheDocument();
+
+      await user.click(await m.findByRole('button', { name: '3 de 5' }));
+
+      expect(await campoResena(m)).toBeInTheDocument();
+      expect(m.queryByText('Calificá el partido para poder reseñarlo.')).not.toBeInTheDocument();
+    });
+
+    it('publica con PUT, bearer y un cuerpo con solo el texto, sin la nota', async () => {
+      servidor({ nota: 4 });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await user.type(await campoResena(m), '  Gran partido ');
+      await user.click(m.getByRole('button', { name: 'Publicar reseña' }));
+
+      expect(await m.findByText('Reseña publicada.')).toBeInTheDocument();
+      const [, init] = mutacionesResena().at(-1)!;
+      expect(init.method).toBe('PUT');
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-123');
+      expect(JSON.parse(String(init.body))).toEqual({ body: 'Gran partido' });
+    });
+
+    describe('nota y resumen intactos', () => {
+      /** Abre con nota 4 y otra persona con 2, y devuelve lo necesario para comparar. */
+      async function abrirConNota() {
+        servidor({ nota: 4, otros: [2], resena: null });
+        const user = userEvent.setup();
+        const m = await abrirDetalle();
+        await m.findByRole('button', { name: '4 de 5' });
+        await campoResena(m);
+
+        return {
+          user,
+          m,
+          resumenesAntes: pedidosResumen().length,
+          notasAntes: pedidosNota().length,
+        };
+      }
+
+      function expectNotaIntacta(
+        m: Awaited<ReturnType<typeof abrirDetalle>>,
+        antes: { resumenesAntes: number; notasAntes: number },
+      ) {
+        expect(guardadosNota()).toHaveLength(0);
+        expect(pedidosResumen()).toHaveLength(antes.resumenesAntes);
+        expect(pedidosNota()).toHaveLength(antes.notasAntes);
+        expect(m.getByRole('button', { name: '4 de 5' })).toHaveAttribute('aria-pressed', 'true');
+      }
+
+      it('publicar', async () => {
+        const { user, m, ...antes } = await abrirConNota();
+
+        await user.type(await campoResena(m), 'Gran partido');
+        await user.click(m.getByRole('button', { name: 'Publicar reseña' }));
+        await m.findByText('Reseña publicada.');
+
+        expectNotaIntacta(m, antes);
+      });
+
+      it('editar', async () => {
+        servidor({ nota: 4, otros: [2], resena: 'Gran partido' });
+        const user = userEvent.setup();
+        const m = await abrirDetalle();
+        await m.findByRole('button', { name: '4 de 5' });
+        const antes = { resumenesAntes: pedidosResumen().length, notasAntes: pedidosNota().length };
+
+        await user.type(await campoResena(m), ' editado');
+        await user.click(m.getByRole('button', { name: 'Guardar cambios' }));
+        await m.findByText('Cambios guardados.');
+
+        expectNotaIntacta(m, antes);
+      });
+
+      it('eliminar', async () => {
+        servidor({ nota: 4, otros: [2], resena: 'Gran partido' });
+        const user = userEvent.setup();
+        const m = await abrirDetalle();
+        await m.findByRole('button', { name: '4 de 5' });
+        const antes = { resumenesAntes: pedidosResumen().length, notasAntes: pedidosNota().length };
+
+        await campoResena(m);
+        await user.click(m.getByRole('button', { name: 'Eliminar reseña' }));
+        await m.findByText('Reseña eliminada.');
+
+        expectNotaIntacta(m, antes);
+      });
+    });
+
+    it('publicar, recargar y volver a abrir muestran la reseña persistida', async () => {
+      servidor({ nota: 4 });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await user.type(await campoResena(m), 'Gran partido');
+      await user.click(m.getByRole('button', { name: 'Publicar reseña' }));
+      await m.findByText('Reseña publicada.');
+
+      cleanup();
+      const recargado = await abrirDetalle();
+
+      expect(await campoResena(recargado)).toHaveValue('Gran partido');
+    });
+
+    it('un fallo del servidor al publicar conserva el borrador y deja reintentar', async () => {
+      servidor({ nota: 4 });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      const campo = await campoResena(m);
+      await user.type(campo, 'Gran partido');
+
+      const original = fetchSpy.getMockImplementation()!;
+      fetchSpy.mockImplementation((url: RequestInfo | URL, init?: RequestInit) =>
+        String(url) === URL_RESENA && init?.method === 'PUT'
+          ? Promise.resolve(jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x' } }, 500))
+          : original(url, init),
+      );
+      await user.click(m.getByRole('button', { name: 'Publicar reseña' }));
+
+      expect(await m.findByText('No pudimos guardar tu reseña. Intentá de nuevo.')).toBeVisible();
+      expect(campo).toHaveValue('Gran partido');
+
+      fetchSpy.mockImplementation(original);
+      await user.click(m.getByRole('button', { name: 'Publicar reseña' }));
+
+      expect(await m.findByText('Reseña publicada.')).toBeInTheDocument();
+    });
+
+    it('deshacer «visto» con una reseña publicada retira la edición pero deja eliminarla', async () => {
+      servidor({ nota: 4, resena: 'Gran partido' });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      await campoResena(m);
+
+      await user.click(m.getByRole('button', { name: 'Deshacer visto' }));
+
+      expect(
+        await m.findByText('Marcá el partido como visto para poder editar tu reseña.'),
+      ).toBeInTheDocument();
+      expect(m.queryByRole('textbox')).not.toBeInTheDocument();
+      expect(m.queryByRole('button', { name: 'Guardar cambios' })).not.toBeInTheDocument();
+      expect(m.getByText('Gran partido')).toBeInTheDocument();
+
+      await user.click(m.getByRole('button', { name: 'Eliminar reseña' }));
+
+      expect(await m.findByText('Reseña eliminada.')).toBeInTheDocument();
+      expect(mutacionesResena().at(-1)![1].method).toBe('DELETE');
+      expect(m.queryByText('Gran partido')).not.toBeInTheDocument();
+    });
+
+    it('volver a marcar «visto» recupera el borrador sin volver a leer la reseña', async () => {
+      servidor({ nota: 4, resena: 'Gran partido' });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      const campo = await campoResena(m);
+      await user.type(campo, ' con un agregado');
+      const lecturas = pedidosResena().length;
+
+      await user.click(m.getByRole('button', { name: 'Deshacer visto' }));
+      await m.findByText('Marcá el partido como visto para poder editar tu reseña.');
+      await user.click(m.getByRole('button', { name: 'Marcar como visto' }));
+
+      expect(await campoResena(m)).toHaveValue('Gran partido con un agregado');
+      expect(pedidosResena()).toHaveLength(lecturas);
+    });
+
+    it('al cambiar de usuario vuelve a leer con su bearer y no conserva el borrador del anterior', async () => {
+      servidor({ nota: 4 });
+      const user = userEvent.setup();
+      const otraSesion = {
+        access_token: 'token-otro',
+        user: { id: 'user-2', email: 'c@d.com' },
+      } as Session;
+
+      const m = await abrirDetalle();
+      await user.type(await campoResena(m), 'Borrador del usuario 1');
+
+      const [[alCambiarSesion]] = authMock.onAuthStateChange.mock.calls as [
+        [(evento: string, sesion: Session | null) => void],
+      ];
+      act(() => alCambiarSesion('SIGNED_IN', otraSesion));
+
+      await waitFor(async () => expect(await campoResena(m)).toHaveValue(''));
+      const ultimaLectura = pedidosResena().at(-1)!;
+      expect(new Headers(ultimaLectura[1].headers).get('Authorization')).toBe('Bearer token-otro');
+      expect(m.queryByDisplayValue('Borrador del usuario 1')).not.toBeInTheDocument();
+    });
+
+    it('se opera con el teclado: Tab llega al campo, escribe y Enter sobre el botón publica', async () => {
+      servidor({ nota: 4 });
+      const user = userEvent.setup();
+
+      const m = await abrirDetalle();
+      const campo = await campoResena(m);
+      campo.focus();
+      await user.keyboard('Gran partido');
+      await user.tab();
+      expect(m.getByRole('button', { name: 'Publicar reseña' })).toHaveFocus();
+
+      await user.keyboard('{Enter}');
+
+      expect(await m.findByText('Reseña publicada.')).toBeInTheDocument();
     });
   });
 });
