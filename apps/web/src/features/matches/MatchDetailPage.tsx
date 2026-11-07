@@ -8,6 +8,7 @@ import { RoomsApiError, isCancelled as isRoomCancelled } from '@/features/rooms/
 import { MatchRating } from '@/features/ratings/MatchRating';
 import { MatchRatingSummary } from '@/features/ratings/MatchRatingSummary';
 import { MatchReviewForm } from '@/features/reviews/MatchReviewForm';
+import { MatchReviewsList } from '@/features/reviews/MatchReviewsList';
 import { getWatched, setWatched } from '@/features/watched/api';
 import { WatchedApiError, isCancelled as isWatchedCancelled } from '@/features/watched/types';
 import { formatKickoff, matchStatusLabel } from './format';
@@ -380,8 +381,8 @@ function DetallePartido({ matchId }: { matchId: string }) {
   const [notasGuardadas, setNotasGuardadas] = useState(0);
   // Señal local de reseñas (WAT-258): cuenta las publicaciones, ediciones y
   // borrados de la reseña propia que confirmó el servidor. El listado de
-  // opiniones del partido la tomará como `refreshKey`; por ahora sólo se emite.
-  const [, setResenasConfirmadas] = useState(0);
+  // opiniones del partido (WAT-259) la toma como `refreshKey`.
+  const [resenasConfirmadas, setResenasConfirmadas] = useState(0);
   const salaController = useRef<AbortController | null>(null);
 
   // Al desmontar (salir o cambiar de partido) se cancela el pedido de la sala.
@@ -534,6 +535,16 @@ function DetallePartido({ matchId }: { matchId: string }) {
               notasGuardadas={notasGuardadas}
               onCambio={() => setResenasConfirmadas((valor) => valor + 1)}
             />
+
+            {estado.match.status === 'finished' ? (
+              <MatchReviewsList
+                key={`opiniones:${estado.match.id}:${userId}`}
+                matchId={estado.match.id}
+                accessToken={accessToken}
+                onSessionExpired={() => void signOut()}
+                refreshKey={resenasConfirmadas}
+              />
+            ) : null}
           </>
         ) : null}
 
