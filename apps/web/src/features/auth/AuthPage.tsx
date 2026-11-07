@@ -31,7 +31,16 @@ function redirectTarget(state: unknown): string {
   return `${pathname}${search}${hash}`;
 }
 
+/**
+ * `/login` y `/register` montan `AuthPage` en la misma posición del árbol, así
+ * que React conservaría su estado al cambiar de ruta: un alta pendiente dejaría
+ * el login sin formulario. La `key` por modo descarta ese estado en cada cambio.
+ */
 export function AuthPage({ mode }: AuthPageProps) {
+  return <AuthPageContent key={mode} mode={mode} />;
+}
+
+function AuthPageContent({ mode }: AuthPageProps) {
   const copy = AUTH_COPY[mode];
   const navigate = useNavigate();
   const location = useLocation();

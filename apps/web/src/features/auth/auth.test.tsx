@@ -399,6 +399,53 @@ describe('AuthPage en modo registro', () => {
     expect(screen.getByRole('link', { name: 'Ingresar' })).toHaveAttribute('href', '/login');
   });
 
+  it('con el alta pendiente, «Ingresar» lleva a un login con formulario', async () => {
+    authMock.signUp.mockResolvedValue({
+      data: { user: session.user, session: null },
+      error: null,
+    });
+
+    const { user } = renderAuth('/register');
+    await fillAndSubmit(user, 'register');
+    await screen.findByRole('status');
+
+    await user.click(screen.getByRole('link', { name: 'Ingresar' }));
+
+    expect(await screen.findByRole('heading', { name: 'Entrá a la tribuna' })).toBeInTheDocument();
+    expect(
+      screen.queryByText('Revisá tu correo para confirmar tu cuenta.'),
+    ).not.toBeInTheDocument();
+    expect(fields().email).toBeEnabled();
+    expect(fields().password).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Ingresar' })).toBeEnabled();
+
+    await fillAndSubmit(user, 'login');
+
+    expect(authMock.signInWithPassword).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
+  });
+
+  it('al volver al registro después del login, el formulario de registro está disponible', async () => {
+    authMock.signUp.mockResolvedValue({
+      data: { user: session.user, session: null },
+      error: null,
+    });
+
+    const { user } = renderAuth('/register');
+    await fillAndSubmit(user, 'register');
+    await screen.findByRole('status');
+
+    await user.click(screen.getByRole('link', { name: 'Ingresar' }));
+    await screen.findByRole('heading', { name: 'Entrá a la tribuna' });
+    await user.click(screen.getByRole('link', { name: 'Crear cuenta' }));
+
+    expect(await screen.findByRole('heading', { name: 'Sumate a la tribuna' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Crear cuenta' })).toBeEnabled();
+    expect(
+      screen.queryByText('Revisá tu correo para confirmar tu cuenta.'),
+    ).not.toBeInTheDocument();
+  });
+
   it('muestra un error recuperable si el registro no devuelve usuario ni sesión', async () => {
     authMock.signUp.mockResolvedValue({
       data: { user: null, session: null },
