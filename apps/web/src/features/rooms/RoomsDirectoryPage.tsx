@@ -69,6 +69,20 @@ function formatearDia(fecha: string): string {
   return diaFormatter.format(new Date(Date.UTC(anio!, mes! - 1, dia!)));
 }
 
+/** Los estados reales del catálogo que el directorio muestra; `todos` los junta. */
+type FiltroEstado = 'todos' | Match['status'];
+
+const OPCIONES_ESTADO: readonly { valor: FiltroEstado; etiqueta: string }[] = [
+  { valor: 'todos', etiqueta: 'Todos' },
+  { valor: 'live', etiqueta: 'En vivo' },
+  { valor: 'scheduled', etiqueta: 'Próximos' },
+];
+
+const SIN_PARTIDOS: Partial<Record<Match['status'], string>> = {
+  live: 'No hay partidos en vivo por ahora.',
+  scheduled: 'No hay partidos próximos por ahora.',
+};
+
 /**
  * /rooms sólo muestra partidos que todavía pueden tener sala activa, repartidos en
  * secciones por el estado que ya devuelve el catálogo. Un partido pertenece a una
@@ -167,6 +181,8 @@ export function RoomsDirectoryPage() {
   const tituloFoco = useRef<HTMLHeadingElement>(null);
   const botonTodos = useRef<HTMLButtonElement>(null);
   const reintentando = useRef(false);
+  const [filtroEstado, setFiltroEstado] = useState<FiltroEstado>('todos');
+  const botonTodosEstado = useRef<HTMLButtonElement>(null);
   // Día elegido (`YYYY-MM-DD`); vacío no restringe el listado.
   const [fecha, setFecha] = useState('');
   const fechaId = useId();
@@ -312,16 +328,29 @@ export function RoomsDirectoryPage() {
       : favorito.status === 'ready'
         ? propias
         : [];
+  // El selector de estado sólo recorta las secciones ya calculadas: no pide ni
+  // reordena nada.
+  const porEstado =
+    filtroEstado === 'todos'
+      ? porEquipo
+      : porEquipo.filter((seccion) => seccion.estado === filtroEstado);
   // La fecha sólo recorta lo ya calculado, por el día en que se juega cada partido
   // en la zona de presentación de la app: no pide nada y las secciones se recalculan.
   const mostradas =
     fecha === ''
-      ? porEquipo
+      ? porEstado
       : seccionesVisibles(
-          porEquipo
+          porEstado
             .flatMap((seccion) => seccion.matches)
             .filter((partido) => kickoffDay(partido.kickoffAt) === fecha),
         );
+
+  // El panel que tenía el foco desaparece al volver: lo recibe el «Todos» del
+  // selector de estado, que sigue en pantalla.
+  const volverATodosLosEstados = useCallback(() => {
+    setFiltroEstado('todos');
+    botonTodosEstado.current?.focus();
+  }, []);
 
   // El control que tenía el foco desaparece al quitar la fecha: lo recibe el campo.
   const quitarFecha = useCallback(() => {
@@ -362,6 +391,23 @@ export function RoomsDirectoryPage() {
                       onClick={() => elegirFiltro(valor)}
                     >
                       {filtro === valor ? <Check aria-hidden="true" /> : null}
+                      {etiqueta}
+                    </Button>
+                  ))}
+                </div>
+
+                <div role="group" aria-label="Filtrar por estado" className="flex flex-wrap gap-2">
+                  {OPCIONES_ESTADO.map(({ valor, etiqueta }) => (
+                    <Button
+                      key={valor}
+                      ref={valor === 'todos' ? botonTodosEstado : undefined}
+                      type="button"
+                      variant={filtroEstado === valor ? 'default' : 'outline'}
+                      aria-pressed={filtroEstado === valor}
+                      className="flex-1 sm:flex-none"
+                      onClick={() => setFiltroEstado(valor)}
+                    >
+                      {filtroEstado === valor ? <Check aria-hidden="true" /> : null}
                       {etiqueta}
                     </Button>
                   ))}
@@ -555,7 +601,27 @@ export function RoomsDirectoryPage() {
           />
         ) : null}
 
-        {porEquipo.length > 0 && fecha !== '' && mostradas.length === 0 ? (
+        {porEquipo.length > 0 && porEstado.length === 0 ? (
+          <DirectoryStatePanel
+            role="status"
+            icon={CalendarX}
+            title="No hay partidos para mostrar"
+            message={SIN_PARTIDOS[filtroEstado as Match['status']] ?? ''}
+            panelRef={panelFoco}
+            action={
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={volverATodosLosEstados}
+              >
+                Ver todos los partidos
+              </Button>
+            }
+          />
+        ) : null}
+
+        {porEstado.length > 0 && fecha !== '' && mostradas.length === 0 ? (
           <DirectoryStatePanel
             role="status"
             icon={CalendarX}

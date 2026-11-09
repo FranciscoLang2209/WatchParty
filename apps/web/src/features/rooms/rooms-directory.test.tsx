@@ -600,10 +600,14 @@ describe('Directorio de salas — presentación de las tarjetas', () => {
       expect(within(lista).queryByRole('button')).not.toBeInTheDocument();
     }
 
-    // Fuera de las tarjetas sólo quedan el filtro Todos / Mi equipo y Actualizar.
+    // Fuera de las tarjetas sólo quedan el filtro Todos / Mi equipo, el selector de
+    // estado y Actualizar.
     expect(m.getAllByRole('button').map((boton) => boton.textContent)).toEqual([
       'Todos',
       'Mi equipo',
+      'Todos',
+      'En vivo',
+      'Próximos',
       'Actualizar',
     ]);
   });
@@ -991,7 +995,11 @@ describe('Directorio de salas — filtro Mi equipo', () => {
 
     const m = await abrir();
 
-    expect(m.getByRole('button', { name: 'Todos' })).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      within(m.getByRole('group', { name: 'Filtrar partidos' })).getByRole('button', {
+        name: 'Todos',
+      }),
+    ).toHaveAttribute('aria-pressed', 'true');
     expect(m.getByRole('button', { name: 'Mi equipo' })).toHaveAttribute('aria-pressed', 'false');
     expect(enlacesDe(m)).toHaveLength(4);
     expect(llamadasAlPerfil()).toHaveLength(0);
@@ -1006,7 +1014,11 @@ describe('Directorio de salas — filtro Mi equipo', () => {
 
     await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
     expect(m.getByRole('button', { name: 'Mi equipo' })).toHaveAttribute('aria-pressed', 'true');
-    expect(m.getByRole('button', { name: 'Todos' })).toHaveAttribute('aria-pressed', 'false');
+    expect(
+      within(m.getByRole('group', { name: 'Filtrar partidos' })).getByRole('button', {
+        name: 'Todos',
+      }),
+    ).toHaveAttribute('aria-pressed', 'false');
 
     const [pedido] = llamadasAlPerfil();
 
@@ -1069,7 +1081,11 @@ describe('Directorio de salas — filtro Mi equipo', () => {
     await user.click(m.getByRole('button', { name: 'Mi equipo' }));
     await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
 
-    await user.click(m.getByRole('button', { name: 'Todos' }));
+    await user.click(
+      within(m.getByRole('group', { name: 'Filtrar partidos' })).getByRole('button', {
+        name: 'Todos',
+      }),
+    );
     expect(enlacesDe(m)).toHaveLength(4);
 
     await user.click(m.getByRole('button', { name: 'Mi equipo' }));
@@ -1092,7 +1108,9 @@ describe('Directorio de salas — filtro Mi equipo', () => {
     await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
     expect(miEquipo).toHaveFocus();
 
-    const todos = m.getByRole('button', { name: 'Todos' });
+    const todos = within(m.getByRole('group', { name: 'Filtrar partidos' })).getByRole('button', {
+      name: 'Todos',
+    });
 
     todos.focus();
     await user.keyboard(' ');
@@ -1152,8 +1170,16 @@ describe('Directorio de salas — filtro Mi equipo', () => {
     await user.click(within(aviso).getByRole('button', { name: 'Ver todos los partidos' }));
 
     expect(enlacesDe(m)).toHaveLength(4);
-    expect(m.getByRole('button', { name: 'Todos' })).toHaveAttribute('aria-pressed', 'true');
-    expect(m.getByRole('button', { name: 'Todos' })).toHaveFocus();
+    expect(
+      within(m.getByRole('group', { name: 'Filtrar partidos' })).getByRole('button', {
+        name: 'Todos',
+      }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      within(m.getByRole('group', { name: 'Filtrar partidos' })).getByRole('button', {
+        name: 'Todos',
+      }),
+    ).toHaveFocus();
   });
 
   it('si falla el perfil conserva el listado general y avisa, sin decir que no hay favorito', async () => {
@@ -1343,7 +1369,11 @@ describe('Directorio de salas — filtro Mi equipo', () => {
     const m = await abrir();
     await user.click(m.getByRole('button', { name: 'Mi equipo' }));
     await waitFor(() => expect(enlacesDe(m)).toHaveLength(2));
-    await user.click(m.getByRole('button', { name: 'Todos' }));
+    await user.click(
+      within(m.getByRole('group', { name: 'Filtrar partidos' })).getByRole('button', {
+        name: 'Todos',
+      }),
+    );
 
     const destinos = (fetchSpy.mock.calls as [string, RequestInit][]).map(([url]) => String(url));
 
@@ -1785,6 +1815,221 @@ describe('Directorio de salas — actualizar', () => {
   });
 });
 
+describe('Directorio de salas — selector Todos / En vivo / Próximos', () => {
+  const partido = (
+    id: string,
+    status: 'live' | 'scheduled' | 'finished' | 'cancelled' | 'postponed',
+    homeTeam: string,
+  ) => ({ ...river, id, status, homeTeam, homeTeamId: `team-${id}` });
+
+  const vivoB = partido('vivo-b', 'live', 'Vivo B');
+  const vivoA = partido('vivo-a', 'live', 'Vivo A');
+  const proxB = partido('prox-b', 'scheduled', 'Prox B');
+  const proxA = partido('prox-a', 'scheduled', 'Prox A');
+  const finalizado = partido('finalizado', 'finished', 'Final');
+  const cancelado = partido('cancelado', 'cancelled', 'Cancelado');
+  const pospuesto = partido('pospuesto', 'postponed', 'Pospuesto');
+
+  // Orden de la API deliberadamente mezclado: dentro de cada sección debe respetarse.
+  const agenda = [proxB, vivoB, finalizado, proxA, cancelado, vivoA, pospuesto];
+
+  async function abrir(matches: unknown[] = agenda) {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches }));
+
+    renderAt('/rooms');
+    const m = await directorio();
+    await m.findByRole('group', { name: 'Filtrar por estado' });
+
+    return m;
+  }
+
+  function enlaces(m: ReturnType<typeof within>) {
+    return m
+      .queryAllByRole('link', { name: /Ver partido/ })
+      .map((enlace: HTMLElement) =>
+        enlace.getAttribute('aria-label')?.replace(/^Ver partido: | vs\..*$/g, ''),
+      );
+  }
+
+  function opcion(m: ReturnType<typeof within>, nombre: string) {
+    return within(m.getByRole('group', { name: 'Filtrar por estado' })).getByRole('button', {
+      name: nombre,
+    });
+  }
+
+  it('ofrece Todos, En vivo y Próximos en un grupo con nombre, con Todos elegido', async () => {
+    const m = await abrir();
+    const grupo = m.getByRole('group', { name: 'Filtrar por estado' });
+
+    expect(
+      within(grupo)
+        .getAllByRole('button')
+        .map((boton) => boton.textContent),
+    ).toEqual(['Todos', 'En vivo', 'Próximos']);
+    expect(opcion(m, 'Todos')).toHaveAttribute('aria-pressed', 'true');
+    expect(opcion(m, 'En vivo')).toHaveAttribute('aria-pressed', 'false');
+    expect(opcion(m, 'Próximos')).toHaveAttribute('aria-pressed', 'false');
+    // El elegido no se distingue sólo por color: lleva un tilde decorativo.
+    expect(opcion(m, 'Todos').querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(opcion(m, 'En vivo').querySelector('svg')).toBeNull();
+  });
+
+  it('Todos muestra las dos secciones, con el orden de la API dentro de cada una y sin finalizados ni cancelados', async () => {
+    const m = await abrir();
+    const enVivo = m.getByRole('region', { name: 'En vivo' });
+    const proximos = m.getByRole('region', { name: 'Próximos' });
+
+    expect(enlaces(within(enVivo))).toEqual(['Vivo B', 'Vivo A']);
+    expect(enlaces(within(proximos))).toEqual(['Prox B', 'Prox A']);
+    expect(enlaces(m)).toEqual(['Vivo B', 'Vivo A', 'Prox B', 'Prox A']);
+    expect(m.queryByText(/Final|Cancelado|Pospuesto/)).not.toBeInTheDocument();
+  });
+
+  it('En vivo deja sólo la sección En vivo, en el orden de la API', async () => {
+    const user = userEvent.setup();
+    const m = await abrir();
+
+    await user.click(opcion(m, 'En vivo'));
+
+    expect(opcion(m, 'En vivo')).toHaveAttribute('aria-pressed', 'true');
+    expect(opcion(m, 'Todos')).toHaveAttribute('aria-pressed', 'false');
+    expect(m.getByRole('region', { name: 'En vivo' })).toBeInTheDocument();
+    expect(m.queryByRole('region', { name: 'Próximos' })).not.toBeInTheDocument();
+    expect(enlaces(m)).toEqual(['Vivo B', 'Vivo A']);
+  });
+
+  it('Próximos deja sólo la sección Próximos, en el orden de la API', async () => {
+    const user = userEvent.setup();
+    const m = await abrir();
+
+    await user.click(opcion(m, 'Próximos'));
+
+    expect(opcion(m, 'Próximos')).toHaveAttribute('aria-pressed', 'true');
+    expect(m.getByRole('region', { name: 'Próximos' })).toBeInTheDocument();
+    expect(m.queryByRole('region', { name: 'En vivo' })).not.toBeInTheDocument();
+    expect(enlaces(m)).toEqual(['Prox B', 'Prox A']);
+  });
+
+  it('volver a Todos restaura las dos secciones y ninguna opción incluye finalizados ni cancelados', async () => {
+    const user = userEvent.setup();
+    const m = await abrir();
+
+    for (const nombre of ['En vivo', 'Próximos', 'Todos']) {
+      await user.click(opcion(m, nombre));
+
+      expect(m.queryByText(/Final|Cancelado|Pospuesto/)).not.toBeInTheDocument();
+    }
+
+    expect(enlaces(m)).toEqual(['Vivo B', 'Vivo A', 'Prox B', 'Prox A']);
+    expect(m.getByRole('region', { name: 'En vivo' })).toBeInTheDocument();
+    expect(m.getByRole('region', { name: 'Próximos' })).toBeInTheDocument();
+  });
+
+  it('conserva los títulos de sección como h2 y los partidos como h3 con cualquier opción', async () => {
+    const user = userEvent.setup();
+    const m = await abrir();
+
+    await user.click(opcion(m, 'En vivo'));
+
+    expect(m.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['En vivo']);
+    expect(m.getAllByRole('heading', { level: 3 })).toHaveLength(2);
+    expect(m.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
+  it('una opción sin partidos lo dice y permite volver a Todos, dejando el foco en Todos', async () => {
+    const user = userEvent.setup();
+    const m = await abrir([proxA, proxB]);
+
+    await user.click(opcion(m, 'En vivo'));
+
+    const aviso = await m.findByRole('status');
+
+    expect(within(aviso).getByRole('heading', { level: 2 })).toHaveTextContent(
+      'No hay partidos para mostrar',
+    );
+    expect(aviso).toHaveTextContent('No hay partidos en vivo por ahora.');
+    expect(enlaces(m)).toEqual([]);
+    expect(m.queryByRole('region')).not.toBeInTheDocument();
+
+    await user.click(within(aviso).getByRole('button', { name: 'Ver todos los partidos' }));
+
+    expect(opcion(m, 'Todos')).toHaveAttribute('aria-pressed', 'true');
+    expect(opcion(m, 'Todos')).toHaveFocus();
+    expect(enlaces(m)).toEqual(['Prox A', 'Prox B']);
+  });
+
+  it('Próximos sin partidos próximos también lo dice', async () => {
+    const user = userEvent.setup();
+    const m = await abrir([vivoA]);
+
+    await user.click(opcion(m, 'Próximos'));
+
+    expect(await m.findByRole('status')).toHaveTextContent('No hay partidos próximos por ahora.');
+    expect(enlaces(m)).toEqual([]);
+  });
+
+  it('no se ofrece mientras carga, ante un error, sin partidos ni con partidos fuera del directorio', async () => {
+    conSesion();
+    fetchSpy.mockReturnValue(new Promise(() => {}));
+    const cargando = renderAt('/rooms');
+    const enCarga = await directorio();
+    await enCarga.findByRole('status');
+    expect(enCarga.queryByRole('group', { name: 'Filtrar por estado' })).not.toBeInTheDocument();
+    cargando.unmount();
+
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    const conError = renderAt('/rooms');
+    const enError = await directorio();
+    await enError.findByRole('alert');
+    expect(enError.queryByRole('group', { name: 'Filtrar por estado' })).not.toBeInTheDocument();
+    conError.unmount();
+
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [finalizado, cancelado] }));
+    renderAt('/rooms');
+    const sinVisibles = await directorio();
+    await sinVisibles.findByText(/Todavía no hay partidos ni salas disponibles/);
+    expect(
+      sinVisibles.queryByRole('group', { name: 'Filtrar por estado' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('se recorre con Tab en orden y se elige con Enter o Espacio, sin perder el foco', async () => {
+    const user = userEvent.setup();
+    const m = await abrir();
+
+    opcion(m, 'Todos').focus();
+    await user.tab();
+    expect(opcion(m, 'En vivo')).toHaveFocus();
+    await user.tab();
+    expect(opcion(m, 'Próximos')).toHaveFocus();
+
+    await user.keyboard(' ');
+    expect(opcion(m, 'Próximos')).toHaveAttribute('aria-pressed', 'true');
+    expect(opcion(m, 'Próximos')).toHaveFocus();
+    expect(enlaces(m)).toEqual(['Prox B', 'Prox A']);
+
+    await user.tab({ shift: true });
+    expect(opcion(m, 'En vivo')).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(opcion(m, 'En vivo')).toHaveAttribute('aria-pressed', 'true');
+    expect(opcion(m, 'En vivo')).toHaveFocus();
+    expect(enlaces(m)).toEqual(['Vivo B', 'Vivo A']);
+  });
+
+  it('cambiar de opción no vuelve a consultar la API: filtra lo ya cargado', async () => {
+    const user = userEvent.setup();
+    const m = await abrir();
+
+    await user.click(opcion(m, 'En vivo'));
+    await user.click(opcion(m, 'Próximos'));
+    await user.click(opcion(m, 'Todos'));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('Directorio de salas — filtro por fecha', () => {
   // Argentina es UTC-3: los instantes de abajo cruzan la medianoche de Buenos Aires.
   const partido = (
@@ -1997,7 +2242,7 @@ describe('Directorio de salas — filtro por fecha', () => {
     const user = userEvent.setup();
     const m = await abrir();
 
-    for (let vuelta = 0; vuelta < 12 && document.activeElement !== campo(m); vuelta += 1) {
+    for (let vuelta = 0; vuelta < 30 && document.activeElement !== campo(m); vuelta += 1) {
       await user.tab();
     }
 
