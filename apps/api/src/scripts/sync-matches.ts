@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   loadFootballDataOrgEnv,
   loadSportsProviderEnv,
+  resolveBackfillFrom,
   resolveSyncProvider,
   type SyncProviderName,
 } from '../config/sports-provider-env.js';
@@ -10,6 +11,7 @@ import { createFootballDataOrgClient } from '../modules/matches/infrastructure/f
 import { checkSyncEnv, syncEnvRequirements } from '../config/sync-preflight.js';
 import { SupabaseMatchStore } from '../modules/matches/infrastructure/supabase-match-store.js';
 import {
+  DEFAULT_SYNC_FOOTBALL_DATA_ORG_CONFIG,
   syncFootballDataOrgMatches,
   syncMatches,
   type SyncMatchesResult,
@@ -28,7 +30,10 @@ function printSummary(summary: SyncMatchesSummary): void {
  * corresponde. Lanza si falta esa configuración: el comando termina con
  * código 2 sin consultar a ningún proveedor.
  */
-function createProviderRunner(provider: SyncProviderName): ProviderRunner {
+function createProviderRunner(
+  provider: SyncProviderName,
+  backfillFrom: string | undefined,
+): ProviderRunner {
   if (provider === 'api-football') {
     const env = loadSportsProviderEnv();
     const client = createApiFootballClient({
@@ -47,7 +52,11 @@ function createProviderRunner(provider: SyncProviderName): ProviderRunner {
     apiKey: env.FOOTBALL_DATA_ORG_API_KEY,
   });
 
-  return (deps) => syncFootballDataOrgMatches({ ...deps, client });
+  return (deps) =>
+    syncFootballDataOrgMatches(
+      { ...deps, client },
+      { ...DEFAULT_SYNC_FOOTBALL_DATA_ORG_CONFIG, backfillFrom },
+    );
 }
 
 async function main(): Promise<void> {
@@ -62,7 +71,7 @@ async function main(): Promise<void> {
       throw new Error(preflight.message);
     }
 
-    runProvider = createProviderRunner(provider);
+    runProvider = createProviderRunner(provider, resolveBackfillFrom());
   } catch (error) {
     console.error(error instanceof Error ? error.message : 'Configuración inválida.');
     process.exitCode = 2;

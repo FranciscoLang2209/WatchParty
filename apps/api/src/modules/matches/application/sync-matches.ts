@@ -4,7 +4,7 @@ import type {
   SyncLeaseScope,
   SyncResultDetails,
 } from '../domain/match-store.js';
-import { agendaWindow, type MatchWindow } from '../domain/match-window.js';
+import { agendaWindow, backfillWindow, type MatchWindow } from '../domain/match-window.js';
 import type { NormalizedMatchFixture } from '../domain/normalized-match-fixture.js';
 import type {
   ApiFootballFetchOutcome,
@@ -93,6 +93,11 @@ export interface SyncFootballDataOrgConfig {
   season: string;
   dailyQuotaLimit: number;
   perMinuteLimit: number;
+  /**
+   * `YYYY-MM-DD` opcional (WAT-274): adelanta el inicio de la ventana para
+   * recuperar el marcador de partidos terminados antes de la ventana móvil.
+   */
+  backfillFrom?: string;
 }
 
 // Competición y temporada verificadas en WAT-180
@@ -602,7 +607,8 @@ export async function syncFootballDataOrgMatches(
   deps: SyncFootballDataOrgDeps,
   config: SyncFootballDataOrgConfig = DEFAULT_SYNC_FOOTBALL_DATA_ORG_CONFIG,
 ): Promise<SyncMatchesResult> {
-  const window = agendaWindow(deps.clock.now());
+  const now = deps.clock.now();
+  const window = config.backfillFrom ? backfillWindow(now, config.backfillFrom) : agendaWindow(now);
 
   return runSync(
     deps,

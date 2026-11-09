@@ -25,3 +25,17 @@ export function agendaWindow(now: Date): MatchWindow {
     to: new Date(startOfToday + (UPCOMING_DAYS + 1) * DAY_MS).toISOString(),
   };
 }
+
+/**
+ * Ventana de recuperación (WAT-274): la de la agenda, pero con el inicio
+ * adelantado a las 00:00 UTC de `fromDate` (`YYYY-MM-DD`). Sirve para completar
+ * el marcador de partidos que terminaron antes de la ventana móvil y nunca
+ * volvieron a pedirse. Una fecha igual o posterior al inicio de la agenda no
+ * recorta la ventana: se devuelve la de la agenda.
+ */
+export function backfillWindow(now: Date, fromDate: string): MatchWindow {
+  const agenda = agendaWindow(now);
+  const from = `${fromDate}T00:00:00.000Z`;
+
+  return from < agenda.from ? { from, to: agenda.to } : agenda;
+}
