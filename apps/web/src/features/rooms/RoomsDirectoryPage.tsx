@@ -358,6 +358,17 @@ export function RoomsDirectoryPage() {
     inputFecha.current?.focus();
   }, []);
 
+  const hayFiltros = filtro !== 'todos' || filtroEstado !== 'todos' || fecha !== '';
+
+  // Vuelve a «Todos», a todos los estados y a la fecha vacía. El botón desaparece al
+  // limpiar, así que el foco lo recibe el primer control de la barra, que sigue en pantalla.
+  const limpiarFiltros = useCallback(() => {
+    setFiltro('todos');
+    setFiltroEstado('todos');
+    setFecha('');
+    botonTodos.current?.focus();
+  }, []);
+
   return (
     <section
       aria-busy={
@@ -427,6 +438,12 @@ export function RoomsDirectoryPage() {
                 {fecha !== '' ? (
                   <Button type="button" variant="ghost" onClick={quitarFecha}>
                     Quitar fecha
+                  </Button>
+                ) : null}
+
+                {hayFiltros ? (
+                  <Button type="button" variant="ghost" onClick={limpiarFiltros}>
+                    Limpiar filtros
                   </Button>
                 ) : null}
               </div>
