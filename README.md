@@ -68,7 +68,7 @@ Los hooks locales **pueden omitirse** (`git push --no-verify`, `HUSKY=0`, o un c
 
 - Correr `pnpm validate` antes de subir, también quien trabaje con agentes: el agente debe ejecutarlo y reportar su resultado, no asumirlo.
 - Si se omite el hook, decirlo en el PR y correr la validación completa manual (ver abajo).
-- La cobertura remota final es la del evento `pull_request` (ver más abajo).
+- La cobertura remota final es la del evento `pull_request` y la del `push` a `main` tras cada merge (ver más abajo).
 
 También podés correr cada paso por separado:
 
@@ -87,13 +87,14 @@ El workflow **CI** (`.github/workflows/ci.yml`, job `quality`, visible como el c
 
 | Evento              | Qué corre                                                                            |
 | ------------------- | ------------------------------------------------------------------------------------ |
-| `push`              | Controles rápidos: instalación reproducible, formato, lint y typecheck               |
+| `push` a una rama   | Controles rápidos: instalación reproducible, formato, lint y typecheck               |
+| `push` a `main`     | Validación completa tras cada merge (ver abajo)                                      |
 | `pull_request`      | Validación completa: lo anterior más tests y build (cobertura remota antes de merge) |
 | `workflow_dispatch` | Validación completa a pedido, para diagnóstico (Actions → CI → Run workflow)         |
 
-Una actualización de una rama con PR dispara una corrida liviana (`push`) y una completa (`pull_request`), nunca dos completas. Se conservan el cache de pnpm y la cancelación de corridas obsoletas por ref. Los fallos se ven siempre: ningún paso usa `continue-on-error`.
+Una actualización de una rama con PR dispara una corrida liviana (`push`) y una completa (`pull_request`), nunca dos completas. Cada merge a `main` dispara una completa: un PR desactualizado puede mergearse en verde y romper `main` junto con otro, y el hook pre-push no corre cuando el merge lo hace GitHub. Se conservan el cache de pnpm y la cancelación de corridas obsoletas por ref. Los fallos se ven siempre: ningún paso usa `continue-on-error`.
 
-El nombre del job (`quality`) y del workflow (`CI`) no cambian, así que el check requerido `CI / quality` sigue existiendo en `pull_request`. En `push` el mismo check corre solo los controles rápidos.
+El nombre del job (`quality`) y del workflow (`CI`) no cambian, así que el check requerido `CI / quality` sigue existiendo en `pull_request`. En un `push` a una rama el mismo check corre solo los controles rápidos; en `main` corre completo.
 
 ## Estructura
 

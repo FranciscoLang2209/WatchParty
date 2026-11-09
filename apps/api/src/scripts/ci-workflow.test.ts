@@ -45,9 +45,11 @@ describe('workflow CI — qué corre en cada evento', () => {
     }
   });
 
-  it('tests y build quedan fuera del push y corren en pull_request y en la ejecución manual', () => {
+  it('tests y build quedan fuera del push a ramas y corren en pull_request, en main y en la ejecución manual', () => {
     for (const command of ['pnpm test', 'pnpm build']) {
-      expect(stepByRun(command)?.if, command).toBe("github.event_name != 'push'");
+      expect(stepByRun(command)?.if, command).toBe(
+        "github.event_name != 'push' || github.ref == 'refs/heads/main'",
+      );
     }
   });
 
