@@ -99,6 +99,20 @@ Un código distinto de `0` hace fallar el job de GitHub Actions. Si el cierre de
 - Reintento: solo ante timeout o HTTP 429, máximo un reintento por solicitud, usando `Retry-After` si el proveedor lo informó, o un backoff acotado fijo en caso contrario.
 - Dos ejecuciones simultáneas del comando producen como máximo una consulta externa: la segunda no adquiere el lease y termina con código `2` sin llamar al proveedor.
 
+## Recuperar marcadores de partidos ya terminados (WAT-274)
+
+La ventana normal va de ayer a +7 días, así que un partido que terminó fuera de esa ventana
+(p. ej. antes de que existieran las columnas de marcador, WAT-230) queda en «Sin resultado» y no
+vuelve a pedirse. Para completarlo una sola vez:
+
+- Workflow `Matches sync` → **Run workflow** → `backfill_from` = `YYYY-MM-DD` (el día del partido
+  más antiguo sin resultado), o localmente `MATCHES_SYNC_BACKFILL_FROM=YYYY-MM-DD`.
+- Solo aplica a football-data.org; con API-Football se ignora. Una fecha inválida termina con
+  código 2 sin consultar al proveedor. Vacío (el cron diario) = ventana normal.
+- Es un único pedido para todo el rango: si el proveedor lo rechaza por largo, el resumen lo
+  informa como error; repetir con una fecha más cercana.
+- `upsert_match_fixture` no pisa un marcador existente con `NULL`: repetirlo es seguro.
+
 ## Estado de la validación
 
 Esta corrida documentada es de diseño/tests con dobles falsos (cliente, store, lease y reloj fake) — ver `apps/api/src/modules/matches/application/sync-matches.test.ts`. Todavía no se ejecutó contra la cuenta real de API-Football ni contra un proyecto Supabase real desde este comando. Esa validación de punta a punta, con evidencia sanitizada real, es responsabilidad de B1.4.

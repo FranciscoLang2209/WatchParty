@@ -589,6 +589,21 @@ describe('syncFootballDataOrgMatches', () => {
     ]);
   });
 
+  it('con backfillFrom pide desde esa fecha hasta el fin de la ventana normal (WAT-274)', async () => {
+    const clock = new FakeClock();
+    const store = new FakeMatchStore(clock);
+    const client = new FakeFootballDataOrgClient([footballSuccess([])]);
+
+    await syncFootballDataOrgMatches(
+      { client, store, clock, owner: 'owner-1' },
+      { ...FOOTBALL_CONFIG, backfillFrom: '2026-08-15' },
+    );
+
+    expect(client.calls).toEqual([
+      { competitionCode: 'PL', season: '2026', dateFrom: '2026-08-15', dateTo: '2026-09-19' },
+    ]);
+  });
+
   it.each([
     ['cambio de mes', Date.UTC(2026, 9, 28, 10), '2026-10-27', '2026-11-04'],
     ['cambio de año', Date.UTC(2026, 11, 28, 10), '2026-12-27', '2027-01-04'],

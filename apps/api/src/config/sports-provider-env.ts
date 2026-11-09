@@ -63,6 +63,28 @@ export function resolveSyncProvider(env: NodeJS.ProcessEnv = process.env): SyncP
   );
 }
 
+/**
+ * Fecha opcional `MATCHES_SYNC_BACKFILL_FROM` (`YYYY-MM-DD`, WAT-274): adelanta
+ * el inicio de la ventana de football-data.org para recuperar marcadores de
+ * partidos ya terminados. Sin valor devuelve `undefined` (ventana normal). Un
+ * valor que no es una fecha de calendario lanza, y el comando sale con código 2.
+ */
+export function resolveBackfillFrom(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const raw = env.MATCHES_SYNC_BACKFILL_FROM?.trim();
+
+  if (!raw) {
+    return undefined;
+  }
+
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(`${raw}T00:00:00.000Z`) : null;
+
+  if (!parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== raw) {
+    throw new Error(`MATCHES_SYNC_BACKFILL_FROM inválido: "${raw}". Formato esperado: YYYY-MM-DD.`);
+  }
+
+  return raw;
+}
+
 export function loadSportsProviderEnv(env: NodeJS.ProcessEnv = process.env): SportsProviderEnv {
   return requireEnvVars(REQUIRED_SPORTS_PROVIDER_ENV_VARS, env);
 }

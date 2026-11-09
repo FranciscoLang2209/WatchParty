@@ -3,6 +3,7 @@ import {
   DEFAULT_SYNC_PROVIDER,
   loadFootballDataOrgEnv,
   loadSportsProviderEnv,
+  resolveBackfillFrom,
   resolveSyncProvider,
 } from './sports-provider-env.js';
 
@@ -62,5 +63,22 @@ describe('loadSportsProviderEnv (API-Football)', () => {
     expect(
       loadSportsProviderEnv({ API_FOOTBALL_BASE_URL: 'https://x', API_FOOTBALL_KEY: 'k' }),
     ).toEqual({ API_FOOTBALL_BASE_URL: 'https://x', API_FOOTBALL_KEY: 'k' });
+  });
+});
+
+describe('resolveBackfillFrom (WAT-274)', () => {
+  it('sin valor o en blanco no hay recuperación', () => {
+    expect(resolveBackfillFrom({})).toBeUndefined();
+    expect(resolveBackfillFrom({ MATCHES_SYNC_BACKFILL_FROM: '  ' })).toBeUndefined();
+  });
+
+  it('acepta una fecha YYYY-MM-DD válida', () => {
+    expect(resolveBackfillFrom({ MATCHES_SYNC_BACKFILL_FROM: ' 2026-10-17 ' })).toBe('2026-10-17');
+  });
+
+  it.each(['17/10/2026', '2026-10-17T00:00:00Z', '2026-02-30', 'ayer'])('rechaza %s', (value) => {
+    expect(() => resolveBackfillFrom({ MATCHES_SYNC_BACKFILL_FROM: value })).toThrow(
+      'MATCHES_SYNC_BACKFILL_FROM',
+    );
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { agendaWindow } from './match-window.js';
+import { agendaWindow, backfillWindow } from './match-window.js';
 
 describe('agendaWindow', () => {
   it('va desde las 00:00 UTC de ayer hasta las 00:00 UTC del día posterior a los próximos siete días', () => {
@@ -41,5 +41,20 @@ describe('agendaWindow', () => {
       from: '2026-12-30T00:00:00.000Z',
       to: '2027-01-08T00:00:00.000Z',
     });
+  });
+});
+
+describe('backfillWindow (WAT-274)', () => {
+  const now = new Date('2026-11-09T15:00:00.000Z');
+
+  it('adelanta el inicio a la fecha pedida y conserva el fin de la agenda', () => {
+    expect(backfillWindow(now, '2026-10-17')).toEqual({
+      from: '2026-10-17T00:00:00.000Z',
+      to: agendaWindow(now).to,
+    });
+  });
+
+  it('una fecha posterior al inicio de la agenda no recorta la ventana', () => {
+    expect(backfillWindow(now, '2026-11-09')).toEqual(agendaWindow(now));
   });
 });
