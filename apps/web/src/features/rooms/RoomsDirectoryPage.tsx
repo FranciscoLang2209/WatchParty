@@ -11,7 +11,10 @@ import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/auth/useAuth';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { MatchCard } from '@/features/matches/MatchCard';
+import { kickoffDay } from '@/features/matches/format';
 import { DirectoryStatePanel } from './DirectoryStatePanel';
 import { listMatches } from '@/features/matches/api';
 import { MatchesApiError, isCancelled, type Match } from '@/features/matches/types';
@@ -51,6 +54,20 @@ type Favorito =
   | { status: 'error' };
 
 const MENSAJE_INESPERADO = 'No pudimos cargar el directorio. Intentá de nuevo.';
+
+// `YYYY-MM-DD` es un día de calendario, no un instante: se arma y se formatea en UTC
+// para que la zona del dispositivo no lo corra un día.
+const diaFormatter = new Intl.DateTimeFormat('es-AR', {
+  timeZone: 'UTC',
+  day: 'numeric',
+  month: 'long',
+});
+
+function formatearDia(fecha: string): string {
+  const [anio, mes, dia] = fecha.split('-').map(Number);
+
+  return diaFormatter.format(new Date(Date.UTC(anio!, mes! - 1, dia!)));
+}
 
 /** Los estados reales del catálogo que el directorio muestra; `todos` los junta. */
 type FiltroEstado = 'todos' | Match['status'];
@@ -166,6 +183,10 @@ export function RoomsDirectoryPage() {
   const reintentando = useRef(false);
   const [filtroEstado, setFiltroEstado] = useState<FiltroEstado>('todos');
   const botonTodosEstado = useRef<HTMLButtonElement>(null);
+  // Día elegido (`YYYY-MM-DD`); vacío no restringe el listado.
+  const [fecha, setFecha] = useState('');
+  const fechaId = useId();
+  const inputFecha = useRef<HTMLInputElement>(null);
   const botonActualizar = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -309,16 +330,32 @@ export function RoomsDirectoryPage() {
         : [];
   // El selector de estado sólo recorta las secciones ya calculadas: no pide ni
   // reordena nada.
-  const mostradas =
+  const porEstado =
     filtroEstado === 'todos'
       ? porEquipo
       : porEquipo.filter((seccion) => seccion.estado === filtroEstado);
+  // La fecha sólo recorta lo ya calculado, por el día en que se juega cada partido
+  // en la zona de presentación de la app: no pide nada y las secciones se recalculan.
+  const mostradas =
+    fecha === ''
+      ? porEstado
+      : seccionesVisibles(
+          porEstado
+            .flatMap((seccion) => seccion.matches)
+            .filter((partido) => kickoffDay(partido.kickoffAt) === fecha),
+        );
 
   // El panel que tenía el foco desaparece al volver: lo recibe el «Todos» del
   // selector de estado, que sigue en pantalla.
   const volverATodosLosEstados = useCallback(() => {
     setFiltroEstado('todos');
     botonTodosEstado.current?.focus();
+  }, []);
+
+  // El control que tenía el foco desaparece al quitar la fecha: lo recibe el campo.
+  const quitarFecha = useCallback(() => {
+    setFecha('');
+    inputFecha.current?.focus();
   }, []);
 
   return (
@@ -339,9 +376,9 @@ export function RoomsDirectoryPage() {
         </header>
 
         {estado.status === 'ready' ? (
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
             {hayPartidos ? (
-              <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-end gap-3">
                 <div role="group" aria-label="Filtrar partidos" className="flex flex-wrap gap-2">
                   {FILTROS.map(({ valor, etiqueta }) => (
                     <Button
@@ -375,6 +412,23 @@ export function RoomsDirectoryPage() {
                     </Button>
                   ))}
                 </div>
+
+                <div className="flex w-full min-w-0 flex-col gap-2 sm:w-auto">
+                  <Label htmlFor={fechaId}>Filtrar por fecha</Label>
+                  <Input
+                    ref={inputFecha}
+                    id={fechaId}
+                    type="date"
+                    value={fecha}
+                    onChange={(evento) => setFecha(evento.target.value)}
+                  />
+                </div>
+
+                {fecha !== '' ? (
+                  <Button type="button" variant="ghost" onClick={quitarFecha}>
+                    Quitar fecha
+                  </Button>
+                ) : null}
               </div>
             ) : null}
 
@@ -547,7 +601,7 @@ export function RoomsDirectoryPage() {
           />
         ) : null}
 
-        {porEquipo.length > 0 && mostradas.length === 0 ? (
+        {porEquipo.length > 0 && porEstado.length === 0 ? (
           <DirectoryStatePanel
             role="status"
             icon={CalendarX}
@@ -562,6 +616,26 @@ export function RoomsDirectoryPage() {
                 onClick={volverATodosLosEstados}
               >
                 Ver todos los partidos
+              </Button>
+            }
+          />
+        ) : null}
+
+        {porEstado.length > 0 && fecha !== '' && mostradas.length === 0 ? (
+          <DirectoryStatePanel
+            role="status"
+            icon={CalendarX}
+            title="No hay partidos ese día"
+            message={`No hay partidos el ${formatearDia(fecha)} en la agenda disponible.`}
+            panelRef={panelFoco}
+            action={
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={quitarFecha}
+              >
+                Ver todos los días
               </Button>
             }
           />

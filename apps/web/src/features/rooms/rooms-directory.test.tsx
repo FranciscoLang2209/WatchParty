@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -2027,5 +2027,249 @@ describe('Directorio de salas — selector Todos / En vivo / Próximos', () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fromMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('Directorio de salas — filtro por fecha', () => {
+  // Argentina es UTC-3: los instantes de abajo cruzan la medianoche de Buenos Aires.
+  const partido = (
+    id: string,
+    kickoffAt: string,
+    status: 'live' | 'scheduled',
+    homeTeam: string,
+  ) => ({ ...river, id, kickoffAt, status, homeTeam, homeTeamId: `team-${id}` });
+
+  // 6/11 a las 23:30 en Buenos Aires, aunque en UTC ya es 7/11.
+  const finDelSeis = partido('fin-del-seis', '2026-11-07T02:30:00Z', 'scheduled', 'Fin Seis');
+  // 7/11 a las 00:30 en Buenos Aires.
+  const inicioDelSiete = partido(
+    'inicio-del-siete',
+    '2026-11-07T03:30:00Z',
+    'scheduled',
+    'Inicio Siete',
+  );
+  // 7/11 a las 18:00 en Buenos Aires.
+  const tardeDelSiete = partido('tarde-del-siete', '2026-11-07T21:00:00Z', 'live', 'Tarde Siete');
+  // 7/11 a las 23:59 en Buenos Aires, ya es 8/11 en UTC.
+  const finDelSiete = partido('fin-del-siete', '2026-11-08T02:59:00Z', 'scheduled', 'Fin Siete');
+  const delOcho = partido('del-ocho', '2026-11-08T15:00:00Z', 'scheduled', 'Del Ocho');
+
+  // Orden de la API mezclado a propósito.
+  const agenda = [delOcho, finDelSiete, tardeDelSiete, finDelSeis, inicioDelSiete];
+
+  async function abrir(matches: unknown[] = agenda) {
+    conSesion();
+    fetchSpy.mockResolvedValue(jsonResponse({ matches }));
+
+    renderAt('/rooms');
+    const m = await directorio();
+    await m.findByLabelText('Filtrar por fecha');
+
+    return m;
+  }
+
+  function campo(m: ReturnType<typeof within>) {
+    return m.getByLabelText('Filtrar por fecha') as HTMLInputElement;
+  }
+
+  function elegirFecha(m: ReturnType<typeof within>, valor: string) {
+    fireEvent.change(campo(m), { target: { value: valor } });
+  }
+
+  function equipos(m: ReturnType<typeof within>) {
+    return m
+      .queryAllByRole('link', { name: /Ver partido/ })
+      .map((enlace: HTMLElement) =>
+        enlace.getAttribute('aria-label')?.replace(/^Ver partido: | vs\..*$/g, ''),
+      );
+  }
+
+  it('ofrece un control de fecha con nombre y vacío, y la fecha vacía no restringe el listado', async () => {
+    const m = await abrir();
+
+    expect(campo(m)).toHaveAttribute('type', 'date');
+    expect(campo(m)).toHaveValue('');
+    expect(equipos(m)).toEqual([
+      'Tarde Siete',
+      'Del Ocho',
+      'Fin Siete',
+      'Fin Seis',
+      'Inicio Siete',
+    ]);
+    expect(m.queryByRole('button', { name: 'Quitar fecha' })).not.toBeInTheDocument();
+  });
+
+  it('un día con partidos muestra sólo los de ese día, con sus secciones y el orden de la API', async () => {
+    const m = await abrir();
+
+    elegirFecha(m, '2026-11-07');
+
+    expect(equipos(m)).toEqual(['Tarde Siete', 'Fin Siete', 'Inicio Siete']);
+    expect(
+      within(m.getByRole('region', { name: 'En vivo' })).getByText(/Tarde Siete/),
+    ).toBeInTheDocument();
+    expect(equipos(within(m.getByRole('region', { name: 'Próximos' })))).toEqual([
+      'Fin Siete',
+      'Inicio Siete',
+    ]);
+  });
+
+  it('recalcula las secciones: un día sin partidos en vivo no muestra En vivo', async () => {
+    const m = await abrir();
+
+    elegirFecha(m, '2026-11-08');
+
+    expect(equipos(m)).toEqual(['Del Ocho']);
+    expect(m.queryByRole('region', { name: 'En vivo' })).not.toBeInTheDocument();
+    expect(m.getByRole('region', { name: 'Próximos' })).toBeInTheDocument();
+  });
+
+  it('cerca de la medianoche cuenta el día de Buenos Aires, no el del instante UTC', async () => {
+    const m = await abrir();
+
+    // 23:30 del 6 en Buenos Aires: es del día 6 aunque en UTC ya sea el 7.
+    elegirFecha(m, '2026-11-06');
+    expect(equipos(m)).toEqual(['Fin Seis']);
+
+    // 00:30 del 7: pasó la medianoche local, ya es del 7.
+    elegirFecha(m, '2026-11-07');
+    expect(equipos(m)).toContain('Inicio Siete');
+    expect(equipos(m)).not.toContain('Fin Seis');
+
+    // 23:59 del 7 en Buenos Aires sigue siendo del 7 aunque en UTC ya sea el 8.
+    expect(equipos(m)).toContain('Fin Siete');
+    elegirFecha(m, '2026-11-08');
+    expect(equipos(m)).not.toContain('Fin Siete');
+  });
+
+  it('el día elegido es un día de calendario: no se corre aunque el dispositivo esté en otra zona', async () => {
+    conSesion();
+    // Una respuesta nueva por vuelta: el cuerpo de una `Response` se lee una sola vez.
+    fetchSpy.mockImplementation(() => Promise.resolve(jsonResponse({ matches: agenda })));
+
+    try {
+      for (const zona of ['Pacific/Kiritimati', 'Pacific/Pago_Pago', 'America/Los_Angeles']) {
+        vi.stubEnv('TZ', zona);
+        const vista = renderAt('/rooms');
+        const m = await directorio();
+        await m.findByLabelText('Filtrar por fecha');
+
+        elegirFecha(m, '2026-11-06');
+        expect(equipos(m)).toEqual(['Fin Seis']);
+        elegirFecha(m, '2026-11-07');
+        expect(equipos(m)).toEqual(['Tarde Siete', 'Fin Siete', 'Inicio Siete']);
+        elegirFecha(m, '2026-11-20');
+        expect(await m.findByRole('status')).toHaveTextContent(
+          'No hay partidos el 20 de noviembre en la agenda disponible.',
+        );
+
+        vista.unmount();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('un día sin partidos lo dice, sin prometer más agenda, y permite volver a ver todos', async () => {
+    const user = userEvent.setup();
+    const m = await abrir();
+
+    elegirFecha(m, '2026-11-20');
+
+    const aviso = await m.findByRole('status');
+
+    expect(within(aviso).getByRole('heading', { level: 2 })).toHaveTextContent(
+      'No hay partidos ese día',
+    );
+    expect(aviso).toHaveTextContent('No hay partidos el 20 de noviembre en la agenda disponible.');
+    expect(aviso.textContent).not.toMatch(/próxim|temporada|semana|pronto|más adelante/i);
+    expect(equipos(m)).toEqual([]);
+    expect(m.queryByRole('region')).not.toBeInTheDocument();
+
+    await user.click(within(aviso).getByRole('button', { name: 'Ver todos los días' }));
+
+    expect(campo(m)).toHaveValue('');
+    expect(campo(m)).toHaveFocus();
+    expect(equipos(m)).toHaveLength(5);
+  });
+
+  it('el día del mensaje no se corre: primero de mes y último de año se leen tal cual', async () => {
+    const m = await abrir();
+
+    elegirFecha(m, '2026-11-01');
+    expect(await m.findByRole('status')).toHaveTextContent('No hay partidos el 1 de noviembre');
+
+    elegirFecha(m, '2026-12-31');
+    expect(await m.findByRole('status')).toHaveTextContent('No hay partidos el 31 de diciembre');
+  });
+
+  it('Quitar fecha aparece sólo con una fecha elegida, la limpia y deja el foco en el campo', async () => {
+    const user = userEvent.setup();
+    const m = await abrir();
+
+    elegirFecha(m, '2026-11-08');
+    await user.click(await m.findByRole('button', { name: 'Quitar fecha' }));
+
+    expect(campo(m)).toHaveValue('');
+    expect(campo(m)).toHaveFocus();
+    expect(equipos(m)).toHaveLength(5);
+    expect(m.queryByRole('button', { name: 'Quitar fecha' })).not.toBeInTheDocument();
+  });
+
+  it('un partido con fecha ilegible se ve sin fecha elegida y no pertenece a ningún día', async () => {
+    const roto = partido('roto', 'mañana', 'scheduled', 'Roto');
+    const m = await abrir([roto, tardeDelSiete]);
+
+    expect(equipos(m)).toEqual(['Tarde Siete', 'Roto']);
+
+    elegirFecha(m, '2026-11-07');
+
+    expect(equipos(m)).toEqual(['Tarde Siete']);
+  });
+
+  it('opera sobre lo ya cargado: no vuelve a consultar la API ni Supabase', async () => {
+    const m = await abrir();
+
+    elegirFecha(m, '2026-11-07');
+    elegirFecha(m, '2026-11-08');
+    elegirFecha(m, '');
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+
+  it('el campo se alcanza con Tab y su etiqueta lo identifica', async () => {
+    const user = userEvent.setup();
+    const m = await abrir();
+
+    for (let vuelta = 0; vuelta < 30 && document.activeElement !== campo(m); vuelta += 1) {
+      await user.tab();
+    }
+
+    expect(campo(m)).toHaveFocus();
+    expect(m.getByLabelText('Filtrar por fecha')).toBe(campo(m));
+  });
+
+  it('no se ofrece mientras carga, ante un error ni sin partidos del directorio', async () => {
+    conSesion();
+    fetchSpy.mockReturnValue(new Promise(() => {}));
+    const cargando = renderAt('/rooms');
+    const enCarga = await directorio();
+    await enCarga.findByRole('status');
+    expect(enCarga.queryByLabelText('Filtrar por fecha')).not.toBeInTheDocument();
+    cargando.unmount();
+
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    const conError = renderAt('/rooms');
+    const enError = await directorio();
+    await enError.findByRole('alert');
+    expect(enError.queryByLabelText('Filtrar por fecha')).not.toBeInTheDocument();
+    conError.unmount();
+
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [] }));
+    renderAt('/rooms');
+    const vacio = await directorio();
+    await vacio.findByText(/Todavía no hay partidos ni salas disponibles/);
+    expect(vacio.queryByLabelText('Filtrar por fecha')).not.toBeInTheDocument();
   });
 });
