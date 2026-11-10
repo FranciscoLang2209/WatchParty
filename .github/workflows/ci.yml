@@ -1,5 +1,12 @@
 name: CI
 
+# Qué corre en cada evento:
+#   push (ramas)      -> controles rápidos: formato, lint y typecheck.
+#   push a main       -> validación completa: lo anterior + tests y build, después
+#                        de cada merge (un PR desactualizado puede romper main).
+#   pull_request      -> validación completa: lo anterior + tests y build.
+#   workflow_dispatch -> validación completa, a pedido (diagnóstico).
+# La suite completa se ejecuta antes de subir con `pnpm validate` (hook pre-push).
 on:
   push:
   pull_request:
@@ -41,7 +48,9 @@ jobs:
         run: pnpm typecheck
 
       - name: Test
+        if: github.event_name != 'push' || github.ref == 'refs/heads/main'
         run: pnpm test
 
       - name: Build
+        if: github.event_name != 'push' || github.ref == 'refs/heads/main'
         run: pnpm build
