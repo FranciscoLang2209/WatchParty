@@ -11,18 +11,30 @@ import { createFootballDataOrgClient } from '../modules/matches/infrastructure/f
 import { checkSyncEnv, syncEnvRequirements } from '../config/sync-preflight.js';
 import { SupabaseMatchStore } from '../modules/matches/infrastructure/supabase-match-store.js';
 import {
-  DEFAULT_SYNC_FOOTBALL_DATA_ORG_CONFIG,
-  syncFootballDataOrgMatches,
+  syncFootballDataOrgCompetitions,
   syncMatches,
-  type SyncMatchesResult,
+  type CompetitionSyncResult,
   type SyncMatchesSummary,
   type SyncRunDeps,
 } from '../modules/matches/application/sync-matches.js';
+import { DAILY_FOOTBALL_DATA_ORG_COMPETITIONS } from '../modules/matches/application/football-data-org-competitions.js';
 
-type ProviderRunner = (deps: SyncRunDeps) => Promise<SyncMatchesResult>;
+/** Resultado común a ambos proveedores; `competiciones` solo lo informa football-data.org. */
+interface ProviderRunResult {
+  exitCode: 0 | 1 | 2;
+  summary?: SyncMatchesSummary;
+  competiciones?: CompetitionSyncResult[];
+}
 
-function printSummary(summary: SyncMatchesSummary): void {
-  console.log(`Resumen de sincronización:\n${JSON.stringify(summary, null, 2)}`);
+type ProviderRunner = (deps: SyncRunDeps) => Promise<ProviderRunResult>;
+
+function printResult(result: ProviderRunResult): void {
+  if (result.competiciones) {
+    console.log(`Resultado por competición:\n${JSON.stringify(result.competiciones, null, 2)}`);
+  }
+  if (result.summary) {
+    console.log(`Resumen de sincronización:\n${JSON.stringify(result.summary, null, 2)}`);
+  }
 }
 
 /**
@@ -52,11 +64,21 @@ function createProviderRunner(
     apiKey: env.FOOTBALL_DATA_ORG_API_KEY,
   });
 
-  return (deps) =>
-    syncFootballDataOrgMatches(
+  // WAT-284: una corrida recorre todas las competiciones del sync diario con
+  // la misma ventana móvil. Las temporadas cerradas no se consultan acá: son
+  // del histórico manual (`matches:import-batch`).
+  return async (deps) => {
+    const result = await syncFootballDataOrgCompetitions(
       { ...deps, client },
-      { ...DEFAULT_SYNC_FOOTBALL_DATA_ORG_CONFIG, backfillFrom },
+      DAILY_FOOTBALL_DATA_ORG_COMPETITIONS,
+      { backfillFrom },
     );
+    return {
+      exitCode: result.exitCode,
+      summary: result.total,
+      competiciones: result.competiciones,
+    };
+  };
 }
 
 async function main(): Promise<void> {
@@ -97,7 +119,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  printSummary(result.summary);
+  printResult(result);
+  const failed = result.competiciones?.filter((c) => c.resultado !== 'ok') ?? [];
+  if (failed.length > 0) {
+    console.error(
+      `Competiciones con fallos: ${failed
+        .map((c) => `${c.competitionCode}:${c.season} (${c.resultado})`)
+        .join(', ')}`,
+    );
+  }
   process.exitCode = result.exitCode;
 }
 

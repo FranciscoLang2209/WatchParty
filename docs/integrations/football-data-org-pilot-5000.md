@@ -3,8 +3,60 @@
 ## Objetivo
 
 Probar cuántos partidos reales puede importar WatchParty desde football-data.org (plan Free) para
-el Tercer Steering, y estimar el camino a 5.000 partidos históricos. El sincronizador diario
-(`matches:sync`, Premier League 2026 con ventana móvil) no cambia.
+el Tercer Steering, y estimar el camino a 5.000 partidos históricos. WAT-284 completa el trabajo:
+amplía el sync diario a varias competiciones y deja la carga histórica completa lista para correr
+desde GitHub Actions contra demo.
+
+## Sync diario (WAT-284)
+
+`matches:sync` recorre una lista explícita de competiciones, siempre en su temporada vigente
+(`DAILY_FOOTBALL_DATA_ORG_COMPETITIONS` en
+`apps/api/src/modules/matches/application/football-data-org-competitions.ts`):
+
+| Competición      | Código | Temporada | Acceso verificado (2026-11-10)                 |
+| ---------------- | ------ | --------- | ---------------------------------------------- |
+| Premier League   | `PL`   | 2026      | 200, 380 partidos en calendario                |
+| Champions League | `CL`   | 2026      | 200, 144 partidos en calendario (fase de liga) |
+| La Liga          | `PD`   | 2026      | 200, 380 partidos en calendario                |
+| Serie A          | `SA`   | 2026      | 200, 380 partidos en calendario                |
+
+- Cada competición usa `syncFootballDataOrgMatches` con la misma ventana móvil (`dateFrom` y
+  `dateTo`) y, si se dispara con `backfill_from`, con el mismo inicio adelantado.
+- El límite por minuto (10) es uno solo para toda la corrida, reintentos incluidos. La cuota
+  diaria persistente es la de siempre: un pedido por competición, 4 por corrida.
+- Si una competición falla, la corrida sigue con las demás. Al final informa el resultado de cada
+  una y sale con 1. Sale con 2 solo si todas tenían el lease tomado.
+- **Selecciones:** hoy no hay ningún torneo con una edición vigente. El Mundial 2026 y la Eurocopa
+  2024 ya terminaron, así que el sync diario no los consulta. Se suman a la lista cuando el
+  proveedor publique el calendario de la próxima edición. Sus partidos ya jugados se cargan con el
+  histórico.
+- Las temporadas cerradas nunca entran al sync diario: solo se consultan con el histórico manual.
+
+Corrida local del 2026-11-10: los 4 pedidos dieron 200. La ventana de la semana venía vacía por la
+fecha FIFA. Con `MATCHES_SYNC_BACKFILL_FROM=2026-10-25` se importaron 25 partidos de PL, 18 de CL,
+25 de PD y 35 de SA.
+
+## Carga histórica completa (para `Run workflow`)
+
+Actions → **Matches import batch** → Run workflow, con este valor en `batch`:
+
+```text
+CL:2025,WC:2026,EC:2024,PL:2025,PD:2025,BL1:2025,SA:2025,FL1:2025,DED:2025,PPL:2025,ELC:2025,BSA:2025,PL:2024,PD:2024,CL:2024,SA:2024,BL1:2024
+```
+
+Son 17 pedidos y unos 5.280 partidos, sujeto a la cobertura real de cada temporada (ver "Camino a
+5.000 partidos"). El comando espera solo cuando llega al límite de 10 pedidos por minuto.
+
+El workflow corre en el entorno de GitHub Actions **`demo`** y escribe en la base de demo, nunca en
+la de producción:
+
+- Secretos del entorno `demo`: `DEMO_SUPABASE_URL`, `DEMO_SUPABASE_SERVICE_ROLE_KEY`,
+  `DEMO_SUPABASE_ANON_KEY` y `DEMO_WEB_ORIGIN`. La API key de football-data.org es la misma
+  cuenta del equipo (secretos de repositorio `FOOTBALL_DATA_ORG_*`).
+- Esos nombres no existen a nivel repositorio. Si el entorno no los tiene, llegan vacíos y el
+  preflight corta con código 2 antes de consultar al proveedor o escribir.
+- Un paso previo falla si `DEMO_SUPABASE_URL` es igual a la URL de producción.
+- Comparte el grupo de concurrencia con `Matches sync`, porque usan la misma API key.
 
 ## Cómo se corre
 
@@ -22,9 +74,8 @@ pnpm --filter @watchparty/api matches:import-batch
 MATCHES_IMPORT_BATCH="BL1:2025,SA:2025" pnpm --filter @watchparty/api matches:import-batch
 ```
 
-En demo se dispara con el workflow manual **Matches import batch** (Actions → Run workflow). El
-input `batch` acepta el mismo formato, y si se deja vacío corre el lote del piloto. Comparte el grupo de
-concurrencia con `Matches sync`, así que nunca corre al mismo tiempo que la sincronización diaria.
+En demo se dispara con el workflow manual **Matches import batch** (ver "Carga histórica
+completa"). El input `batch` acepta el mismo formato, y si se deja vacío corre el lote del piloto.
 
 - El lote se ordena Champions → selecciones → ligas, por si la cuota obliga a cortar.
 - Solo acepta las 12 competiciones del plan Free (`PL`, `PD`, `CL`, `WC`, `EC`, `ELC`, `PPL`,
@@ -35,8 +86,8 @@ concurrencia con `Matches sync`, así que nunca corre al mismo tiempo que la sin
 - Imprime el reporte en JSON y una tabla Markdown por competición y temporada con los pedidos,
   el status HTTP, los partidos devueltos, guardados y nuevos, y cuántos están finalizados con
   marcador.
-- Cada entrada consume un pedido de la cuota diaria propia de `football-data-org` (80 por día),
-  la misma que usa la sincronización diaria.
+- Cada entrada consume un pedido de la cuota diaria propia de `football-data-org` (80 por día).
+  La cuota se registra en la base donde se escribe: en demo es la de demo.
 
 ## Acceso verificado (2026-11-10)
 
@@ -95,9 +146,9 @@ Búsqueda y detalle (`GET /matches/search` y `GET /matches/:id`, con usuario aut
 
 ### Demo
 
-Pendiente: se corre con el workflow **Matches import batch** una vez mergeado, y la tabla que
-imprime se pega acá junto con un partido de Champions y uno de selecciones vistos en la búsqueda
-o el detalle de demo.
+Pendiente: crear el entorno `demo` con sus secretos, correr **Matches import batch** con el lote
+completo una vez mergeado, y pegar acá la tabla que imprime, junto con un partido de Champions y
+uno de selecciones vistos en la búsqueda o el detalle de demo.
 
 ## Hallazgo: marcador con definición por penales
 

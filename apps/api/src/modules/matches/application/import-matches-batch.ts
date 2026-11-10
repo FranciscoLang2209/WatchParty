@@ -12,26 +12,11 @@ import {
   type SyncClock,
   type SyncFootballDataOrgClient,
 } from './sync-matches.js';
-
-/**
- * Competiciones del plan Free de football-data.org, con el id que llevan sus
- * partidos. Confirmado con `GET /v4/competitions` el 2026-11-10. Copa
- * Libertadores (`CLI`) queda afuera: es `TIER_FOUR`.
- */
-export const FOOTBALL_DATA_ORG_FREE_COMPETITIONS: Readonly<Record<string, string>> = {
-  PL: '2021',
-  PD: '2014',
-  CL: '2001',
-  WC: '2000',
-  EC: '2018',
-  ELC: '2016',
-  PPL: '2017',
-  BL1: '2002',
-  SA: '2019',
-  FL1: '2015',
-  DED: '2003',
-  BSA: '2013',
-};
+import {
+  createPerMinuteThrottledClient,
+  FOOTBALL_DATA_ORG_FREE_COMPETITIONS,
+  type FootballDataOrgCompetitionSeason,
+} from './football-data-org-competitions.js';
 
 /**
  * Lote del piloto para el Tercer Steering: Champions y torneos de selecciones
@@ -39,12 +24,7 @@ export const FOOTBALL_DATA_ORG_FREE_COMPETITIONS: Readonly<Record<string, string
  */
 export const DEFAULT_IMPORT_BATCH = 'CL:2025,WC:2026,EC:2024,PL:2025,PD:2025';
 
-export interface ImportBatchEntry {
-  competitionCode: string;
-  competitionExternalId: string;
-  /** Año de inicio de la temporada, como lo entiende el proveedor. */
-  season: string;
-}
+export type ImportBatchEntry = FootballDataOrgCompetitionSeason;
 
 /**
  * Lee un lote `CODIGO:AÑO` separado por comas, p. ej. `CL:2025,WC:2026`.
@@ -130,8 +110,6 @@ export interface ImportBatchDeps {
   owner: string;
 }
 
-const PER_MINUTE_WINDOW_MS = 60_000;
-
 interface EntryCounters {
   statusHttp: (number | null)[];
   devueltos: number;
@@ -151,29 +129,13 @@ function readProviderMessage(body: unknown): string | undefined {
   return typeof message === 'string' ? message : undefined;
 }
 
-/**
- * Cada `importFootballDataOrgSeason` respeta el límite por minuto solo dentro
- * de su propia corrida. Un lote encadena varias, así que este cliente lleva la
- * cuenta de todo el lote para no superar el límite del proveedor.
- */
-function createThrottledCountingClient(
+/** Registra status, partidos devueltos y rechazos de cada pedido de la entrada en curso. */
+function createCountingClient(
   client: SyncFootballDataOrgClient,
-  clock: SyncClock,
-  perMinuteLimit: number,
   getCounters: () => EntryCounters,
 ): SyncFootballDataOrgClient {
-  let timestamps: number[] = [];
-
   return {
     async fetchMatches(params: FetchFootballDataOrgMatchesParams, signal?: AbortSignal) {
-      for (;;) {
-        const nowMs = clock.now().getTime();
-        timestamps = timestamps.filter((t) => nowMs - t < PER_MINUTE_WINDOW_MS);
-        if (timestamps.length < perMinuteLimit) break;
-        await clock.sleep(PER_MINUTE_WINDOW_MS - (nowMs - timestamps[0]!));
-      }
-      timestamps.push(clock.now().getTime());
-
       const outcome: FootballDataOrgFetchOutcome = await client.fetchMatches(params, signal);
       const counters = getCounters();
 
@@ -228,10 +190,8 @@ export async function importMatchesBatch(
 ): Promise<ImportBatchReport> {
   const { dailyQuotaLimit, perMinuteLimit } = DEFAULT_SYNC_FOOTBALL_DATA_ORG_CONFIG;
   let counters: EntryCounters = { statusHttp: [], devueltos: 0, finalizadosConMarcador: 0 };
-  const client = createThrottledCountingClient(
-    deps.client,
-    deps.clock,
-    perMinuteLimit,
+  const client = createCountingClient(
+    createPerMinuteThrottledClient(deps.client, deps.clock, perMinuteLimit),
     () => counters,
   );
   const store = createCountingStore(deps.store, () => counters);

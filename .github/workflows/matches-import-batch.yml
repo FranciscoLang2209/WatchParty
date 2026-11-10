@@ -1,8 +1,8 @@
 name: Matches import batch
 
-# Importación manual por lotes de football-data.org (piloto del Tercer
-# Steering). Solo se dispara a mano y no reemplaza al sincronizador diario
-# (`matches-sync.yml`), que mantiene su configuración. Ver
+# Carga histórica manual de football-data.org (WAT-284) contra la base de
+# DEMO. Solo se dispara a mano. El sync diario de producción es otro workflow
+# (`matches-sync.yml`). Valor del lote completo para pegar en `batch`:
 # docs/integrations/football-data-org-pilot-5000.md.
 on:
   workflow_dispatch:
@@ -15,8 +15,8 @@ on:
 permissions:
   contents: read
 
-# Mismo grupo que `Matches sync`: una importación y la sincronización diaria
-# nunca corren a la vez y comparten la cuota del proveedor.
+# Mismo grupo que `Matches sync`: las dos usan la misma API key del proveedor,
+# así que nunca corren a la vez y no se pisan el límite por minuto.
 concurrency:
   group: matches-sync-production
   cancel-in-progress: false
@@ -25,9 +25,26 @@ jobs:
   import:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Entorno de GitHub Actions con los secretos de Supabase de demo. Los
+    # nombres DEMO_* no existen a nivel repositorio: si el entorno no los
+    # tiene, llegan vacíos y el preflight del comando corta con código 2 antes
+    # de escribir. Nunca caen en los secretos de producción.
+    environment: demo
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Si alguien carga en demo la misma URL que producción, se corta acá,
+      # antes de instalar nada o consultar al proveedor.
+      - name: Check demo target
+        run: |
+          if [ -n "$DEMO_SUPABASE_URL" ] && [ "$DEMO_SUPABASE_URL" = "$PRODUCTION_SUPABASE_URL" ]; then
+            echo "DEMO_SUPABASE_URL apunta a la base de producción." >&2
+            exit 1
+          fi
+        env:
+          DEMO_SUPABASE_URL: ${{ secrets.DEMO_SUPABASE_URL }}
+          PRODUCTION_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -47,8 +64,8 @@ jobs:
           MATCHES_IMPORT_BATCH: ${{ inputs.batch }}
           FOOTBALL_DATA_ORG_BASE_URL: ${{ secrets.FOOTBALL_DATA_ORG_BASE_URL }}
           FOOTBALL_DATA_ORG_API_KEY: ${{ secrets.FOOTBALL_DATA_ORG_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.DEMO_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEMO_SUPABASE_SERVICE_ROLE_KEY }}
           # `config/env.ts` exige estas dos al importarse, aunque la importación no las use.
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          WEB_ORIGIN: ${{ secrets.WEB_ORIGIN }}
+          SUPABASE_ANON_KEY: ${{ secrets.DEMO_SUPABASE_ANON_KEY }}
+          WEB_ORIGIN: ${{ secrets.DEMO_WEB_ORIGIN }}
