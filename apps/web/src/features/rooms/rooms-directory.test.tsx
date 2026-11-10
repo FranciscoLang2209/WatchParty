@@ -2273,3 +2273,445 @@ describe('Directorio de salas — filtro por fecha', () => {
     expect(vacio.queryByLabelText('Filtrar por fecha')).not.toBeInTheDocument();
   });
 });
+
+describe('Directorio de salas — combinar y limpiar filtros', () => {
+  const PERFIL_URL = `${API_BASE}/me/profile`;
+  const DIA_7 = '2026-11-07T21:00:00Z'; // 7/11 a las 18:00 en Buenos Aires
+  const DIA_8 = '2026-11-08T15:00:00Z'; // 8/11 a las 12:00 en Buenos Aires
+
+  const partido = (
+    id: string,
+    status: 'live' | 'scheduled',
+    kickoffAt: string,
+    homeTeam: string,
+    homeTeamId: string,
+  ) => ({
+    ...river,
+    id,
+    status,
+    kickoffAt,
+    homeTeam,
+    homeTeamId,
+    awayTeam: 'Visita',
+    awayTeamId: 'team-visita',
+  });
+
+  // River es el favorito del perfil. Cada partido se distingue por su local.
+  const riverVivo7 = partido('river-vivo-7', 'live', DIA_7, 'River Vivo 7', 'team-river-plate');
+  const riverProx8 = partido(
+    'river-prox-8',
+    'scheduled',
+    DIA_8,
+    'River Prox 8',
+    'team-river-plate',
+  );
+  const racingVivo7 = partido('racing-vivo-7', 'live', DIA_7, 'Racing Vivo 7', 'team-racing-club');
+  const racingProx8 = partido(
+    'racing-prox-8',
+    'scheduled',
+    DIA_8,
+    'Racing Prox 8',
+    'team-racing-club',
+  );
+  const bocaProx7 = partido('boca-prox-7', 'scheduled', DIA_7, 'Boca Prox 7', 'team-boca-juniors');
+
+  // Orden de la API mezclado a propósito: dentro de cada sección debe respetarse.
+  const agenda = [racingProx8, bocaProx7, riverProx8, racingVivo7, riverVivo7];
+
+  const TODOS = ['Racing Vivo 7', 'River Vivo 7', 'Racing Prox 8', 'Boca Prox 7', 'River Prox 8'];
+
+  /** `/matches` responde la agenda y `/me/profile` el favorito River. */
+  function servidor(matches: unknown[] = agenda) {
+    fetchSpy.mockImplementation((input: unknown) =>
+      Promise.resolve(
+        String(input) === PERFIL_URL
+          ? jsonResponse({
+              profile: { displayName: 'M', bio: '', favoriteTeamId: 'team-river-plate' },
+            })
+          : jsonResponse({ matches }),
+      ),
+    );
+  }
+
+  async function abrir(matches: unknown[] = agenda) {
+    conSesion();
+    servidor(matches);
+    const vista = renderAt('/rooms');
+    const m = await directorio();
+    await m.findByRole('group', { name: 'Filtrar partidos' });
+
+    return { m, vista };
+  }
+
+  type Vista = ReturnType<typeof within>;
+
+  function enlaces(m: Vista) {
+    return m
+      .queryAllByRole('link', { name: /Ver partido/ })
+      .map((enlace: HTMLElement) =>
+        enlace.getAttribute('aria-label')?.replace(/^Ver partido: | vs\..*$/g, ''),
+      );
+  }
+
+  const equipo = (m: Vista, nombre: 'Todos' | 'Mi equipo') =>
+    within(m.getByRole('group', { name: 'Filtrar partidos' })).getByRole('button', {
+      name: nombre,
+    });
+
+  const estadoDe = (m: Vista, nombre: 'Todos' | 'En vivo' | 'Próximos') =>
+    within(m.getByRole('group', { name: 'Filtrar por estado' })).getByRole('button', {
+      name: nombre,
+    });
+
+  const campoFecha = (m: Vista) => m.getByLabelText('Filtrar por fecha') as HTMLInputElement;
+  const elegirFecha = (m: Vista, valor: string) =>
+    fireEvent.change(campoFecha(m), { target: { value: valor } });
+  const limpiar = (m: Vista) => m.queryByRole('button', { name: 'Limpiar filtros' });
+
+  async function miEquipo(m: Vista, user: ReturnType<typeof userEvent.setup>) {
+    await user.click(equipo(m, 'Mi equipo'));
+    await waitFor(() =>
+      expect(m.queryByText(/Buscando las salas de tu equipo/)).not.toBeInTheDocument(),
+    );
+  }
+
+  it('Mi equipo y estado se combinan: cada uno recorta el resultado del otro', async () => {
+    const user = userEvent.setup();
+    const { m } = await abrir();
+
+    await miEquipo(m, user);
+    expect(enlaces(m)).toEqual(['River Vivo 7', 'River Prox 8']);
+
+    await user.click(estadoDe(m, 'En vivo'));
+    expect(enlaces(m)).toEqual(['River Vivo 7']);
+
+    await user.click(estadoDe(m, 'Próximos'));
+    expect(enlaces(m)).toEqual(['River Prox 8']);
+
+    await user.click(estadoDe(m, 'Todos'));
+    expect(enlaces(m)).toEqual(['River Vivo 7', 'River Prox 8']);
+  });
+
+  it('Mi equipo y fecha se combinan: sólo los partidos del favorito de ese día', async () => {
+    const user = userEvent.setup();
+    const { m } = await abrir();
+
+    await miEquipo(m, user);
+    elegirFecha(m, '2026-11-08');
+    expect(enlaces(m)).toEqual(['River Prox 8']);
+
+    elegirFecha(m, '2026-11-07');
+    expect(enlaces(m)).toEqual(['River Vivo 7']);
+  });
+
+  it('estado y fecha se combinan sin Mi equipo: lo de todos los equipos en ese estado y día', async () => {
+    const user = userEvent.setup();
+    const { m } = await abrir();
+
+    await user.click(estadoDe(m, 'En vivo'));
+    elegirFecha(m, '2026-11-07');
+    expect(enlaces(m)).toEqual(['Racing Vivo 7', 'River Vivo 7']);
+
+    await user.click(estadoDe(m, 'Próximos'));
+    expect(enlaces(m)).toEqual(['Boca Prox 7']);
+  });
+
+  it('los tres filtros a la vez dan el mismo resultado sin importar el orden en que se elijan', async () => {
+    const user = userEvent.setup();
+    const resultados: (string | undefined)[][] = [];
+
+    for (const orden of [
+      ['equipo', 'estado', 'fecha'],
+      ['fecha', 'estado', 'equipo'],
+      ['estado', 'equipo', 'fecha'],
+    ]) {
+      const { m, vista } = await abrir();
+
+      for (const filtro of orden) {
+        if (filtro === 'equipo') await miEquipo(m, user);
+        if (filtro === 'estado') await user.click(estadoDe(m, 'Próximos'));
+        if (filtro === 'fecha') elegirFecha(m, '2026-11-08');
+      }
+
+      resultados.push(enlaces(m));
+      vista.unmount();
+    }
+
+    expect(resultados).toEqual([['River Prox 8'], ['River Prox 8'], ['River Prox 8']]);
+  });
+
+  it('cambiar o quitar un filtro no anula ni reinicia a los otros dos', async () => {
+    const user = userEvent.setup();
+    const { m } = await abrir();
+
+    await miEquipo(m, user);
+    await user.click(estadoDe(m, 'Próximos'));
+    elegirFecha(m, '2026-11-08');
+    expect(enlaces(m)).toEqual(['River Prox 8']);
+
+    await user.click(estadoDe(m, 'Todos'));
+    expect(equipo(m, 'Mi equipo')).toHaveAttribute('aria-pressed', 'true');
+    expect(campoFecha(m)).toHaveValue('2026-11-08');
+    expect(enlaces(m)).toEqual(['River Prox 8']);
+
+    await user.click(estadoDe(m, 'Próximos'));
+    await user.click(m.getByRole('button', { name: 'Quitar fecha' }));
+    expect(equipo(m, 'Mi equipo')).toHaveAttribute('aria-pressed', 'true');
+    expect(estadoDe(m, 'Próximos')).toHaveAttribute('aria-pressed', 'true');
+    expect(enlaces(m)).toEqual(['River Prox 8']);
+
+    await user.click(equipo(m, 'Todos'));
+    expect(estadoDe(m, 'Próximos')).toHaveAttribute('aria-pressed', 'true');
+    expect(enlaces(m)).toEqual(['Racing Prox 8', 'Boca Prox 7', 'River Prox 8']);
+  });
+
+  it('una combinación sin coincidencias lo dice y deja limpiar, sin perder los otros filtros', async () => {
+    const user = userEvent.setup();
+    const { m } = await abrir();
+
+    await miEquipo(m, user);
+    await user.click(estadoDe(m, 'En vivo'));
+    elegirFecha(m, '2026-11-08');
+
+    const aviso = await m.findByRole('status');
+
+    expect(within(aviso).getByRole('heading', { level: 2 })).toHaveTextContent(
+      'No hay partidos ese día',
+    );
+    expect(aviso).toHaveTextContent('8 de noviembre');
+    expect(enlaces(m)).toEqual([]);
+    expect(equipo(m, 'Mi equipo')).toHaveAttribute('aria-pressed', 'true');
+    expect(estadoDe(m, 'En vivo')).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(limpiar(m)!);
+
+    expect(enlaces(m)).toEqual(TODOS);
+    expect(m.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('Limpiar filtros no se ofrece sin filtros y aparece con cualquiera de los tres', async () => {
+    const user = userEvent.setup();
+    const { m } = await abrir();
+
+    expect(limpiar(m)).not.toBeInTheDocument();
+
+    await miEquipo(m, user);
+    expect(limpiar(m)).toBeInTheDocument();
+    await user.click(equipo(m, 'Todos'));
+    expect(limpiar(m)).not.toBeInTheDocument();
+
+    await user.click(estadoDe(m, 'En vivo'));
+    expect(limpiar(m)).toBeInTheDocument();
+    await user.click(estadoDe(m, 'Todos'));
+    expect(limpiar(m)).not.toBeInTheDocument();
+
+    elegirFecha(m, '2026-11-07');
+    expect(limpiar(m)).toBeInTheDocument();
+    elegirFecha(m, '');
+    expect(limpiar(m)).not.toBeInTheDocument();
+  });
+
+  it('Limpiar filtros vuelve a Todos, a todos los estados y a la fecha vacía, y deja el foco en Todos', async () => {
+    const user = userEvent.setup();
+    const { m } = await abrir();
+
+    await miEquipo(m, user);
+    await user.click(estadoDe(m, 'Próximos'));
+    elegirFecha(m, '2026-11-08');
+    expect(enlaces(m)).toEqual(['River Prox 8']);
+
+    await user.click(limpiar(m)!);
+
+    expect(equipo(m, 'Todos')).toHaveAttribute('aria-pressed', 'true');
+    expect(equipo(m, 'Mi equipo')).toHaveAttribute('aria-pressed', 'false');
+    expect(estadoDe(m, 'Todos')).toHaveAttribute('aria-pressed', 'true');
+    expect(estadoDe(m, 'En vivo')).toHaveAttribute('aria-pressed', 'false');
+    expect(estadoDe(m, 'Próximos')).toHaveAttribute('aria-pressed', 'false');
+    expect(campoFecha(m)).toHaveValue('');
+    expect(enlaces(m)).toEqual(TODOS);
+    // El botón desaparece al limpiar: el foco no se pierde en el body.
+    expect(limpiar(m)).not.toBeInTheDocument();
+    expect(equipo(m, 'Todos')).toHaveFocus();
+  });
+
+  it('Limpiar filtros se alcanza con Tab y se activa con Enter', async () => {
+    const user = userEvent.setup();
+    const { m } = await abrir();
+
+    elegirFecha(m, '2026-11-07');
+    await user.click(estadoDe(m, 'En vivo'));
+
+    for (let vuelta = 0; vuelta < 30 && document.activeElement !== limpiar(m); vuelta += 1) {
+      await user.tab();
+    }
+
+    expect(limpiar(m)).toHaveFocus();
+
+    await user.keyboard('{Enter}');
+
+    expect(campoFecha(m)).toHaveValue('');
+    expect(estadoDe(m, 'Todos')).toHaveAttribute('aria-pressed', 'true');
+    expect(equipo(m, 'Todos')).toHaveFocus();
+  });
+
+  it('limpiar no vuelve a consultar el catálogo ni el perfil: opera sobre lo ya cargado', async () => {
+    const user = userEvent.setup();
+    const { m } = await abrir();
+
+    await miEquipo(m, user);
+    await user.click(estadoDe(m, 'En vivo'));
+    await user.click(limpiar(m)!);
+
+    const urls = (fetchSpy.mock.calls as [string][]).map(([url]) => String(url));
+
+    expect(urls.filter((url) => url === PERFIL_URL)).toHaveLength(1);
+    expect(urls.filter((url) => url !== PERFIL_URL)).toHaveLength(1);
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+
+  it('Limpiar filtros no se ofrece mientras carga, ante un error ni sin partidos', async () => {
+    conSesion();
+    fetchSpy.mockReturnValue(new Promise(() => {}));
+    const cargando = renderAt('/rooms');
+    const enCarga = await directorio();
+    await enCarga.findByRole('status');
+    expect(limpiar(enCarga)).not.toBeInTheDocument();
+    cargando.unmount();
+
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    const conError = renderAt('/rooms');
+    const enError = await directorio();
+    await enError.findByRole('alert');
+    expect(limpiar(enError)).not.toBeInTheDocument();
+    conError.unmount();
+
+    fetchSpy.mockResolvedValue(jsonResponse({ matches: [] }));
+    renderAt('/rooms');
+    const vacio = await directorio();
+    await vacio.findByText(/Todavía no hay partidos ni salas disponibles/);
+    expect(limpiar(vacio)).not.toBeInTheDocument();
+  });
+
+  it('la selección no se persiste: al volver a entrar, todos los filtros están limpios', async () => {
+    const user = userEvent.setup();
+    const primera = await abrir();
+
+    await miEquipo(primera.m, user);
+    await user.click(estadoDe(primera.m, 'En vivo'));
+    elegirFecha(primera.m, '2026-11-07');
+
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+    primera.vista.unmount();
+
+    const segunda = await abrir();
+
+    expect(equipo(segunda.m, 'Todos')).toHaveAttribute('aria-pressed', 'true');
+    expect(estadoDe(segunda.m, 'Todos')).toHaveAttribute('aria-pressed', 'true');
+    expect(campoFecha(segunda.m)).toHaveValue('');
+    expect(limpiar(segunda.m)).not.toBeInTheDocument();
+    expect(enlaces(segunda.m)).toEqual(TODOS);
+  });
+
+  describe('al actualizar', () => {
+    const riverProx8Bis = partido(
+      'river-prox-8-bis',
+      'scheduled',
+      DIA_8,
+      'River Prox 8 Bis',
+      'team-river-plate',
+    );
+
+    /** La carga inicial responde `agenda`; la actualización la decide cada prueba. */
+    function conActualizacion() {
+      let actualizacion: (respuesta: Response) => void = () => {};
+      let consultasAlCatalogo = 0;
+
+      conSesion();
+      fetchSpy.mockImplementation((input: unknown) => {
+        if (String(input) === PERFIL_URL) {
+          return Promise.resolve(
+            jsonResponse({
+              profile: { displayName: 'M', bio: '', favoriteTeamId: 'team-river-plate' },
+            }),
+          );
+        }
+
+        consultasAlCatalogo += 1;
+
+        return consultasAlCatalogo === 1
+          ? Promise.resolve(jsonResponse({ matches: agenda }))
+          : new Promise<Response>((resolver) => (actualizacion = resolver));
+      });
+
+      return {
+        responder: (matches: unknown[]) =>
+          act(async () => actualizacion(jsonResponse({ matches }))),
+        consultas: () => consultasAlCatalogo,
+      };
+    }
+
+    async function abrirYFiltrar(user: ReturnType<typeof userEvent.setup>) {
+      renderAt('/rooms');
+      const m = await directorio();
+      await m.findByRole('group', { name: 'Filtrar partidos' });
+
+      await miEquipo(m, user);
+      await user.click(estadoDe(m, 'Próximos'));
+      elegirFecha(m, '2026-11-08');
+      expect(enlaces(m)).toEqual(['River Prox 8']);
+
+      return m;
+    }
+
+    it('conserva los tres filtros mientras actualiza y después recalcula con los datos nuevos', async () => {
+      const user = userEvent.setup();
+      const servidorActualizado = conActualizacion();
+      const m = await abrirYFiltrar(user);
+
+      await user.click(m.getByRole('button', { name: 'Actualizar' }));
+
+      // Mientras actualiza, la selección y las tarjetas filtradas siguen a la vista.
+      expect(await m.findByRole('button', { name: 'Actualizando…' })).toBeInTheDocument();
+      expect(equipo(m, 'Mi equipo')).toHaveAttribute('aria-pressed', 'true');
+      expect(estadoDe(m, 'Próximos')).toHaveAttribute('aria-pressed', 'true');
+      expect(campoFecha(m)).toHaveValue('2026-11-08');
+      expect(enlaces(m)).toEqual(['River Prox 8']);
+
+      // Sale Racing y River suma otro partido ese día; el de River en vivo y el de Boca no encajan.
+      await servidorActualizado.responder([riverProx8, riverProx8Bis, riverVivo7, bocaProx7]);
+
+      await waitFor(() => expect(enlaces(m)).toEqual(['River Prox 8', 'River Prox 8 Bis']));
+      expect(equipo(m, 'Mi equipo')).toHaveAttribute('aria-pressed', 'true');
+      expect(estadoDe(m, 'Próximos')).toHaveAttribute('aria-pressed', 'true');
+      expect(campoFecha(m)).toHaveValue('2026-11-08');
+      expect(m.queryByRole('region', { name: 'En vivo' })).not.toBeInTheDocument();
+      expect(servidorActualizado.consultas()).toBe(2);
+    });
+
+    it('si los datos nuevos no coinciden con la selección, lo dice y se puede limpiar', async () => {
+      const user = userEvent.setup();
+      const servidorActualizado = conActualizacion();
+      const m = await abrirYFiltrar(user);
+
+      await user.click(m.getByRole('button', { name: 'Actualizar' }));
+      // El próximo de River pasa al 7/11: con Mi equipo y Próximos, el 8/11 queda sin partidos.
+      await servidorActualizado.responder([
+        { ...riverProx8, kickoffAt: DIA_7 },
+        riverVivo7,
+        racingProx8,
+      ]);
+
+      const aviso = await m.findByRole('status');
+
+      expect(aviso).toHaveTextContent('8 de noviembre');
+      expect(enlaces(m)).toEqual([]);
+      expect(equipo(m, 'Mi equipo')).toHaveAttribute('aria-pressed', 'true');
+      expect(limpiar(m)).toBeInTheDocument();
+
+      await user.click(limpiar(m)!);
+
+      expect(enlaces(m)).toEqual(['River Vivo 7', 'River Prox 8', 'Racing Prox 8']);
+    });
+  });
+});
