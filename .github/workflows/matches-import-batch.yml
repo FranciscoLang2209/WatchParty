@@ -1,0 +1,54 @@
+name: Matches import batch
+
+# Importación manual por lotes de football-data.org (piloto del Tercer
+# Steering). Solo se dispara a mano y no reemplaza al sincronizador diario
+# (`matches-sync.yml`), que mantiene su configuración. Ver
+# docs/integrations/football-data-org-pilot-5000.md.
+on:
+  workflow_dispatch:
+    inputs:
+      batch:
+        description: 'Lote CODIGO:AÑO separado por comas. Vacío = lote del piloto (CL:2025,WC:2026,EC:2024,PL:2025,PD:2025).'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+# Mismo grupo que `Matches sync`: una importación y la sincronización diaria
+# nunca corren a la vez y comparten la cuota del proveedor.
+concurrency:
+  group: matches-sync-production
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Import matches batch
+        run: pnpm --filter @watchparty/api matches:import-batch
+        env:
+          MATCHES_IMPORT_BATCH: ${{ inputs.batch }}
+          FOOTBALL_DATA_ORG_BASE_URL: ${{ secrets.FOOTBALL_DATA_ORG_BASE_URL }}
+          FOOTBALL_DATA_ORG_API_KEY: ${{ secrets.FOOTBALL_DATA_ORG_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # `config/env.ts` exige estas dos al importarse, aunque la importación no las use.
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          WEB_ORIGIN: ${{ secrets.WEB_ORIGIN }}

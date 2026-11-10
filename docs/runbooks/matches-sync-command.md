@@ -116,3 +116,7 @@ vuelve a pedirse. Para completarlo una sola vez:
 ## Estado de la validación
 
 Esta corrida documentada es de diseño/tests con dobles falsos (cliente, store, lease y reloj fake) — ver `apps/api/src/modules/matches/application/sync-matches.test.ts`. Todavía no se ejecutó contra la cuenta real de API-Football ni contra un proyecto Supabase real desde este comando. Esa validación de punta a punta, con evidencia sanitizada real, es responsabilidad de B1.4.
+
+## Importación manual por lotes
+
+Para cargar temporadas completas de varias competiciones (piloto del Tercer Steering) existe un comando aparte, `matches:import-batch`, y el workflow manual `Matches import batch`. No modifica este sincronizador. Ver `docs/integrations/football-data-org-pilot-5000.md`.

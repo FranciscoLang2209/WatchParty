@@ -335,22 +335,25 @@ export function toFootballDataOrgDateRange(window: MatchWindow): {
   };
 }
 
+/**
+ * `window` acota el pedido a la ventana de la agenda. Sin `window` se pide la
+ * temporada completa (importación manual por lotes).
+ */
 function createFootballDataOrgSource(
   client: SyncFootballDataOrgClient,
-  config: SyncFootballDataOrgConfig,
-  window: MatchWindow,
+  config: { competitionCode: string; season: string },
+  window?: MatchWindow,
 ): SyncSource<FootballDataOrgFetchOutcome> {
-  const { dateFrom, dateTo } = toFootballDataOrgDateRange(window);
+  const dateRange = window ? toFootballDataOrgDateRange(window) : {};
 
   return {
-    // La API no pagina: un único pedido trae toda la ventana, así que `page`
-    // no se usa.
+    // La API no pagina: un único pedido trae toda la ventana (o la temporada),
+    // así que `page` no se usa.
     fetchPage: () =>
       client.fetchMatches({
         competitionCode: config.competitionCode,
         season: config.season,
-        dateFrom,
-        dateTo,
+        ...dateRange,
       }),
     // football-data.org no informa un restante diario en sus headers
     // (docs/integrations/football-data-org-coverage.md): no hay nada que
@@ -620,5 +623,30 @@ export async function syncFootballDataOrgMatches(
       perMinuteLimit: config.perMinuteLimit,
     },
     createFootballDataOrgSource(deps.client, config, window),
+  );
+}
+
+export type ImportFootballDataOrgSeasonConfig = Omit<SyncFootballDataOrgConfig, 'backfillFrom'>;
+
+/**
+ * Importación manual de una temporada completa de football-data.org: mismo
+ * motor (lease, cuota, límite por minuto, reintento y upsert idempotente) que
+ * la sincronización diaria, pero sin ventana de fechas. No cambia la
+ * configuración del sincronizador diario.
+ */
+export async function importFootballDataOrgSeason(
+  deps: SyncFootballDataOrgDeps,
+  config: ImportFootballDataOrgSeasonConfig,
+): Promise<SyncMatchesResult> {
+  return runSync(
+    deps,
+    {
+      provider: config.provider,
+      competitionExternalId: config.competitionExternalId,
+      season: config.season,
+      dailyQuotaLimit: config.dailyQuotaLimit,
+      perMinuteLimit: config.perMinuteLimit,
+    },
+    createFootballDataOrgSource(deps.client, config),
   );
 }
