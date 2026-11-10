@@ -15,6 +15,10 @@ import type {
   FootballDataOrgFetchOutcome,
 } from '../infrastructure/football-data-org-client.js';
 import type { NormalizedSportsFixture } from './normalized-sports-fixture.js';
+import {
+  createPerMinuteThrottledClient,
+  type FootballDataOrgCompetitionSeason,
+} from './football-data-org-competitions.js';
 import { normalizeApiFootballFixturesPage } from './api-football-normalizer.js';
 import {
   FOOTBALL_DATA_ORG_PROVIDER,
@@ -335,22 +339,25 @@ export function toFootballDataOrgDateRange(window: MatchWindow): {
   };
 }
 
+/**
+ * `window` acota el pedido a la ventana de la agenda. Sin `window` se pide la
+ * temporada completa (importación manual por lotes).
+ */
 function createFootballDataOrgSource(
   client: SyncFootballDataOrgClient,
-  config: SyncFootballDataOrgConfig,
-  window: MatchWindow,
+  config: { competitionCode: string; season: string },
+  window?: MatchWindow,
 ): SyncSource<FootballDataOrgFetchOutcome> {
-  const { dateFrom, dateTo } = toFootballDataOrgDateRange(window);
+  const dateRange = window ? toFootballDataOrgDateRange(window) : {};
 
   return {
-    // La API no pagina: un único pedido trae toda la ventana, así que `page`
-    // no se usa.
+    // La API no pagina: un único pedido trae toda la ventana (o la temporada),
+    // así que `page` no se usa.
     fetchPage: () =>
       client.fetchMatches({
         competitionCode: config.competitionCode,
         season: config.season,
-        dateFrom,
-        dateTo,
+        ...dateRange,
       }),
     // football-data.org no informa un restante diario en sus headers
     // (docs/integrations/football-data-org-coverage.md): no hay nada que
@@ -621,4 +628,126 @@ export async function syncFootballDataOrgMatches(
     },
     createFootballDataOrgSource(deps.client, config, window),
   );
+}
+
+export type ImportFootballDataOrgSeasonConfig = Omit<SyncFootballDataOrgConfig, 'backfillFrom'>;
+
+/**
+ * Importación manual de una temporada completa de football-data.org: mismo
+ * motor (lease, cuota, límite por minuto, reintento y upsert idempotente) que
+ * la sincronización diaria, pero sin ventana de fechas. No cambia la
+ * configuración del sincronizador diario.
+ */
+export async function importFootballDataOrgSeason(
+  deps: SyncFootballDataOrgDeps,
+  config: ImportFootballDataOrgSeasonConfig,
+): Promise<SyncMatchesResult> {
+  return runSync(
+    deps,
+    {
+      provider: config.provider,
+      competitionExternalId: config.competitionExternalId,
+      season: config.season,
+      dailyQuotaLimit: config.dailyQuotaLimit,
+      perMinuteLimit: config.perMinuteLimit,
+    },
+    createFootballDataOrgSource(deps.client, config),
+  );
+}
+
+export interface CompetitionSyncResult {
+  competitionCode: string;
+  season: string;
+  /** `lease-taken` si otra corrida tenía el mismo scope. */
+  resultado: 'ok' | 'error' | 'lease-taken';
+  summary: SyncMatchesSummary | null;
+}
+
+export interface SyncFootballDataOrgCompetitionsResult {
+  exitCode: 0 | 1 | 2;
+  competiciones: CompetitionSyncResult[];
+  total: SyncMatchesSummary;
+}
+
+function mergeReasonCounts(target: ReasonCount[], source: readonly ReasonCount[]): void {
+  for (const { reason, count } of source) {
+    const existing = target.find((entry) => entry.reason === reason);
+    if (existing) {
+      existing.count += count;
+    } else {
+      target.push({ reason, count });
+    }
+  }
+}
+
+/**
+ * Sync diario de football-data.org con varias competiciones (WAT-284): cada
+ * una usa `syncFootballDataOrgMatches` con la misma ventana móvil, con un
+ * límite por minuto compartido por toda la corrida y la cuota diaria
+ * persistente de siempre. Si una competición falla, sigue con las demás y el
+ * fallo queda en el resultado.
+ *
+ * Código de salida: 0 si todas terminaron bien, 2 si todas encontraron el
+ * lease tomado (otra corrida en curso) y 1 en cualquier otro caso con fallos.
+ */
+export async function syncFootballDataOrgCompetitions(
+  deps: SyncFootballDataOrgDeps,
+  competitions: readonly FootballDataOrgCompetitionSeason[],
+  options: { backfillFrom?: string } = {},
+): Promise<SyncFootballDataOrgCompetitionsResult> {
+  const { provider, dailyQuotaLimit, perMinuteLimit } = DEFAULT_SYNC_FOOTBALL_DATA_ORG_CONFIG;
+  const client = createPerMinuteThrottledClient(deps.client, deps.clock, perMinuteLimit);
+  const total = createEmptySummary();
+  const results: CompetitionSyncResult[] = [];
+
+  for (const competition of competitions) {
+    const result = await syncFootballDataOrgMatches(
+      { ...deps, client },
+      {
+        provider,
+        competitionCode: competition.competitionCode,
+        competitionExternalId: competition.competitionExternalId,
+        season: competition.season,
+        dailyQuotaLimit,
+        perMinuteLimit,
+        backfillFrom: options.backfillFrom,
+      },
+    );
+
+    if (result.exitCode === 2) {
+      results.push({ ...competitionKey(competition), resultado: 'lease-taken', summary: null });
+      continue;
+    }
+
+    const { summary } = result;
+    total.importados += summary.importados;
+    total.actualizados += summary.actualizados;
+    total.consultasRealizadas += summary.consultasRealizadas;
+    total.consultasReservadas += summary.consultasReservadas;
+    // La cuota es una sola para todo el proveedor: vale el restante de la última corrida.
+    total.presupuestoRestante = summary.presupuestoRestante;
+    mergeReasonCounts(total.omitidos, summary.omitidos);
+    mergeReasonCounts(total.errores, summary.errores);
+
+    results.push({
+      ...competitionKey(competition),
+      resultado: result.exitCode === 0 ? 'ok' : 'error',
+      summary,
+    });
+  }
+
+  let exitCode: 0 | 1 | 2;
+  if (results.every((r) => r.resultado === 'ok')) {
+    exitCode = 0;
+  } else if (results.length > 0 && results.every((r) => r.resultado === 'lease-taken')) {
+    exitCode = 2;
+  } else {
+    exitCode = 1;
+  }
+
+  return { exitCode, competiciones: results, total };
+}
+
+function competitionKey(competition: FootballDataOrgCompetitionSeason) {
+  return { competitionCode: competition.competitionCode, season: competition.season };
 }
