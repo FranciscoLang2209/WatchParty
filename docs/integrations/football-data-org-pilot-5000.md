@@ -5,7 +5,7 @@
 Probar cuántos partidos reales puede importar WatchParty desde football-data.org (plan Free) para
 el Tercer Steering, y estimar el camino a 5.000 partidos históricos. WAT-284 completa el trabajo:
 amplía el sync diario a varias competiciones y deja la carga histórica completa lista para correr
-desde GitHub Actions contra demo.
+desde GitHub Actions contra demo o, con `target: production`, contra producción.
 
 ## Sync diario (WAT-284)
 
@@ -47,15 +47,21 @@ CL:2025,WC:2026,EC:2024,PL:2025,PD:2025,BL1:2025,SA:2025,FL1:2025,DED:2025,PPL:2
 Son 17 pedidos y unos 5.280 partidos, sujeto a la cobertura real de cada temporada (ver "Camino a
 5.000 partidos"). El comando espera solo cuando llega al límite de 10 pedidos por minuto.
 
-El workflow corre en el entorno de GitHub Actions **`demo`** y escribe en la base de demo, nunca en
-la de producción:
+El workflow tiene un input `target` (`demo` por defecto, o `production`) que elige la base de
+destino y el entorno de GitHub Actions:
 
-- Secretos del entorno `demo`: `DEMO_SUPABASE_URL`, `DEMO_SUPABASE_SERVICE_ROLE_KEY`,
-  `DEMO_SUPABASE_ANON_KEY` y `DEMO_WEB_ORIGIN`. La API key de football-data.org es la misma
-  cuenta del equipo (secretos de repositorio `FOOTBALL_DATA_ORG_*`).
-- Esos nombres no existen a nivel repositorio. Si el entorno no los tiene, llegan vacíos y el
-  preflight corta con código 2 antes de consultar al proveedor o escribir.
-- Un paso previo falla si `DEMO_SUPABASE_URL` es igual a la URL de producción.
+- **`demo`**: corre en el entorno `demo` con sus secretos `DEMO_SUPABASE_URL`,
+  `DEMO_SUPABASE_SERVICE_ROLE_KEY`, `DEMO_SUPABASE_ANON_KEY` y `DEMO_WEB_ORIGIN`. Esos nombres no
+  existen a nivel repositorio: si el entorno no los tiene, llegan vacíos y el preflight corta con
+  código 2 antes de consultar al proveedor o escribir. Un paso previo falla si `DEMO_SUPABASE_URL`
+  es igual a la URL de producción. Si `batch` queda vacío, corre el lote del piloto.
+- **`production`**: corre en el entorno `Production` con los secretos de producción
+  (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`, `WEB_ORIGIN`). Un paso previo
+  falla si el workflow no se lanzó desde `main` o si `batch` está vacío: en producción no hay lote
+  por defecto. El comando no tiene otra protección propia, así que conviene revisar el lote antes
+  de lanzarlo.
+- En los dos casos la API key de football-data.org es la misma cuenta del equipo (secretos de
+  repositorio `FOOTBALL_DATA_ORG_*`).
 - Comparte el grupo de concurrencia con `Matches sync`, porque usan la misma API key.
 
 ## Cómo se corre
@@ -74,8 +80,9 @@ pnpm --filter @watchparty/api matches:import-batch
 MATCHES_IMPORT_BATCH="BL1:2025,SA:2025" pnpm --filter @watchparty/api matches:import-batch
 ```
 
-En demo se dispara con el workflow manual **Matches import batch** (ver "Carga histórica
-completa"). El input `batch` acepta el mismo formato, y si se deja vacío corre el lote del piloto.
+Desde GitHub Actions se dispara con el workflow manual **Matches import batch** (ver "Carga
+histórica completa"), eligiendo `demo` o `production` en `target`. El input `batch` acepta el mismo
+formato; en demo, si se deja vacío, corre el lote del piloto, y en producción es obligatorio.
 
 - El lote se ordena Champions → selecciones → ligas, por si la cuota obliga a cortar.
 - Solo acepta las 12 competiciones del plan Free (`PL`, `PD`, `CL`, `WC`, `EC`, `ELC`, `PPL`,
@@ -87,7 +94,8 @@ completa"). El input `batch` acepta el mismo formato, y si se deja vacío corre 
   el status HTTP, los partidos devueltos, guardados y nuevos, y cuántos están finalizados con
   marcador.
 - Cada entrada consume un pedido de la cuota diaria propia de `football-data-org` (80 por día).
-  La cuota se registra en la base donde se escribe: en demo es la de demo.
+  La cuota se registra en la base donde se escribe: en demo es la de demo y en producción, la de
+  producción.
 
 ## Acceso verificado (2026-11-10)
 
