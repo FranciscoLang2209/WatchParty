@@ -119,4 +119,4 @@ Esta corrida documentada es de diseño/tests con dobles falsos (cliente, store, 
 
 ## Importación manual por lotes
 
-Las temporadas cerradas no las consulta este comando. Se cargan con `matches:import-batch` y el workflow manual `Matches import batch`, que escribe en la base de demo (entorno de GitHub Actions `demo`). El valor del lote completo y la configuración del entorno están en `docs/integrations/football-data-org-pilot-5000.md`.
+Las temporadas cerradas no las consulta este comando. Se cargan con `matches:import-batch` y el workflow manual `Matches import batch`, que escribe en la base de demo (entorno de GitHub Actions `demo`, por defecto) o en la de producción con `target: production` (entorno `Production`, solo desde `main` y con `batch` obligatorio). El valor del lote completo y la configuración del entorno están en `docs/integrations/football-data-org-pilot-5000.md`.
