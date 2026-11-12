@@ -78,6 +78,10 @@ const OPCIONES_ESTADO: readonly { valor: FiltroEstado; etiqueta: string }[] = [
   { valor: 'scheduled', etiqueta: 'Próximos' },
 ];
 
+/** La agenda es una ventana corta: no es un historial ni un calendario completo. */
+const VENTANA_AGENDA =
+  'Es una agenda limitada: sólo incluye los partidos en vivo y los programados cerca de la fecha actual.';
+
 const SIN_PARTIDOS: Partial<Record<Match['status'], string>> = {
   live: 'No hay partidos en vivo por ahora.',
   scheduled: 'No hay partidos próximos por ahora.',
@@ -92,6 +96,10 @@ const SECCIONES: readonly { estado: Match['status']; titulo: string }[] = [
   { estado: 'live', titulo: 'En vivo' },
   { estado: 'scheduled', titulo: 'Próximos' },
 ];
+
+function cantidadDePartidos(cantidad: number): string {
+  return cantidad === 1 ? '1 partido' : `${cantidad} partidos`;
+}
 
 function seccionesVisibles(matches: Match[]) {
   return SECCIONES.map(({ estado, titulo }) => ({
@@ -182,7 +190,6 @@ export function RoomsDirectoryPage() {
   const botonTodos = useRef<HTMLButtonElement>(null);
   const reintentando = useRef(false);
   const [filtroEstado, setFiltroEstado] = useState<FiltroEstado>('todos');
-  const botonTodosEstado = useRef<HTMLButtonElement>(null);
   // Día elegido (`YYYY-MM-DD`); vacío no restringe el listado.
   const [fecha, setFecha] = useState('');
   const fechaId = useId();
@@ -302,13 +309,6 @@ export function RoomsDirectoryPage() {
     if (siguiente === 'mi-equipo') setFavoritoPedido(true);
   }, []);
 
-  // El panel que tenía el foco desaparece al volver: lo recibe «Todos», que sigue
-  // en pantalla.
-  const volverATodos = useCallback(() => {
-    setFiltro('todos');
-    botonTodos.current?.focus();
-  }, []);
-
   const partidos = estado.status === 'ready' ? estado.matches : [];
   const todas = seccionesVisibles(partidos);
   const hayPartidos = todas.length > 0;
@@ -345,13 +345,6 @@ export function RoomsDirectoryPage() {
             .filter((partido) => kickoffDay(partido.kickoffAt) === fecha),
         );
 
-  // El panel que tenía el foco desaparece al volver: lo recibe el «Todos» del
-  // selector de estado, que sigue en pantalla.
-  const volverATodosLosEstados = useCallback(() => {
-    setFiltroEstado('todos');
-    botonTodosEstado.current?.focus();
-  }, []);
-
   // El control que tenía el foco desaparece al quitar la fecha: lo recibe el campo.
   const quitarFecha = useCallback(() => {
     setFecha('');
@@ -359,6 +352,12 @@ export function RoomsDirectoryPage() {
   }, []);
 
   const hayFiltros = filtro !== 'todos' || filtroEstado !== 'todos' || fecha !== '';
+  // Sólo se cuenta lo que realmente se muestra: mientras carga, ante un error o sin
+  // coincidencias no hay cantidad, así que un fallo nunca se lee como «0 partidos».
+  const cantidad = mostradas.reduce((total, seccion) => total + seccion.matches.length, 0);
+  // Con el perfil caído se muestra el listado general: la cantidad no finge un filtro.
+  const filtrosAplicados =
+    (enMiEquipo && favorito.status === 'ready') || filtroEstado !== 'todos' || fecha !== '';
 
   // Vuelve a «Todos», a todos los estados y a la fecha vacía. El botón desaparece al
   // limpiar, así que el foco lo recibe el primer control de la barra, que sigue en pantalla.
@@ -411,7 +410,6 @@ export function RoomsDirectoryPage() {
                   {OPCIONES_ESTADO.map(({ valor, etiqueta }) => (
                     <Button
                       key={valor}
-                      ref={valor === 'todos' ? botonTodosEstado : undefined}
                       type="button"
                       variant={filtroEstado === valor ? 'default' : 'outline'}
                       aria-pressed={filtroEstado === valor}
@@ -541,7 +539,7 @@ export function RoomsDirectoryPage() {
           <DirectoryStatePanel
             icon={CalendarX}
             title="No hay partidos por ahora"
-            message="Todavía no hay partidos ni salas disponibles. Volvé más tarde."
+            message={`Todavía no hay partidos ni salas disponibles. ${VENTANA_AGENDA} Volvé más tarde.`}
             panelRef={panelFoco}
           />
         ) : null}
@@ -603,16 +601,16 @@ export function RoomsDirectoryPage() {
             role="status"
             icon={CalendarX}
             title="No hay partidos de tu equipo"
-            message="No hay partidos de tu equipo favorito en la agenda disponible."
+            message={`No hay partidos de tu equipo favorito en la agenda disponible. ${VENTANA_AGENDA}`}
             panelRef={panelFoco}
             action={
               <Button
                 type="button"
                 variant="outline"
                 className="w-full sm:w-auto"
-                onClick={volverATodos}
+                onClick={limpiarFiltros}
               >
-                Ver todos los partidos
+                Restablecer filtros
               </Button>
             }
           />
@@ -623,16 +621,16 @@ export function RoomsDirectoryPage() {
             role="status"
             icon={CalendarX}
             title="No hay partidos para mostrar"
-            message={SIN_PARTIDOS[filtroEstado as Match['status']] ?? ''}
+            message={`${SIN_PARTIDOS[filtroEstado as Match['status']] ?? ''} ${VENTANA_AGENDA}`}
             panelRef={panelFoco}
             action={
               <Button
                 type="button"
                 variant="outline"
                 className="w-full sm:w-auto"
-                onClick={volverATodosLosEstados}
+                onClick={limpiarFiltros}
               >
-                Ver todos los partidos
+                Restablecer filtros
               </Button>
             }
           />
@@ -643,19 +641,27 @@ export function RoomsDirectoryPage() {
             role="status"
             icon={CalendarX}
             title="No hay partidos ese día"
-            message={`No hay partidos el ${formatearDia(fecha)} en la agenda disponible.`}
+            message={`No hay partidos el ${formatearDia(fecha)} en la agenda disponible. ${VENTANA_AGENDA}`}
             panelRef={panelFoco}
             action={
               <Button
                 type="button"
                 variant="outline"
                 className="w-full sm:w-auto"
-                onClick={quitarFecha}
+                onClick={limpiarFiltros}
               >
-                Ver todos los días
+                Restablecer filtros
               </Button>
             }
           />
+        ) : null}
+
+        {estado.status === 'ready' && cantidad > 0 ? (
+          <p aria-live="polite" className="text-sm text-muted-foreground">
+            {filtrosAplicados
+              ? `${cantidadDePartidos(cantidad)} ${cantidad === 1 ? 'coincide' : 'coinciden'} con los filtros`
+              : `${cantidadDePartidos(cantidad)} ${cantidad === 1 ? 'disponible' : 'disponibles'}`}
+          </p>
         ) : null}
 
         {mostradas.map(({ estado: estadoPartido, titulo, matches }, posicion) => (
