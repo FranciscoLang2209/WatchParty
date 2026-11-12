@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import { RECOVERY_LINK_WAIT_MS, recoveryLinkInUrl } from './recovery-link';
 import {
   AuthContext,
   type AuthStatus,
@@ -18,6 +19,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
   const [signedOutExplicitly, setSignedOutExplicitly] = useState(false);
+  // La URL trajo un enlace de recuperación con sesión y todavía no llegó `PASSWORD_RECOVERY`.
+  const [awaitingRecovery, setAwaitingRecovery] = useState(recoveryLinkInUrl);
 
   useEffect(() => {
     let active = true;
@@ -27,6 +30,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       setSession(data.session);
       setStatus(data.session ? 'authenticated' : 'unauthenticated');
+
+      // Sin sesión el enlace no sirvió (vencido, ya usado…): no hay señal que esperar.
+      if (!data.session) setAwaitingRecovery(false);
     });
 
     const {
@@ -47,8 +53,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       // formulario — y se apaga en cuanto la sesión desaparece.
       if (event === 'PASSWORD_RECOVERY') {
         setIsRecovering(true);
+        setAwaitingRecovery(false);
       } else if (!nextSession) {
         setIsRecovering(false);
+        setAwaitingRecovery(false);
       }
     });
 
@@ -57,6 +65,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
       subscription.unsubscribe();
     };
   }, []);
+
+  // Con un enlace de recuperación, el cliente guarda la sesión y recién después emite
+  // `PASSWORD_RECOVERY`. En ese hueco hay sesión pero todavía no hay permiso para cambiar la
+  // contraseña: se espera la señal, con un tope corto por si no llega. El tope corre desde que
+  // la sesión se resolvió, no desde el montaje: una red lenta no lo agota antes de tiempo.
+  useEffect(() => {
+    if (!awaitingRecovery || status !== 'authenticated') return;
+
+    const timer = setTimeout(() => setAwaitingRecovery(false), RECOVERY_LINK_WAIT_MS);
+
+    return () => clearTimeout(timer);
+  }, [awaitingRecovery, status]);
 
   const signOut = useCallback(async (options?: SignOutOptions): Promise<SignOutResult> => {
     setIsSigningOut(true);
@@ -87,9 +107,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setIsRecovering(false);
   }, []);
 
+  // Mientras se espera la señal de recuperación sigue «cargando»: ni se afirma que el enlace es
+  // inválido ni se deja pasar a una sesión que todavía no está autorizada a cambiar la contraseña.
+  const exposedStatus: AuthStatus =
+    awaitingRecovery && status === 'authenticated' && !isRecovering ? 'loading' : status;
+
   const value = useMemo(
     () => ({
-      status,
+      status: exposedStatus,
       session,
       user: session?.user ?? null,
       signOut,
@@ -98,7 +123,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       isRecovering,
       endRecovery,
     }),
-    [status, session, signOut, isSigningOut, signedOutExplicitly, isRecovering, endRecovery],
+    [exposedStatus, session, signOut, isSigningOut, signedOutExplicitly, isRecovering, endRecovery],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

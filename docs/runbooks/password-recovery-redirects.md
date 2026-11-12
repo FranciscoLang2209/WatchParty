@@ -25,6 +25,35 @@ Sin la URL habilitada el síntoma es siempre el mismo: el enlace abre la app, pe
 `/reset-password` muestra «El enlace no es válido o ya venció» porque nunca llega el evento
 `PASSWORD_RECOVERY`.
 
+### El cliente tiene que leer el enlace
+
+Habilitar la URL no alcanza. El enlace del correo vuelve a la app con la sesión de recuperación en
+el hash de la URL (`#access_token=…&type=recovery`), y el evento `PASSWORD_RECOVERY` sólo lo emite el
+cliente de Supabase **al leer esa URL**. Por eso `apps/web/src/lib/supabase.ts` declara
+`detectSessionInUrl: true`: con `false` el cliente ignora el enlace y la pantalla de cambio de
+contraseña nunca se habilita, aunque Site URL y Redirect URLs estén bien. Los tests con Supabase
+simulado no lo detectan; el que sí lo comprueba es `recovery-callback.test.tsx`, que usa el cliente
+real.
+
+Una vez leído, el cliente borra los tokens de la URL. El resto del diseño no cambia: la pantalla se
+habilita **sólo** por el evento `PASSWORD_RECOVERY` y no por tener una sesión cualquiera. Efecto
+colateral a tener en cuenta: otros enlaces de Supabase que vuelven con sesión en la URL (por
+ejemplo, la confirmación de un registro) también se procesan y dejan la sesión iniciada.
+
+### El hueco entre la sesión y la señal
+
+El cliente guarda la sesión del enlace, resuelve y **recién después** emite `PASSWORD_RECOVERY`. En
+ese hueco (milisegundos) ya hay sesión pero todavía no hay permiso para cambiar la contraseña, y la
+pantalla afirmaba «El enlace no es válido» a quien abría un enlace bueno (un lector de pantalla lo
+anuncia). Para evitarlo, `apps/web/src/auth/recovery-link.ts` anota, antes de que el cliente procese
+la URL, si el fragmento traía `type=recovery` con tokens. Mientras eso es cierto y la señal no llegó,
+el `AuthProvider` sigue en `loading` y la pantalla muestra «Verificando…». Se deja de esperar cuando:
+
+- llega `PASSWORD_RECOVERY` (se habilita el formulario);
+- no hay sesión (token vencido, ya usado o rechazado): se avisa enseguida;
+- pasan 2 s desde que la sesión se resolvió sin que llegue la señal: se avisa y se ofrece pedir otro
+  enlace, en vez de dejar la pantalla cargando para siempre.
+
 ## Las URLs a habilitar
 
 Todas terminan en `/reset-password`, sin barra final y sin query.
@@ -101,18 +130,24 @@ cuenta real.
 pnpm --filter web test
 ```
 
-| Caso                                             | Dónde                                          |
-| ------------------------------------------------ | ---------------------------------------------- |
-| El pedido declara `redirectTo` con el origen     | `forgot-password.test.tsx`                     |
-| Sin evento de recuperación no hay formulario     | `reset-password.test.tsx`                      |
-| Sin sesión no hay formulario                     | `reset-password.test.tsx`                      |
-| Enlace inválido con `aria-live`                  | `reset-password.test.tsx`                      |
-| El fallo no filtra token, correo ni internals    | `reset-password.test.tsx`                      |
-| Error de `updateUser` presentable y reintentable | `reset-password.test.tsx`                      |
-| Éxito → cierra sesión y vuelve al login          | `reset-password.test.tsx`                      |
-| Volver a entrar con la contraseña nueva          | `reset-password.test.tsx`, «el flujo completo» |
-| Sólo `PASSWORD_RECOVERY` habilita el cambio      | `auth.test.tsx`                                |
-| `/reset-password` es pública                     | `router.test.tsx`                              |
+| Caso                                                 | Dónde                                          |
+| ---------------------------------------------------- | ---------------------------------------------- |
+| El pedido declara `redirectTo` con el origen         | `forgot-password.test.tsx`                     |
+| Sin evento de recuperación no hay formulario         | `reset-password.test.tsx`                      |
+| Sin sesión no hay formulario                         | `reset-password.test.tsx`                      |
+| Enlace inválido con `aria-live`                      | `reset-password.test.tsx`                      |
+| El fallo no filtra token, correo ni internals        | `reset-password.test.tsx`                      |
+| Error de `updateUser` presentable y reintentable     | `reset-password.test.tsx`                      |
+| Éxito → cierra sesión y vuelve al login              | `reset-password.test.tsx`                      |
+| Volver a entrar con la contraseña nueva              | `reset-password.test.tsx`, «el flujo completo» |
+| Sólo `PASSWORD_RECOVERY` habilita el cambio          | `auth.test.tsx`                                |
+| El enlace real habilita el formulario (cliente real) | `recovery-callback.test.tsx`                   |
+| Enlace vencido o sin enlace: mensaje recuperable     | `recovery-callback.test.tsx`                   |
+| Una sesión que no es de recuperación no habilita     | `recovery-callback.test.tsx`                   |
+| En el hueco antes de la señal: «Verificando…»        | `recovery-callback.test.tsx`                   |
+| Token rechazado: aviso enseguida, sin esperar        | `recovery-callback.test.tsx`                   |
+| Señal que nunca llega: aviso tras el tope            | `recovery-callback.test.tsx`                   |
+| `/reset-password` es pública                         | `router.test.tsx`                              |
 
 ### A mano, contra el stack local
 
@@ -129,6 +164,31 @@ Una vez habilitada la URL en `supabase/config.toml`:
 
 No pegar en el PR ni en un issue el contenido del correo: el enlace lleva el token.
 
+### A mano, contra producción
+
+Con una **cuenta de prueba** (nunca una cuenta real) y después de que la configuración de abajo
+esté aplicada en el dashboard de Supabase:
+
+| Ajuste del dashboard | Valor                                                    |
+| -------------------- | -------------------------------------------------------- |
+| Site URL             | `https://watch-party-web-cfeq.vercel.app`                |
+| Redirect URLs        | `https://watch-party-web-cfeq.vercel.app/reset-password` |
+
+0. Comprobar que el despliegue sirve las rutas de la SPA: `https://watch-party-web-cfeq.vercel.app/reset-password`
+   tiene que responder 200 y cargar la app. Un 404 de Vercel (`NOT_FOUND`) significa que el
+   despliegue no incluye `apps/web/vercel.json` y el enlace del correo nunca llegaría a la pantalla.
+1. En `https://watch-party-web-cfeq.vercel.app/forgot-password`, pedir el enlace con el correo de
+   la cuenta de prueba.
+2. Abrir el enlace del correo: tiene que aterrizar en `/reset-password` **con el formulario** y sin
+   `access_token` en la barra de direcciones. Si muestra «El enlace no es válido», revisar primero
+   la lista de Redirect URLs y que el despliegue tenga `detectSessionInUrl: true`.
+3. Guardar una contraseña nueva: redirige a `/login`.
+4. Ingresar con la contraseña nueva; la anterior ya no sirve. Cerrar sesión.
+5. Volver a abrir el mismo enlace del correo: muestra el mensaje recuperable con el acceso
+   «Pedir un enlace nuevo».
+6. Registrar en el ticket el identificador del despliegue probado y el resultado de cada paso, sin
+   pegar el correo, el enlace ni la contraseña.
+
 ## Checklist de cierre
 
 - [x] Los fallos son presentables, con `aria-live`, y no revelan token, contraseña, correo ni el
@@ -137,7 +197,9 @@ No pegar en el PR ni en un issue el contenido del correo: el enlace lleva el tok
 - [x] Los tests usan mocks: no se manda ningún correo real.
 - [x] La documentación distingue local, preview y producción.
 - [x] No hay project ref, keys, tokens ni cookies en este documento.
-- [ ] Habilitar las Redirect URLs en el dashboard del proyecto hospedado (configuración, fuera
-      del repo).
+- [x] El cliente lee el enlace del correo (`detectSessionInUrl: true`) y emite `PASSWORD_RECOVERY`.
+- [ ] Habilitar el Site URL y las Redirect URLs en el dashboard del proyecto hospedado (configuración,
+      fuera del repo).
+- [ ] Recorrer a mano el flujo contra producción con una cuenta de prueba y registrar el resultado.
 - [ ] Decidir dónde se aplica el cambio de `supabase/config.toml` para el entorno local.
 - [ ] Actualizar la tabla si WAT-137 cambia el dominio de producción.

@@ -147,8 +147,11 @@ desarrollo predeterminadas (no son secretos reales; son las mismas para cualquie
 
 ## Despliegue (Vercel)
 
-Dos proyectos Vercel independientes, ambos conectados al mismo repositorio de GitHub. No hay ningún
-`vercel.json` versionado — toda la configuración vive en los Project Settings de cada uno.
+Dos proyectos Vercel independientes, ambos conectados al mismo repositorio de GitHub. El único
+`vercel.json` versionado es `apps/web/vercel.json`, con el fallback de la SPA (`/(.*)` →
+`/index.html`): sin él, abrir o recargar cualquier ruta que no sea la raíz —por ejemplo
+`/reset-password`, el destino del correo de recuperación— devuelve el 404 de Vercel. El resto de la
+configuración vive en los Project Settings de cada proyecto.
 
 ### apps/web
 
