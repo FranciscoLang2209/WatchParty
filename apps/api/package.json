@@ -31,6 +31,7 @@
     "matches:sync": "tsx --env-file-if-exists=.env src/scripts/sync-matches.ts",
     "matches:import-batch": "tsx --env-file-if-exists=.env src/scripts/import-matches-batch.ts",
     "demo:seed": "tsx --env-file-if-exists=.env src/scripts/demo-seed.ts",
+    "matches:probe-coverage": "tsx --env-file-if-exists=.env src/scripts/probe-football-data-coverage.ts",
     "reporter:collect": "tsx --env-file-if-exists=.env src/scripts/collect-kpis.ts",
     "reporter:publish": "tsx --env-file-if-exists=.env src/scripts/publish-kpis.ts",
     "reporter:verify-business": "tsx --env-file-if-exists=.env src/scripts/verify-business-aggregates.ts",
