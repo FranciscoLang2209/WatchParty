@@ -43,6 +43,14 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null;
 }
 
+/**
+ * ¿La respuesta de `GET /v4/competitions` tiene la forma esperada? Una lista vacía válida cuenta;
+ * un HTML, un cuerpo vacío o un JSON sin `competitions` no: no se pueden leer como «sin torneos».
+ */
+export function hasCompetitionsList(body: unknown): boolean {
+  return Array.isArray(asRecord(body)?.competitions);
+}
+
 /** De la respuesta de `GET /v4/competitions`, las de selecciones, ordenadas por código. */
 export function selectNationalTeamCompetitions(body: unknown): ProbeCompetition[] {
   const competitions = asRecord(body)?.competitions;
@@ -87,7 +95,11 @@ export function isWithinPlan(required: string, account: string): boolean {
 }
 
 export interface MatchesProbeSummary {
-  result: 'ok' | 'rechazado' | 'timeout' | 'error-de-red';
+  /**
+   * `respuesta-invalida`: el proveedor contestó 2xx pero el cuerpo no es una lista de partidos
+   * (por ejemplo, HTML en vez de JSON). No es «cero partidos»: no se puede concluir nada.
+   */
+  result: 'ok' | 'rechazado' | 'respuesta-invalida' | 'timeout' | 'error-de-red';
   /** Código HTTP, cuando hubo respuesta. */
   status: number | null;
   matchCount: number | null;
@@ -125,7 +137,18 @@ export function summarizeMatchesProbe(outcome: FootballDataOrgFetchOutcome): Mat
     };
   }
 
-  const matches = Array.isArray(body?.matches) ? body.matches : [];
+  // Una respuesta 2xx sin la lista de partidos NO es una ventana vacía: es una respuesta que no se
+  // entiende. Sólo `matches: []` (un arreglo realmente vacío) significa cero partidos.
+  if (!Array.isArray(body?.matches)) {
+    return {
+      ...empty,
+      result: 'respuesta-invalida',
+      status: outcome.status,
+      providerMessage: null,
+    };
+  }
+
+  const matches: unknown[] = body.matches;
   const dates = matches
     .map((match) => asString(asRecord(match)?.utcDate))
     .filter((date): date is string => date !== null)
@@ -180,6 +203,8 @@ export function formatCoverageProbe(report: CoverageProbeReport): string {
           : `HTTP 200, ${probe.matchCount} partidos (${probe.firstUtcDate} a ${probe.lastUtcDate})`;
     } else if (probe.result === 'rechazado') {
       result = `HTTP ${probe.status}${probe.providerMessage ? `: ${probe.providerMessage}` : ''}`;
+    } else if (probe.result === 'respuesta-invalida') {
+      result = `HTTP ${probe.status} con una respuesta inválida (no es una lista de partidos): sin conclusión`;
     } else {
       result = probe.result;
     }
@@ -194,4 +219,64 @@ export function formatCoverageProbe(report: CoverageProbeReport): string {
   }
 
   return lines.join('\n');
+}
+
+/**
+ * ¿Alguna consulta no se pudo leer? (tiempo de espera, red o respuesta inválida). Un informe así no
+ * prueba falta de cobertura: el sondeo sale con error para que no se lea como un resultado.
+ */
+export function isInconclusive(report: CoverageProbeReport): boolean {
+  return report.rows.some(
+    ({ probe }) =>
+      probe !== null &&
+      (probe.result === 'respuesta-invalida' ||
+        probe.result === 'timeout' ||
+        probe.result === 'error-de-red'),
+  );
+}
+
+export interface PersistedWindowSummary {
+  from: string;
+  to: string;
+  count: number;
+  byStatus: Record<string, number>;
+  firstKickoff: string | null;
+  lastKickoff: string | null;
+}
+
+/** Resume los partidos persistidos que devuelve la consulta de la agenda para una ventana. */
+export function summarizePersistedWindow(
+  window: { from: string; to: string },
+  matches: readonly { status: string; kickoffAt: string }[],
+): PersistedWindowSummary {
+  const byStatus: Record<string, number> = {};
+  const kickoffs = matches.map((match) => match.kickoffAt).sort();
+
+  for (const match of matches) {
+    byStatus[match.status] = (byStatus[match.status] ?? 0) + 1;
+  }
+
+  return {
+    from: window.from,
+    to: window.to,
+    count: matches.length,
+    byStatus,
+    firstKickoff: kickoffs[0] ?? null,
+    lastKickoff: kickoffs[kickoffs.length - 1] ?? null,
+  };
+}
+
+export function formatPersistedWindow(summary: PersistedWindowSummary): string {
+  const states = Object.entries(summary.byStatus)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([status, count]) => `${status}=${count}`)
+    .join(', ');
+
+  return [
+    'Partidos persistidos en la ventana de la agenda (la misma consulta que usa la API):',
+    `  ventana ${summary.from} → ${summary.to} (fin exclusivo)`,
+    summary.count === 0
+      ? '  0 partidos persistidos'
+      : `  ${summary.count} partidos (${states}); primero ${summary.firstKickoff}, último ${summary.lastKickoff}`,
+  ].join('\n');
 }

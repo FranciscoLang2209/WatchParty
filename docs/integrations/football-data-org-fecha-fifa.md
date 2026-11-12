@@ -4,6 +4,9 @@ Diagnóstico del reporte del PM: WatchParty no muestra partidos de selecciones d
 de la semana del 2026-11-12. Documenta qué se verificó, qué quedó pendiente, las opciones para la
 decisión de PM/PO y la contingencia de demo.
 
+> **Esta PR es un avance de diagnóstico.** No acredita que la agenda actual de selecciones esté
+> resuelta, y la comprobación en producción sigue pendiente (ver «Comprobación en producción»).
+
 **Estado: bloqueado por cobertura del plan.** Con la cuenta vigente, ningún torneo de selecciones
 accesible tiene partidos en la ventana. No se corrigió nada en el flujo porque el flujo no es la
 causa, y este issue **no se cierra como corregido** hasta que haya cobertura actual o una decisión.
@@ -51,7 +54,7 @@ Se siguió el camino del dato, del proveedor a la pantalla:
 | Sincronización diaria        | Consulta sólo `PL`, `CL`, `PD` y `SA` (`DAILY_FOOTBALL_DATA_ORG_COMPETITIONS`). No hay selecciones porque no hay una edición vigente accesible; agregar `WC` o `EC` no traería nada hoy. |
 | Ventana de fechas            | La agenda muestra desde las 00:00 UTC de ayer hasta el día posterior a los próximos siete días. Funciona como está documentada; un partido dentro de la ventana no queda excluido.       |
 | API y filtros de la interfaz | No filtran por tipo de equipo ni de competición: un partido de selecciones persistido se listaría igual que uno de clubes.                                                               |
-| Datos de producción          | **Pendiente de comprobar** en el entorno de la demo (ver «Pendientes»).                                                                                                                  |
+| Datos de producción          | **Pendiente de comprobar** en producción (ver «Comprobación en producción»).                                                                                                             |
 
 La agenda de clubes también viene vacía esta semana por la misma fecha FIFA (corrida del
 2026-11-10 en `football-data-org-pilot-5000.md`): no es un fallo, los clubes no juegan.
@@ -113,15 +116,68 @@ pnpm --filter @watchparty/api matches:probe-coverage
 - `PROBE_DATE_FROM` y `PROBE_DATE_TO` (`YYYY-MM-DD`) cambian la ventana; por defecto es hoy y los
   siete días siguientes. `PROBE_ACCOUNT_PLAN` (por defecto `TIER_ONE`) indica el plan de la cuenta:
   si se amplía, hay que cambiarlo para que el sondeo consulte los torneos nuevos.
-- Códigos de salida: 0 informe generado (aunque no haya cobertura), 1 el proveedor no respondió la
-  lista, 2 configuración inválida.
+- Un 200 cuyo cuerpo no es una lista de partidos (por ejemplo, HTML en vez de JSON) se informa como
+  **respuesta inválida, sin conclusión**: nunca como cero partidos. Lo mismo vale para la lista de
+  competiciones. Un informe con alguna consulta ilegible sale con error, porque no prueba falta de
+  cobertura.
+- Códigos de salida: 0 informe completo (aunque no haya cobertura), 1 el proveedor no respondió,
+  respondió algo que no se puede leer o alguna consulta quedó sin conclusión, 2 configuración inválida.
+- `PROBE_PERSISTED=true` agrega los partidos **persistidos** en la ventana de la agenda, con la misma
+  consulta que usa la API. Lee la base a la que apunta `SUPABASE_URL` (solo lectura), así que exige
+  confirmarla con `PROBE_ENV_LABEL` y `PROBE_EXPECTED_SUPABASE_HOST` (el host que se espera): sin eso
+  no corre.
 
 Si se amplía el plan, se vuelve a correr y se compara con la tabla de arriba antes de tocar el sync.
 
+## Comprobación en producción
+
+**Pendiente.** Hay que comprobar el entorno que se va a usar para la demo y contrastar cuatro cosas
+sobre la misma ventana. Hasta entonces, nada de lo siguiente se da por verificado.
+
+Datos del entorno (completar al comprobar):
+
+| Dato                                            | Valor       |
+| ----------------------------------------------- | ----------- |
+| URL de la web                                   | _pendiente_ |
+| URL de la API                                   | _pendiente_ |
+| Versión: identificador de despliegue o commit   | _pendiente_ |
+| Fecha y hora (UTC) de la comprobación           | _pendiente_ |
+| Ventana y filtros (estado y fecha) de la agenda | _pendiente_ |
+
+Qué se pudo comprobar desde afuera, sin sesión ni credenciales de producción, el 2026-11-12 (16:30
+UTC): la API de producción responde `200` en `/health` y `401` en `/matches` sin sesión, es decir,
+está viva y exige autenticación. **No se pudo** leer la agenda, la base ni la versión desplegada: eso
+necesita una sesión o el acceso administrativo del entorno.
+
+Contraste a completar, con el mismo rango de fechas en las cuatro filas:
+
+| Fuente                             | Cómo se obtiene                                                                                                               | Resultado   |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| Cobertura de la cuenta             | `matches:probe-coverage` (ver arriba). Ya medido el 2026-11-12: `WC` y `EC`, 200, 0 partidos.                                 | Ver tabla   |
+| Partidos persistidos en la ventana | `PROBE_PERSISTED=true` con el acceso del entorno de producción, confirmando `PROBE_ENV_LABEL` y el host esperado.             | _pendiente_ |
+| Respuesta de la API                | Con sesión iniciada en la web de producción, DevTools → Network → la petición `GET /matches`: cantidad de partidos devueltos. | _pendiente_ |
+| Lo que muestra la interfaz         | Agenda (Salas) y detalle, sin filtros que excluyan partidos.                                                                  | _pendiente_ |
+
+Cómo leer el contraste: si el proveedor devuelve 0, la base tiene 0 y la API devuelve 0, la causa es
+la cobertura y coincide con este diagnóstico. Si el proveedor devolviera partidos que la base o la API
+no tienen, el problema estaría en la sincronización o en la API y habría que corregir ese tramo.
+
+## Decisión requerida de PM/PO
+
+Con la evidencia actual (la cuenta no puede leer ningún torneo de selecciones con partidos esta
+semana), la agenda actual de selecciones **no se puede resolver con código**. Hace falta que PM/PO
+decida entre:
+
+- **A.** Ampliar el plan de football-data.org (Tier 4, 199 € por mes según la tabla pública), con un
+  cambio de código acotado una vez accesible.
+- **B.** Evaluar otro proveedor, con una integración nueva.
+- **C.** Ensayar la demo con la contingencia histórica, sabiendo que **no** muestra agenda actual.
+
+Mientras no haya una decisión, este issue sigue **abierto y bloqueado**: no se cierra como corregido.
+
 ## Pendientes
 
-- Comprobar en el entorno de la demo, con URL y versión desplegada, que la agenda efectivamente
-  viene vacía de selecciones y que no hay partidos de selecciones persistidos en la ventana.
+- Completar la comprobación en producción (tabla de arriba) con URL, versión y fecha.
 - Verificar el partido de contingencia y completar su tabla.
 - Decisión de PM/PO sobre las opciones A, B o C.
 - Retest de QA con persona, fecha y versión. No se declara cerrado mientras no haya cobertura

@@ -1,9 +1,14 @@
 import { loadFootballDataOrgEnv } from '../config/sports-provider-env.js';
+import { agendaWindow } from '../modules/matches/domain/match-window.js';
 import {
   formatCoverageProbe,
+  formatPersistedWindow,
+  hasCompetitionsList,
+  isInconclusive,
   isWithinPlan,
   selectNationalTeamCompetitions,
   summarizeMatchesProbe,
+  summarizePersistedWindow,
   type CompetitionProbeRow,
 } from '../modules/matches/application/football-data-org-coverage-probe.js';
 import { createFootballDataOrgClient } from '../modules/matches/infrastructure/football-data-org-client.js';
@@ -19,8 +24,14 @@ import { createFootballDataOrgClient } from '../modules/matches/infrastructure/f
  * Variables opcionales: `PROBE_ACCOUNT_PLAN` (por defecto `TIER_ONE`, el plan Free),
  * `PROBE_DATE_FROM` y `PROBE_DATE_TO` (`YYYY-MM-DD`, por defecto hoy y los 7 días siguientes).
  *
- * Códigos de salida: 0 informe generado (aunque no haya cobertura), 1 el proveedor no respondió
- * la lista de competiciones, 2 configuración inválida.
+ * `PROBE_PERSISTED=true` agrega los partidos persistidos en la ventana de la agenda, con la misma
+ * consulta que usa la API, para contrastarlos con lo que devuelve el proveedor. Lee la base que
+ * apuntan `SUPABASE_URL` y la service_role key, así que exige confirmarla: `PROBE_ENV_LABEL` y
+ * `PROBE_EXPECTED_SUPABASE_HOST` (el host que se espera en `SUPABASE_URL`). Solo lectura.
+ *
+ * Códigos de salida: 0 informe completo (aunque no haya cobertura), 1 el proveedor no respondió,
+ * respondió algo que no se puede leer o alguna consulta quedó sin conclusión (un informe así no
+ * prueba falta de cobertura), 2 configuración inválida.
  */
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_PROBES = 8;
@@ -73,7 +84,18 @@ async function main(): Promise<void> {
 
     competitionsBody = await response.json();
   } catch {
-    console.error('No se pudo consultar GET /v4/competitions (red o tiempo de espera).');
+    console.error(
+      'No se pudo leer GET /v4/competitions (red, tiempo de espera o una respuesta que no es JSON).',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  if (!hasCompetitionsList(competitionsBody)) {
+    // Un 200 sin la lista de competiciones no es «el proveedor no tiene torneos de selecciones».
+    console.error(
+      'GET /v4/competitions respondió 200 pero sin la lista de competiciones: respuesta inválida.',
+    );
     process.exitCode = 1;
     return;
   }
@@ -104,7 +126,55 @@ async function main(): Promise<void> {
     rows.push({ competition, withinPlan, probe: summarizeMatchesProbe(outcome) });
   }
 
-  console.log(formatCoverageProbe({ accountPlan, dateFrom, dateTo, rows }));
+  const report = { accountPlan, dateFrom, dateTo, rows };
+
+  console.log(formatCoverageProbe(report));
+
+  if (isInconclusive(report)) {
+    console.error(
+      '\nAlguna consulta no se pudo leer (tiempo de espera, red o respuesta inválida): este informe NO prueba falta de cobertura.',
+    );
+    process.exitCode = 1;
+  }
+
+  if (process.env.PROBE_PERSISTED?.trim() === 'true') {
+    await printPersistedWindow();
+  }
+}
+
+async function printPersistedWindow(): Promise<void> {
+  const missing = ['PROBE_ENV_LABEL', 'PROBE_EXPECTED_SUPABASE_HOST'].filter(
+    (name) => !process.env[name]?.trim(),
+  );
+
+  if (missing.length > 0 || !process.env.SUPABASE_URL) {
+    console.error(
+      `\nPara leer los partidos persistidos faltan: ${[...missing, ...(process.env.SUPABASE_URL ? [] : ['SUPABASE_URL'])].join(', ')}.`,
+    );
+    process.exitCode = 2;
+    return;
+  }
+
+  if (new URL(process.env.SUPABASE_URL).host !== process.env.PROBE_EXPECTED_SUPABASE_HOST!.trim()) {
+    console.error(
+      '\nSUPABASE_URL no coincide con PROBE_EXPECTED_SUPABASE_HOST: no se lee una base que no se confirmó.',
+    );
+    process.exitCode = 2;
+    return;
+  }
+
+  // Recién acá se carga `config/env`, que exige las variables de la API.
+  const { createSupabaseSportsDataClient } =
+    await import('../modules/matches/infrastructure/supabase-sports-data-client.js');
+  const { SupabaseMatchStore } =
+    await import('../modules/matches/infrastructure/supabase-match-store.js');
+  const now = new Date();
+  const window = agendaWindow(now);
+  const store = new SupabaseMatchStore(createSupabaseSportsDataClient());
+  const matches = await store.list(window);
+
+  console.log(`\nEntorno: ${process.env.PROBE_ENV_LABEL} · ${now.toISOString()}`);
+  console.log(formatPersistedWindow(summarizePersistedWindow(window, matches)));
 }
 
 main().catch(() => {

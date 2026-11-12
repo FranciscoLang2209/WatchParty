@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { FootballDataOrgFetchOutcome } from '../infrastructure/football-data-org-client.js';
+import { createFootballDataOrgClient } from '../infrastructure/football-data-org-client.js';
 import {
   formatCoverageProbe,
+  formatPersistedWindow,
+  hasCompetitionsList,
+  isInconclusive,
   isNationalTeamCompetition,
   isWithinPlan,
   selectNationalTeamCompetitions,
   summarizeMatchesProbe,
+  summarizePersistedWindow,
   type CompetitionProbeRow,
 } from './football-data-org-coverage-probe.js';
 
@@ -250,5 +255,154 @@ describe('formatCoverageProbe', () => {
     expect(
       formatCoverageProbe({ accountPlan: 'TIER_ONE', dateFrom: 'a', dateTo: 'b', rows: [] }),
     ).toContain('no listó ningún torneo de selecciones');
+  });
+});
+
+describe('una respuesta 2xx que no es una lista de partidos no es «cero partidos»', () => {
+  const respuesta = (body: unknown, status = 200): FootballDataOrgFetchOutcome => ({
+    kind: 'response',
+    status,
+    ok: status >= 200 && status < 300,
+    body,
+    headers: {},
+  });
+
+  it.each([
+    ['sin cuerpo (HTML u otra cosa que no es JSON)', undefined],
+    ['null', null],
+    ['un JSON sin matches', {}],
+    ['un JSON con otra forma', { competition: { code: 'WC' } }],
+    ['matches que no es un arreglo', { matches: 'no es una lista' }],
+    ['matches nulo', { matches: null }],
+    ['un arreglo en vez de un objeto', []],
+  ])('un 200 %s es una respuesta inválida, sin conteo', (_caso, body) => {
+    expect(summarizeMatchesProbe(respuesta(body))).toEqual({
+      result: 'respuesta-invalida',
+      status: 200,
+      matchCount: null,
+      firstUtcDate: null,
+      lastUtcDate: null,
+      providerMessage: null,
+    });
+  });
+
+  it('sólo un arreglo realmente vacío significa cero partidos', () => {
+    expect(summarizeMatchesProbe(respuesta({ matches: [] }))).toMatchObject({
+      result: 'ok',
+      matchCount: 0,
+    });
+  });
+
+  it('con el cliente real: un 200 con HTML en vez de JSON no da éxito ni cero partidos', async () => {
+    const cliente = createFootballDataOrgClient({
+      fetchFn: async () =>
+        new Response('<html><body>Servicio en mantenimiento</body></html>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        }),
+      baseUrl: 'https://api.football-data.example',
+      apiKey: 'clave-de-prueba',
+    });
+
+    const resumen = summarizeMatchesProbe(
+      await cliente.fetchMatches({
+        competitionCode: 'WC',
+        dateFrom: '2026-11-12',
+        dateTo: '2026-11-19',
+      }),
+    );
+
+    expect(resumen.result).toBe('respuesta-invalida');
+    expect(resumen.matchCount).toBeNull();
+
+    const [wc] = selectNationalTeamCompetitions(listado).filter((c) => c.code === 'WC');
+    const informe = formatCoverageProbe({
+      accountPlan: 'TIER_ONE',
+      dateFrom: '2026-11-12',
+      dateTo: '2026-11-19',
+      rows: [{ competition: wc!, withinPlan: true, probe: resumen }],
+    });
+
+    expect(informe).toContain('HTTP 200 con una respuesta inválida');
+    expect(informe).toContain('sin conclusión');
+    expect(informe).not.toContain('0 partidos');
+    expect(informe).not.toContain('clave-de-prueba');
+  });
+
+  it('un informe con una consulta ilegible se marca como inconcluso y no como falta de cobertura', () => {
+    const [wc] = selectNationalTeamCompetitions(listado).filter((c) => c.code === 'WC');
+    const base = { accountPlan: 'TIER_ONE', dateFrom: 'a', dateTo: 'b' };
+    const fila = (probe: ReturnType<typeof summarizeMatchesProbe>) => ({
+      competition: wc!,
+      withinPlan: true,
+      probe,
+    });
+
+    for (const outcome of [
+      respuesta({}),
+      { kind: 'timeout' } as const,
+      { kind: 'network-error', message: 'x' } as const,
+    ]) {
+      expect(isInconclusive({ ...base, rows: [fila(summarizeMatchesProbe(outcome))] })).toBe(true);
+    }
+
+    expect(
+      isInconclusive({ ...base, rows: [fila(summarizeMatchesProbe(respuesta({ matches: [] })))] }),
+    ).toBe(false);
+    expect(
+      isInconclusive({
+        ...base,
+        rows: [fila(summarizeMatchesProbe(respuesta({ message: 'x' }, 403)))],
+      }),
+    ).toBe(false);
+    expect(
+      isInconclusive({ ...base, rows: [{ competition: wc!, withinPlan: false, probe: null }] }),
+    ).toBe(false);
+  });
+});
+
+describe('hasCompetitionsList', () => {
+  it('acepta la lista, también vacía, y rechaza lo que no lo es', () => {
+    expect(hasCompetitionsList({ competitions: [] })).toBe(true);
+    expect(hasCompetitionsList(listado)).toBe(true);
+
+    for (const body of [
+      undefined,
+      null,
+      'texto',
+      {},
+      { competitions: 'no' },
+      { competitions: null },
+    ]) {
+      expect(hasCompetitionsList(body)).toBe(false);
+    }
+  });
+});
+
+describe('partidos persistidos en la ventana', () => {
+  const ventana = { from: '2026-11-11T00:00:00.000Z', to: '2026-11-19T00:00:00.000Z' };
+
+  it('resume cantidad, estados y rango de fechas', () => {
+    const resumen = summarizePersistedWindow(ventana, [
+      { status: 'scheduled', kickoffAt: '2026-11-14T19:45:00Z' },
+      { status: 'finished', kickoffAt: '2026-11-11T20:00:00Z' },
+      { status: 'scheduled', kickoffAt: '2026-11-16T19:45:00Z' },
+    ]);
+
+    expect(resumen).toEqual({
+      ...ventana,
+      count: 3,
+      byStatus: { scheduled: 2, finished: 1 },
+      firstKickoff: '2026-11-11T20:00:00Z',
+      lastKickoff: '2026-11-16T19:45:00Z',
+    });
+    expect(formatPersistedWindow(resumen)).toContain('3 partidos (finished=1, scheduled=2)');
+  });
+
+  it('una ventana sin partidos persistidos lo dice con todas las letras', () => {
+    const texto = formatPersistedWindow(summarizePersistedWindow(ventana, []));
+
+    expect(texto).toContain('0 partidos persistidos');
+    expect(texto).toContain('fin exclusivo');
   });
 });
