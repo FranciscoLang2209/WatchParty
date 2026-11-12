@@ -1,7 +1,9 @@
 import { URL } from 'node:url';
 import {
   DEFAULT_BATCH_ID,
+  checkMinimum,
   planAccounts,
+  RemovalDisabledError,
   removeBatch,
   seedAccounts,
   takeSnapshot,
@@ -11,6 +13,7 @@ import {
 import { seedDemoActivity } from '../modules/demo-seed/application/demo-activity.js';
 import {
   formatComparison,
+  formatMinimum,
   formatPlan,
   formatRemoval,
   formatSeedResult,
@@ -27,7 +30,7 @@ import {
  *   pnpm --filter @watchparty/api demo:seed -- apply     # crea lo que falta (idempotente)
  *   pnpm --filter @watchparty/api demo:seed -- report    # conteos actuales
  *   pnpm --filter @watchparty/api demo:seed -- remove            # simulacro de retirada del lote
- *   pnpm --filter @watchparty/api demo:seed -- remove --apply    # retira SOLO lo del lote
+ *   (`remove --apply`, la retirada efectiva, está DESHABILITADA: ver el runbook)
  *
  * Variables (ver docs/runbooks/demo-501-usuarios.md): `DEMO_ENV_LABEL`, `DEMO_EXPECTED_SUPABASE_HOST`
  * (guarda contra correr sobre la base equivocada), las credenciales de las dos cuentas de
@@ -146,9 +149,16 @@ async function main(): Promise<void> {
   console.log(`Lote: ${batchId}\n`);
 
   if (command === 'remove') {
+    if (apply && !gateway.atomicCommentRemoval) {
+      // La retirada efectiva no es segura frente a reacciones concurrentes: no se escribe nada.
+      configError(new RemovalDisabledError().message);
+    }
+
     const result = await removeBatch(gateway, batchId, { apply });
     console.log(formatRemoval(result, apply));
-    if (!apply) console.log('\nPara borrar de verdad, repetí con --apply.');
+    if (!apply) {
+      console.log('\nEs un simulacro: no se borró nada. La retirada efectiva está deshabilitada.');
+    }
     return;
   }
 
@@ -237,6 +247,18 @@ async function main(): Promise<void> {
   const after = await takeSnapshot(gateway, batchId);
   console.log(`\n${formatSnapshot('Después', after)}`);
   console.log(`\n${formatComparison(before, after)}`);
+
+  // El mínimo se verifica al terminar una corrida completa: no alcanzarlo es un error explícito,
+  // aunque ninguna cuenta haya fallado. Una corrida limitada a propósito no se juzga.
+  const minimum = checkMinimum(after, config);
+  console.log(`\n${formatMinimum(minimum)}`);
+
+  if (minimum.checked && !minimum.reached) {
+    console.error(
+      `\nERROR: la carga terminó con ${minimum.accountsWithProfile} cuentas registradas con perfil y el mínimo es ${minimum.target}. Revisar los fallos y volver a correr \`apply\`.`,
+    );
+    process.exitCode = 1;
+  }
 
   if (failures > 0) {
     console.error(

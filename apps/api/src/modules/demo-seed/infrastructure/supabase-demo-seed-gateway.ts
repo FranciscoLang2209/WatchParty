@@ -238,19 +238,20 @@ export class SupabaseDemoSeedGateway implements DemoSeedGateway {
     }));
   }
 
-  async deleteComments(ids: string[]): Promise<number> {
-    let deleted = 0;
+  /**
+   * Retirada efectiva de comentarios: DESHABILITADA. Comprobar que no tienen reacciones y borrarlos
+   * son dos pedidos separados, y una reacción ajena que llegue entre ambos se perdería (la base borra
+   * las reacciones de un comentario al borrarlo). PostgREST no ofrece un paso atómico para esto.
+   *
+   * Para habilitarla hace falta una función de Postgres que bloquee los comentarios (`FOR UPDATE`),
+   * compruebe que no tienen reacciones y los borre en la misma transacción; ver el runbook. Hasta
+   * entonces `atomicCommentRemoval` es `false` y `removeBatch` se niega a escribir.
+   */
+  readonly atomicCommentRemoval = false;
 
-    for (const group of chunks(ids, IN_CHUNK)) {
-      const { count, error } = await this.client
-        .from('room_comments')
-        .delete({ count: 'exact' })
-        .in('id', group);
-      if (error) fail('No se pudo borrar comentarios', error);
-
-      deleted += count ?? 0;
-    }
-
-    return deleted;
+  // No recibe los ids: mientras esté deshabilitada no hay nada que borrar, y un método con menos
+  // parámetros sigue cumpliendo el puerto.
+  async deleteCommentsWithoutReactions(): Promise<{ deleted: string[]; skipped: string[] }> {
+    throw new Error('El borrado atómico de comentarios no está disponible.');
   }
 }

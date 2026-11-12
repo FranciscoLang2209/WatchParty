@@ -2,8 +2,8 @@
 
 Deja el entorno de demo con **al menos 501 cuentas registradas, cada una con su perfil**, dos cuentas
 de demostración y una muestra pequeña de actividad coherente, y un guion para ensayar. La carga es
-un script versionado, **idempotente y reversible**, que corre del lado servidor con la service_role
-key del entorno.
+un script versionado e **idempotente**, que corre del lado servidor con la service_role key del
+entorno. La retirada efectiva del lote está **deshabilitada** (ver «Retirada del lote»).
 
 **Estado: el procedimiento está listo y probado con dobles; todavía no se ejecutó contra el entorno
 de demo.** Los conteos, el partido elegido y el ensayo de QA se completan al ejecutarlo (ver
@@ -17,7 +17,7 @@ de demo.** Los conteos, el partido elegido y el ensayo de QA se completan al eje
 | Crea los perfiles con el mecanismo existente (`SupabaseOwnProfileStore.saveOwnProfile`).    | No manda ningún correo: la Admin API de Auth no envía confirmaciones.    |
 | Prepara dos cuentas de demostración que inician sesión por el flujo normal de la app.       | No toca partidos, fechas ni estados, ni vuelve a hacer el backfill.      |
 | Siembra una muestra de actividad solo para esas dos cuentas, sobre partidos ya existentes.  | No genera actividad masiva de las 501 cuentas.                           |
-| Identifica el lote y permite retirar **solo** lo que creó.                                  | No cambia políticas de acceso, KPIs, tablas ni agrega avatares o videos. |
+| Identifica el lote y simula su retirada (la efectiva está deshabilitada).                   | No cambia políticas de acceso, KPIs, tablas ni agrega avatares o videos. |
 
 ## Cómo funciona
 
@@ -35,7 +35,14 @@ de demo.** Los conteos, el partido elegido y el ensayo de QA se completan al eje
   siempre. Si el entorno ya tiene 490 cuentas con perfil, crea 11.
 - **Repetible y recuperable:** una cuenta del lote que ya existe no se vuelve a crear; una cuenta que
   quedó sin perfil por un fallo se completa en la siguiente corrida; un fallo en una cuenta no frena a
-  las demás. Un correo que ya pertenece a otra persona **no se toca** y se informa como conflicto.
+  las demás.
+- **Correos ajenos:** un correo que ya pertenece a otra persona **no se toca**, y **tampoco
+  ocupa un lugar del lote**: se saltea y se usa la identidad siguiente, así el total no queda corto.
+  Si el correo de una cuenta de demostración es de otra persona, se informa como fallo.
+- **Mínimo verificado:** al terminar una corrida **completa**, el script comprueba que haya al menos
+  501 cuentas registradas con perfil. Si no se alcanza, termina con un error explícito y código de
+  salida 1, aunque ninguna cuenta haya fallado. Una corrida limitada a propósito (`--limit` o
+  `DEMO_SEED_LIMIT`) no se juzga: informa que no se verificó.
 - **Actividad:** pasa por las mismas tiendas y servicios que usa la API, así que respeta sus reglas.
   Calificar y reseñar exige un partido **finalizado**, visto y, para la reseña, calificado. Los
   comentarios llevan una clave de idempotencia determinista, y las reacciones y el visto son
@@ -90,8 +97,9 @@ pnpm --filter @watchparty/api demo:seed -- apply
 pnpm --filter @watchparty/api demo:seed -- report
 ```
 
-Códigos de salida: `0` todo bien, `1` hubo fallos (volver a correr `apply` retoma lo que quedó a
-medias) y `2` configuración inválida (no se escribió nada).
+Códigos de salida: `0` todo bien, `1` hubo fallos o una corrida completa no alcanzó el mínimo
+(volver a correr `apply` retoma lo que quedó a medias) y `2` configuración inválida (no se escribió
+nada).
 
 ### Prueba acotada y recuperación
 
@@ -104,24 +112,45 @@ Antes de la carga completa, con `--limit=5`:
 
 Esos mismos comportamientos están cubiertos por los tests de `src/modules/demo-seed`: idempotencia,
 retomar tras un fallo parcial, completar una cuenta sin perfil, no pisar perfiles ni correos ajenos,
-el tope del lote chico y la retirada selectiva.
+el tope del lote chico, los correos ajenos que ocupan una identidad, la verificación del mínimo y la
+negativa a la retirada efectiva.
 
-## Retirada selectiva
+## Retirada del lote
 
-Para volver al estado anterior sin tocar nada ajeno:
+**La retirada efectiva (`remove --apply`) está deshabilitada** hasta que el borrado de comentarios sea
+atómico. No hace falta ejecutarla para completar la carga ni para presentar.
 
 ```sh
 pnpm --filter @watchparty/api demo:seed -- remove           # simulacro: no borra nada
-pnpm --filter @watchparty/api demo:seed -- remove --apply   # borra solo lo del lote
+pnpm --filter @watchparty/api demo:seed -- remove --apply   # se niega: sale con código 2 sin escribir
 ```
 
-Borra, en este orden, las reacciones del lote, sus comentarios, reseñas, notas y vistos, los perfiles y
-las cuentas. Nunca toca partidos ni cuentas ajenas.
+El simulacro informa cuántas cuentas tiene el lote y cuántos comentarios se podrían borrar o
+conservar. Es una **estimación**: una lectura que no autoriza ningún borrado.
 
-Las tablas de actividad referencian a `auth.users` **sin borrado en cascada**, por eso la actividad se
-borra antes que las cuentas. Si una persona ajena reaccionó a un comentario del lote, ese comentario
-**no se borra** (serían datos ajenos) y su autor **se conserva** con todo lo suyo; el informe lo
-indica en «cuentas que se conservan».
+### Por qué está deshabilitada
+
+Las reacciones («Me gusta») dependen de su comentario: **al borrar un comentario, la base borra
+también sus reacciones**. Un comentario del lote puede tener una reacción de otra persona, y esa no
+se puede perder. Comprobar «¿tiene reacciones ajenas?» y borrar son dos pedidos separados; si entre
+ambos llega un Me gusta ajeno, el borrado se lo llevaría puesto. Con la API REST de Supabase no hay
+forma de hacer las dos cosas en un solo paso.
+
+### Cómo se va a habilitar
+
+El código ya está preparado: la retirada pide un único **borrado atómico de comentarios sin
+reacciones** y conserva a los autores de los que vuelven omitidos, y se niega a escribir si el
+gateway no garantiza ese paso. Falta la pieza de base de datos: una función de Postgres que, en una
+misma transacción, bloquee los comentarios (`SELECT … FOR UPDATE`, que impide que entre una reacción
+mientras tanto), compruebe que no tienen ninguna reacción y borre solo esos. Es un cambio de esquema
+(una migración) que se aplica al entorno **de forma manual**, así que queda fuera de esta entrega.
+Cuando exista, `SupabaseDemoSeedGateway` la llama y pasa `atomicCommentRemoval` a `true`.
+
+Mientras tanto, para volver el entorno a un estado anterior hay que coordinar con el TechLead; no se
+borra a mano ni con SQL sueltos.
+
+Las tablas de actividad referencian a `auth.users` **sin borrado en cascada**, por eso, cuando se
+habilite, la actividad se borrará antes que las cuentas.
 
 ## Impacto en métricas
 
@@ -206,7 +235,9 @@ esta ruta histórica y no se presenta como agenda en vivo.
 
 ## Checklist de cierre
 
-- [x] Procedimiento versionado, con tests de idempotencia, recuperación y retirada selectiva.
+- [x] Procedimiento versionado, con tests de idempotencia, recuperación, correos ajenos y mínimo.
+- [x] Retirada efectiva deshabilitada hasta tener el borrado atómico; el simulacro sigue disponible.
+- [ ] Habilitar la retirada efectiva con la función atómica de base de datos (fuera de esta entrega).
 - [x] Guarda contra correr sobre una base no confirmada; sin credenciales en el repositorio.
 - [ ] Entorno de demo, URL y base identificados; restricciones de Auth registradas.
 - [ ] Prueba acotada (`--limit=5`) y recuperación comprobadas en el entorno de demo.

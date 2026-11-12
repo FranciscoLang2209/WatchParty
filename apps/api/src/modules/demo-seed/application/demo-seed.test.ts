@@ -10,6 +10,8 @@ import { MatchReviewService } from '../../reviews/application/match-review-servi
 import type { MatchReviewStore } from '../../reviews/domain/match-review-store.js';
 import type { PublicRoomStore } from '../../rooms/domain/public-room-store.js';
 import type { WatchedMatchStore } from '../../watched/domain/watched-match-store.js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { SupabaseDemoSeedGateway } from '../infrastructure/supabase-demo-seed-gateway.js';
 import { ROOM_CONVERSATION, seedDemoActivity } from './demo-activity.js';
 import {
   buildIdentity,
@@ -18,8 +20,10 @@ import {
   pickFavoriteTeamId,
 } from './demo-identities.js';
 import {
+  checkMinimum,
   COUNTED_TABLES,
   planAccounts,
+  RemovalDisabledError,
   removeBatch,
   sanitizeReason,
   seedAccounts,
@@ -122,10 +126,26 @@ class FakeGateway implements DemoSeedGateway {
     );
   }
 
-  async deleteComments(ids: string[]) {
-    const before = this.comments.length;
-    this.comments = this.comments.filter((comment) => !ids.includes(comment.id));
-    return before - this.comments.length;
+  atomicCommentRemoval = true;
+  /** Simula una interacción ajena que llega justo antes del borrado atómico. */
+  beforeAtomicDelete: (() => void) | null = null;
+
+  /**
+   * Comprueba y borra en un solo paso, sin nada en el medio. Respeta la relación de la base: borrar
+   * un comentario borra también sus reacciones, así que sólo borra los que no tienen ninguna.
+   */
+  async deleteCommentsWithoutReactions(ids: string[]) {
+    this.beforeAtomicDelete?.();
+
+    const withReactions = new Set(this.reactions.map((reaction) => reaction.commentId));
+    const deleted = ids.filter(
+      (id) => this.comments.some((c) => c.id === id) && !withReactions.has(id),
+    );
+    const skipped = ids.filter((id) => withReactions.has(id));
+
+    this.comments = this.comments.filter((comment) => !deleted.includes(comment.id));
+
+    return { deleted, skipped };
   }
 }
 
@@ -367,6 +387,123 @@ describe('cuentas y perfiles', () => {
     expect(env.gateway.users.find((user) => user.id === 'ajena')?.batchId).toBeNull();
   });
 
+  describe('un correo ajeno que coincide con una identidad generada', () => {
+    function conCorreoAjeno(conPerfil: boolean) {
+      const env = entorno();
+      const ajeno = `${buildIdentity(7).emailLocalPart}@${config().emailDomain}`;
+      env.gateway.users.push({ id: 'ajena', email: ajeno, isAnonymous: false, batchId: null });
+      if (conPerfil) env.gateway.profileIds.add('ajena');
+
+      return env;
+    }
+
+    it.each([
+      ['con perfil', true],
+      ['sin perfil', false],
+    ])(
+      'completa el lugar con otra identidad y llega a 501 (cuenta ajena %s)',
+      async (_caso, conPerfil) => {
+        const env = conCorreoAjeno(conPerfil);
+
+        const { result, after } = await correr(env);
+        const minimo = checkMinimum(after, config());
+
+        expect(result.conflicts).toBe(1);
+        expect(result.failures).toEqual([]);
+        expect(after.accountsWithProfile).toBe(501);
+        expect(minimo).toMatchObject({ checked: true, reached: true });
+        // La cuenta ajena no se tocó.
+        expect(env.gateway.users.find((user) => user.id === 'ajena')?.batchId).toBeNull();
+        expect(env.profiles.saved.has('ajena')).toBe(false);
+      },
+    );
+
+    it('repetir la carga mantiene el mínimo sin crear ni duplicar nada', async () => {
+      const env = conCorreoAjeno(true);
+      await correr(env);
+      const cuentas = env.gateway.users.length;
+
+      const segunda = await correr(env);
+
+      expect(segunda.result).toMatchObject({
+        createdAccounts: 0,
+        createdProfiles: 0,
+        failures: [],
+      });
+      expect(segunda.after.accountsWithProfile).toBe(501);
+      expect(env.gateway.users).toHaveLength(cuentas);
+    });
+
+    it('varios correos ajenos seguidos tampoco dejan el total corto', async () => {
+      const env = entorno();
+      for (const index of [1, 2, 3, 50, 51, 52]) {
+        const correo = `${buildIdentity(index).emailLocalPart}@${config().emailDomain}`;
+        env.gateway.users.push({
+          id: `ajena-${index}`,
+          email: correo,
+          isAnonymous: false,
+          batchId: null,
+        });
+        env.gateway.profileIds.add(`ajena-${index}`);
+      }
+
+      const { result, after } = await correr(env);
+
+      expect(result.conflicts).toBe(6);
+      expect(after.accountsWithProfile).toBe(501);
+    });
+
+    it('si la cuenta de demostración tiene el correo de otra persona se informa como fallo', async () => {
+      const env = entorno();
+      env.gateway.users.push({
+        id: 'ajena',
+        email: config().demoAccounts[0].email,
+        isAnonymous: false,
+        batchId: null,
+      });
+
+      const { result } = await correr(env);
+
+      expect(result.failures.map((failure) => failure.ref)).toEqual(['demo-1']);
+      expect(result.demoUserIds[0]).toBeNull();
+    });
+  });
+
+  describe('verificación del mínimo al terminar', () => {
+    it('una corrida completa que no llega a 501 se marca como no alcanzada', async () => {
+      const env = entorno();
+      env.gateway.failCreateFor = new Set([5, 77, 300]);
+
+      const { after } = await correr(env);
+
+      expect(checkMinimum(after, config())).toEqual({
+        checked: true,
+        reached: false,
+        accountsWithProfile: 498,
+        target: 501,
+      });
+    });
+
+    it('una corrida limitada a propósito no se juzga', async () => {
+      const env = entorno();
+
+      const { after } = await correr(env, config({ limit: 10 }));
+
+      expect(checkMinimum(after, config({ limit: 10 }))).toMatchObject({
+        checked: false,
+        reached: false,
+      });
+    });
+
+    it('con el mínimo ya cubierto por cuentas ajenas se da por alcanzado', async () => {
+      const env = entorno(520);
+
+      const { after } = await correr(env);
+
+      expect(checkMinimum(after, config())).toMatchObject({ checked: true, reached: true });
+    });
+  });
+
   it('un lote chico crea sólo esa cantidad y la siguiente corrida sigue desde ahí', async () => {
     const env = entorno();
     const chico = await correr(env, config({ limit: 10 }));
@@ -481,11 +618,68 @@ describe('retirada selectiva del lote', () => {
 
     const resultado = await removeBatch(env.gateway, BATCH, { apply: true });
 
-    expect(resultado).toMatchObject({ retainedAccounts: 1, blockedComments: 1 });
+    expect(resultado).toMatchObject({
+      retainedAccounts: 1,
+      blockedComments: 1,
+      removableComments: 1,
+    });
     expect(env.gateway.comments.map((comment) => comment.id)).toEqual(['c-ajeno-reaccionado']);
     expect(env.gateway.reactions).toEqual([{ commentId: 'c-ajeno-reaccionado', userId: 'real-0' }]);
     expect(env.gateway.users.some((user) => user.id === a!.id)).toBe(true);
     expect(env.gateway.profileIds.has(a!.id)).toBe(true);
+  });
+
+  it('una reacción ajena que llega justo antes del borrado no se pierde: el comentario se conserva', async () => {
+    const env = entorno(2);
+    await correr(env, config({ limit: 3 }));
+    const [a, b] = env.gateway.users.filter((user) => user.batchId === BATCH);
+    env.gateway.comments.push({ id: 'c-a', authorId: a!.id }, { id: 'c-b', authorId: b!.id });
+    // Entre «leer» y «borrar» alguien de afuera le da Me gusta al comentario de B.
+    env.gateway.beforeAtomicDelete = () => {
+      env.gateway.reactions.push({ commentId: 'c-b', userId: 'real-1' });
+    };
+
+    const resultado = await removeBatch(env.gateway, BATCH, { apply: true });
+
+    expect(env.gateway.reactions).toEqual([{ commentId: 'c-b', userId: 'real-1' }]);
+    expect(env.gateway.comments.map((comment) => comment.id)).toEqual(['c-b']);
+    expect(resultado).toMatchObject({
+      retainedAccounts: 1,
+      blockedComments: 1,
+      removableComments: 1,
+    });
+    // Quien conserva el comentario se queda con su cuenta y su perfil.
+    expect(env.gateway.users.some((user) => user.id === b!.id)).toBe(true);
+    expect(env.gateway.profileIds.has(b!.id)).toBe(true);
+  });
+
+  it('con un gateway sin borrado atómico la retirada efectiva se niega a escribir', async () => {
+    const env = entorno(3);
+    await correr(env, config({ limit: 4 }));
+    env.gateway.atomicCommentRemoval = false;
+    const usuarios = env.gateway.users.length;
+    const perfiles = env.gateway.profileIds.size;
+
+    await expect(removeBatch(env.gateway, BATCH, { apply: true })).rejects.toBeInstanceOf(
+      RemovalDisabledError,
+    );
+
+    expect(env.gateway.users).toHaveLength(usuarios);
+    expect(env.gateway.profileIds.size).toBe(perfiles);
+    // El simulacro sigue funcionando.
+    expect(await removeBatch(env.gateway, BATCH, { apply: false })).toMatchObject({
+      batchAccounts: 6,
+    });
+  });
+
+  it('el gateway real tiene la retirada efectiva deshabilitada y no la implementa a medias', async () => {
+    const real = new SupabaseDemoSeedGateway({} as SupabaseClient);
+
+    expect(real.atomicCommentRemoval).toBe(false);
+    await expect(real.deleteCommentsWithoutReactions()).rejects.toThrow('no está disponible');
+    await expect(removeBatch(real, BATCH, { apply: true })).rejects.toBeInstanceOf(
+      RemovalDisabledError,
+    );
   });
 
   it('un lote vacío no hace nada', async () => {

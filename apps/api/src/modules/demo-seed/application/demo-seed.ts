@@ -55,12 +55,27 @@ export interface DemoSeedGateway {
   matchesFingerprint(): Promise<MatchesFingerprint>;
   deleteRowsByUsers(table: RowsByUserTable, userIds: string[]): Promise<number>;
   listCommentsByAuthors(authorIds: string[]): Promise<{ id: string; authorId: string }[]>;
-  /** De `commentIds`, los que tienen un Me gusta de alguien que NO es de `batchUserIds`. */
+  /**
+   * De `commentIds`, los que tienen un Me gusta de alguien que NO es de `batchUserIds`. Es una
+   * lectura informativa (para el simulacro): NO sirve para decidir un borrado, porque entre leer y
+   * borrar puede llegar una reacción ajena.
+   */
   listCommentIdsWithReactionsFromOthers(
     commentIds: string[],
     batchUserIds: string[],
   ): Promise<string[]>;
-  deleteComments(ids: string[]): Promise<number>;
+  /**
+   * `true` solo si `deleteCommentsWithoutReactions` comprueba y borra en un único paso atómico, de
+   * modo que una reacción que llegue en ese instante no se pierda. Mientras sea `false`, la retirada
+   * efectiva está deshabilitada.
+   */
+  readonly atomicCommentRemoval: boolean;
+  /**
+   * Borra, de forma atómica, los comentarios de `ids` que NO tienen ninguna reacción, y devuelve los
+   * borrados y los que se omitieron porque tenían alguna. Nunca borra un comentario con reacciones:
+   * la base borraría también esas reacciones por la relación, y podrían ser de otra persona.
+   */
+  deleteCommentsWithoutReactions(ids: string[]): Promise<{ deleted: string[]; skipped: string[] }>;
 }
 
 export interface DemoAccountConfig {
@@ -216,16 +231,48 @@ export async function seedAccounts(
     favoriteTeamId: pickFavoriteTeamId(position + 1, teamIds),
   }));
 
-  let bulk = 0;
-  const bulkLimit = config.limit ?? Number.POSITIVE_INFINITY;
-  for (let index = 1; index <= plan.bulkTarget; index += 1) {
+  const result: SeedAccountsResult = {
+    createdAccounts: 0,
+    existingAccounts: 0,
+    createdProfiles: 0,
+    conflicts: 0,
+    failures: [],
+    demoUserIds: config.demoAccounts.map(() => null),
+  };
+
+  // Los lugares del lote se ocupan con identidades libres. Un correo que ya es de otra persona NO
+  // ocupa un lugar: se saltea y se sigue con la identidad siguiente, así el total no queda corto. La
+  // elección es determinista, de modo que repetir la corrida reconoce las mismas cuentas.
+  let newAccounts = 0;
+  let slots = 0;
+  const newAccountsLimit = config.limit ?? Number.POSITIVE_INFINITY;
+
+  for (let index = 1; slots < plan.bulkTarget; index += 1) {
+    if (index > MAX_UNIQUE_IDENTITIES) {
+      result.failures.push({
+        ref: 'lote',
+        reason: 'No hay identidades libres suficientes para completar el lote.',
+      });
+      break;
+    }
+
     const identity = buildIdentity(index);
     const email = `${identity.emailLocalPart}@${config.emailDomain}`;
-    const exists = byEmail.has(email.toLowerCase());
+    const known = byEmail.get(email.toLowerCase());
 
-    // El tope de la corrida solo frena altas nuevas: las que ya existen se siguen comprobando.
-    if (!exists && bulk >= bulkLimit) continue;
-    if (!exists) bulk += 1;
+    if (known && known.batchId !== config.batchId) {
+      result.conflicts += 1;
+      continue;
+    }
+
+    slots += 1;
+
+    // El tope de la corrida solo frena altas nuevas: las del lote que ya existen se siguen
+    // comprobando para completar su perfil. El lugar queda reservado para una corrida posterior.
+    if (!known) {
+      if (newAccounts >= newAccountsLimit) continue;
+      newAccounts += 1;
+    }
 
     specs.push({
       ref: `#${index}`,
@@ -237,15 +284,6 @@ export async function seedAccounts(
     });
   }
 
-  const result: SeedAccountsResult = {
-    createdAccounts: 0,
-    existingAccounts: 0,
-    createdProfiles: 0,
-    conflicts: 0,
-    failures: [],
-    demoUserIds: config.demoAccounts.map(() => null),
-  };
-
   for (let start = 0; start < specs.length; start += CHUNK_SIZE) {
     const chunk = specs.slice(start, start + CHUNK_SIZE);
 
@@ -255,8 +293,14 @@ export async function seedAccounts(
           const known = byEmail.get(spec.email.toLowerCase());
 
           if (known && known.batchId !== config.batchId) {
-            // Un correo que ya es de otra persona no se toca ni se reutiliza.
+            // Solo puede pasar con una cuenta de demostración (las masivas ya se saltearon arriba).
+            // Un correo que ya es de otra persona no se toca ni se reutiliza, y no es un hecho
+            // menor: esa cuenta de demostración no existe, así que se informa como fallo.
             result.conflicts += 1;
+            result.failures.push({
+              ref: spec.ref,
+              reason: 'El correo ya pertenece a una cuenta que no es del lote: no se toca.',
+            });
             return;
           }
 
@@ -301,24 +345,46 @@ export interface RemoveBatchResult {
   batchAccounts: number;
   /** Cuentas que se conservan porque un comentario suyo tiene reacciones de otras personas. */
   retainedAccounts: number;
-  /** Comentarios del lote que se borran / que se conservan por tener reacciones ajenas. */
+  /**
+   * Comentarios del lote que se borran / que se conservan por tener reacciones. En el simulacro son
+   * una estimación (una lectura); con `apply` son lo que el borrado atómico realmente hizo.
+   */
   removableComments: number;
   blockedComments: number;
   deleted: Record<RowsByUserTable | 'room_comments' | 'auth_users', number>;
 }
 
+/** La retirada efectiva no se puede hacer con seguridad con el gateway recibido. */
+export class RemovalDisabledError extends Error {
+  constructor() {
+    super(
+      'La retirada efectiva está deshabilitada: el borrado de comentarios todavía no es atómico, y una reacción ajena que llegue entre la comprobación y el borrado se perdería. El simulacro (sin --apply) sigue disponible.',
+    );
+    this.name = 'RemovalDisabledError';
+  }
+}
+
 /**
  * Retira SOLO lo que creó el lote: la actividad de sus cuentas, sus perfiles y las cuentas. No toca
- * partidos ni cuentas ajenas. Un comentario del lote con reacciones de otras personas no se borra
- * (serían datos ajenos): su autor se conserva entero para no romper la relación, y eso se informa.
+ * partidos ni cuentas ajenas.
  *
- * Sin `apply` no escribe nada: devuelve lo que haría.
+ * Un comentario con reacciones nunca se borra: la base eliminaría esas reacciones por la relación, y
+ * pueden ser de otra persona. Para que ninguna llegue entre «mirar» y «borrar», no se mira antes: se
+ * le pide al gateway un único borrado atómico de los comentarios SIN reacciones, y los que vuelven
+ * como omitidos marcan a los autores que se conservan.
+ *
+ * Sin `apply` no escribe nada: devuelve lo que haría (una estimación). Con `apply`, si el gateway no
+ * garantiza el borrado atómico, se niega a escribir.
  */
 export async function removeBatch(
   gateway: DemoSeedGateway,
   batchId: string,
   options: { apply: boolean },
 ): Promise<RemoveBatchResult> {
+  if (options.apply && !gateway.atomicCommentRemoval) {
+    throw new RemovalDisabledError();
+  }
+
   const users = (await gateway.listAuthUsers()).filter((user) => user.batchId === batchId);
   const batchIds = users.map((user) => user.id);
   const deleted: RemoveBatchResult['deleted'] = {
@@ -342,37 +408,45 @@ export async function removeBatch(
   }
 
   const comments = await gateway.listCommentsByAuthors(batchIds);
-  const blocked = new Set(
-    await gateway.listCommentIdsWithReactionsFromOthers(
-      comments.map((comment) => comment.id),
-      batchIds,
-    ),
-  );
-  const retained = new Set(
-    comments.filter((comment) => blocked.has(comment.id)).map((comment) => comment.authorId),
-  );
-  const removableComments = comments
-    .filter((comment) => !retained.has(comment.authorId))
-    .map((comment) => comment.id);
-  const removableUsers = batchIds.filter((id) => !retained.has(id));
-  const summary = {
-    batchAccounts: batchIds.length,
-    retainedAccounts: retained.size,
-    removableComments: removableComments.length,
-    blockedComments: blocked.size,
-  };
+  const authorOf = new Map(comments.map((comment) => [comment.id, comment.authorId]));
 
   if (!options.apply) {
-    return { ...summary, deleted };
+    // Estimación para el informe: nada de esto autoriza un borrado.
+    const blocked = new Set(
+      await gateway.listCommentIdsWithReactionsFromOthers(
+        comments.map((comment) => comment.id),
+        batchIds,
+      ),
+    );
+    const retained = new Set([...blocked].map((id) => authorOf.get(id)!));
+
+    return {
+      batchAccounts: batchIds.length,
+      retainedAccounts: retained.size,
+      removableComments: comments.length - blocked.size,
+      blockedComments: blocked.size,
+      deleted,
+    };
   }
 
-  // Los Me gusta del lote salen primero y de todas sus cuentas: un comentario que se borra no
-  // puede tener reacciones colgando, ni siquiera las de una cuenta que se conserva.
+  // 1. Los Me gusta del propio lote salen primero: son datos del lote y, si quedaran, harían que
+  //    sus comentarios parezcan «con reacciones».
   deleted.room_comment_reactions = await gateway.deleteRowsByUsers(
     'room_comment_reactions',
     batchIds,
   );
-  deleted.room_comments = await gateway.deleteComments(removableComments);
+
+  // 2. Un único paso atómico: borra los comentarios sin ninguna reacción y omite el resto. Lo que
+  //    llegue de otra persona, incluso en este instante, queda a salvo.
+  const outcome = await gateway.deleteCommentsWithoutReactions(
+    comments.map((comment) => comment.id),
+  );
+  deleted.room_comments = outcome.deleted.length;
+
+  // 3. Quien conserva un comentario (con reacciones ajenas) se queda con su cuenta y su perfil.
+  const retained = new Set(outcome.skipped.map((id) => authorOf.get(id)).filter((id) => !!id));
+  const removableUsers = batchIds.filter((id) => !retained.has(id));
+
   deleted.match_reviews = await gateway.deleteRowsByUsers('match_reviews', removableUsers);
   deleted.match_ratings = await gateway.deleteRowsByUsers('match_ratings', removableUsers);
   deleted.watched_matches = await gateway.deleteRowsByUsers('watched_matches', removableUsers);
@@ -383,5 +457,33 @@ export async function removeBatch(
     deleted.auth_users += 1;
   }
 
-  return { ...summary, deleted };
+  return {
+    batchAccounts: batchIds.length,
+    retainedAccounts: retained.size,
+    removableComments: outcome.deleted.length,
+    blockedComments: outcome.skipped.length,
+    deleted,
+  };
+}
+
+export interface MinimumCheck {
+  /** `false` en una corrida limitada a propósito (`limit`): ahí no se exige el mínimo. */
+  checked: boolean;
+  reached: boolean;
+  accountsWithProfile: number;
+  target: number;
+}
+
+/**
+ * ¿Terminó la carga con el mínimo de cuentas registradas con perfil? Una corrida completa que no lo
+ * alcanza es un error, aunque ninguna cuenta haya fallado (por ejemplo, por un correo ajeno que
+ * ocupaba un lugar). Una corrida limitada a propósito no se juzga.
+ */
+export function checkMinimum(snapshot: EnvironmentSnapshot, config: DemoSeedConfig): MinimumCheck {
+  return {
+    checked: config.limit === undefined,
+    reached: snapshot.accountsWithProfile >= config.targetAccounts,
+    accountsWithProfile: snapshot.accountsWithProfile,
+    target: config.targetAccounts,
+  };
 }

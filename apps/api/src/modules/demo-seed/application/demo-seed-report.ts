@@ -3,6 +3,7 @@ import {
   COUNTED_TABLES,
   type AccountPlan,
   type EnvironmentSnapshot,
+  type MinimumCheck,
   type MatchesFingerprint,
   type RemoveBatchResult,
   type SeedAccountsResult,
@@ -61,7 +62,7 @@ export function formatSeedResult(result: SeedAccountsResult): string {
     `  cuentas creadas:      ${result.createdAccounts}`,
     `  ya existían:          ${result.existingAccounts}`,
     `  perfiles creados:     ${result.createdProfiles}`,
-    `  correos en conflicto: ${result.conflicts} (de otra persona: no se tocaron)`,
+    `  correos en conflicto: ${result.conflicts} (de otra persona: no se tocaron; otra identidad ocupó su lugar)`,
     `  fallos:               ${result.failures.length}`,
     ...result.failures.slice(0, 20).map((failure) => `    - ${failure.ref}: ${failure.reason}`),
   ];
@@ -112,5 +113,19 @@ export function formatComparison(before: EnvironmentSnapshot, after: Environment
         ? `idénticos (mismos ids, fechas y estados; huella ${after.matches.digest.slice(0, 16)})`
         : 'CAMBIARON: revisar (¿corrió la sincronización diaria durante la carga?)'
     }`,
+  ].join('\n');
+}
+
+export function formatMinimum(check: MinimumCheck): string {
+  if (!check.checked) {
+    return [
+      '== Mínimo de cuentas ==',
+      `  corrida limitada a propósito: no se verifica (${check.accountsWithProfile} de ${check.target} con perfil)`,
+    ].join('\n');
+  }
+
+  return [
+    '== Mínimo de cuentas ==',
+    `  ${check.accountsWithProfile} cuentas registradas con perfil de ${check.target} pedidas: ${check.reached ? 'ALCANZADO' : 'NO ALCANZADO'}`,
   ].join('\n');
 }
