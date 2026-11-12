@@ -1167,7 +1167,7 @@ describe('Directorio de salas — filtro Mi equipo', () => {
     expect(enlacesDe(m)).toEqual([]);
     expect(m.queryByText(/Todavía no elegiste un equipo/)).not.toBeInTheDocument();
 
-    await user.click(within(aviso).getByRole('button', { name: 'Ver todos los partidos' }));
+    await user.click(within(aviso).getByRole('button', { name: 'Restablecer filtros' }));
 
     expect(enlacesDe(m)).toHaveLength(4);
     expect(
@@ -1937,7 +1937,7 @@ describe('Directorio de salas — selector Todos / En vivo / Próximos', () => {
     expect(m.getAllByRole('heading', { level: 1 })).toHaveLength(1);
   });
 
-  it('una opción sin partidos lo dice y permite volver a Todos, dejando el foco en Todos', async () => {
+  it('una opción sin partidos lo dice y permite restablecer los filtros, dejando el foco en Todos', async () => {
     const user = userEvent.setup();
     const m = await abrir([proxA, proxB]);
 
@@ -1952,10 +1952,11 @@ describe('Directorio de salas — selector Todos / En vivo / Próximos', () => {
     expect(enlaces(m)).toEqual([]);
     expect(m.queryByRole('region')).not.toBeInTheDocument();
 
-    await user.click(within(aviso).getByRole('button', { name: 'Ver todos los partidos' }));
+    await user.click(within(aviso).getByRole('button', { name: 'Restablecer filtros' }));
 
     expect(opcion(m, 'Todos')).toHaveAttribute('aria-pressed', 'true');
-    expect(opcion(m, 'Todos')).toHaveFocus();
+    // Restablecer devuelve el foco al primer control de la barra.
+    expect(m.getAllByRole('button', { name: 'Todos' })[0]).toHaveFocus();
     expect(enlaces(m)).toEqual(['Prox A', 'Prox B']);
   });
 
@@ -2170,7 +2171,7 @@ describe('Directorio de salas — filtro por fecha', () => {
     }
   });
 
-  it('un día sin partidos lo dice, sin prometer más agenda, y permite volver a ver todos', async () => {
+  it('un día sin partidos lo dice, sin prometer más agenda, y permite restablecer los filtros', async () => {
     const user = userEvent.setup();
     const m = await abrir();
 
@@ -2186,10 +2187,11 @@ describe('Directorio de salas — filtro por fecha', () => {
     expect(equipos(m)).toEqual([]);
     expect(m.queryByRole('region')).not.toBeInTheDocument();
 
-    await user.click(within(aviso).getByRole('button', { name: 'Ver todos los días' }));
+    await user.click(within(aviso).getByRole('button', { name: 'Restablecer filtros' }));
 
     expect(campo(m)).toHaveValue('');
-    expect(campo(m)).toHaveFocus();
+    // Restablecer devuelve el foco al primer control de la barra.
+    expect(m.getAllByRole('button', { name: 'Todos' })[0]).toHaveFocus();
     expect(equipos(m)).toHaveLength(5);
   });
 
@@ -2712,6 +2714,313 @@ describe('Directorio de salas — combinar y limpiar filtros', () => {
       await user.click(limpiar(m)!);
 
       expect(enlaces(m)).toEqual(['River Vivo 7', 'River Prox 8', 'Racing Prox 8']);
+    });
+  });
+});
+
+describe('Directorio de salas — cantidad y vacíos de los filtros', () => {
+  const PERFIL_URL = `${API_BASE}/me/profile`;
+  const DIA_7 = '2026-11-07T21:00:00Z';
+  const DIA_8 = '2026-11-08T15:00:00Z';
+
+  const partido = (
+    id: string,
+    status: 'live' | 'scheduled',
+    kickoffAt: string,
+    homeTeam: string,
+    homeTeamId: string,
+  ) => ({
+    ...river,
+    id,
+    status,
+    kickoffAt,
+    homeTeam,
+    homeTeamId,
+    awayTeam: 'Visita',
+    awayTeamId: 'team-visita',
+  });
+
+  // El favorito del perfil es el equipo A.
+  const vivoA = partido('vivo-a', 'live', DIA_7, 'Vivo A', 'team-a');
+  const proxA = partido('prox-a', 'scheduled', DIA_8, 'Prox A', 'team-a');
+  const proxB = partido('prox-b', 'scheduled', DIA_8, 'Prox B', 'team-b');
+  const agenda = [vivoA, proxA, proxB];
+
+  type Vista = ReturnType<typeof within>;
+
+  function servidor(matches: unknown[], favorito: string | null = 'team-a') {
+    fetchSpy.mockImplementation((input: unknown) =>
+      Promise.resolve(
+        String(input) === PERFIL_URL
+          ? jsonResponse({ profile: { displayName: 'M', bio: '', favoriteTeamId: favorito } })
+          : jsonResponse({ matches }),
+      ),
+    );
+  }
+
+  async function abrir(matches: unknown[] = agenda, favorito: string | null = 'team-a') {
+    conSesion();
+    servidor(matches, favorito);
+    renderAt('/rooms');
+
+    return directorio();
+  }
+
+  const cantidad = (m: Vista) => m.queryByText(/^\d+ partidos? (disponibles?|coincid)/);
+  const textoCantidad = (m: Vista) => cantidad(m)?.textContent;
+  const enlaces = (m: Vista) => m.queryAllByRole('link', { name: /Ver partido/ });
+  const restablecer = (m: Vista) => m.queryByRole('button', { name: 'Restablecer filtros' });
+  const VENTANA = /agenda limitada/;
+
+  const equipo = (m: Vista, nombre: 'Todos' | 'Mi equipo') =>
+    within(m.getByRole('group', { name: 'Filtrar partidos' })).getByRole('button', {
+      name: nombre,
+    });
+  const estadoDe = (m: Vista, nombre: 'Todos' | 'En vivo' | 'Próximos') =>
+    within(m.getByRole('group', { name: 'Filtrar por estado' })).getByRole('button', {
+      name: nombre,
+    });
+  const elegirFecha = (m: Vista, valor: string) => {
+    fireEvent.change(m.getByLabelText('Filtrar por fecha'), { target: { value: valor } });
+  };
+
+  async function listo(m: Vista) {
+    await m.findByRole('group', { name: 'Filtrar partidos' });
+  }
+
+  describe('cantidad', () => {
+    it('sin filtros cuenta los partidos disponibles, en plural', async () => {
+      const m = await abrir();
+      await listo(m);
+
+      expect(textoCantidad(m)).toBe('3 partidos disponibles');
+    });
+
+    it('con un solo partido usa el singular', async () => {
+      const m = await abrir([vivoA]);
+      await listo(m);
+
+      expect(textoCantidad(m)).toBe('1 partido disponible');
+    });
+
+    it('con filtros cuenta los coincidentes y concuerda en singular y plural', async () => {
+      const user = userEvent.setup();
+      const m = await abrir();
+      await listo(m);
+
+      await user.click(estadoDe(m, 'En vivo'));
+      expect(textoCantidad(m)).toBe('1 partido coincide con los filtros');
+
+      await user.click(estadoDe(m, 'Próximos'));
+      expect(textoCantidad(m)).toBe('2 partidos coinciden con los filtros');
+
+      await user.click(estadoDe(m, 'Todos'));
+      expect(textoCantidad(m)).toBe('3 partidos disponibles');
+    });
+
+    it('coincide siempre con las tarjetas visibles, también al combinar los tres filtros', async () => {
+      const user = userEvent.setup();
+      const m = await abrir();
+      await listo(m);
+
+      const pasos: [() => Promise<void> | void, number][] = [
+        [() => user.click(equipo(m, 'Mi equipo')), 2],
+        [() => user.click(estadoDe(m, 'Próximos')), 1],
+        [() => elegirFecha(m, '2026-11-08'), 1],
+        [() => elegirFecha(m, ''), 1],
+        [() => user.click(equipo(m, 'Todos')), 2],
+      ];
+
+      for (const [paso, esperadas] of pasos) {
+        await paso();
+        await waitFor(() => expect(enlaces(m)).toHaveLength(esperadas));
+        expect(textoCantidad(m)).toMatch(new RegExp(`^${esperadas} partidos? `));
+      }
+    });
+
+    it('es una región cortés, no un estado: no compite con los avisos de estado', async () => {
+      const m = await abrir();
+      await listo(m);
+
+      expect(cantidad(m)).toHaveAttribute('aria-live', 'polite');
+      expect(m.queryByRole('status')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('agenda vacía y filtros sin coincidencias', () => {
+    it('la agenda vacía lo dice, aclara la ventana y no ofrece restablecer ni cuenta', async () => {
+      const m = await abrir([]);
+
+      await m.findByText(/Todavía no hay partidos ni salas disponibles/);
+
+      expect(m.getByRole('heading', { level: 2 })).toHaveTextContent('No hay partidos por ahora');
+      expect(m.getByText(VENTANA)).toBeInTheDocument();
+      expect(restablecer(m)).not.toBeInTheDocument();
+      expect(cantidad(m)).not.toBeInTheDocument();
+      expect(m.queryByRole('group', { name: 'Filtrar por estado' })).not.toBeInTheDocument();
+    });
+
+    it('sólo con partidos fuera del directorio también es agenda vacía', async () => {
+      const m = await abrir([{ ...vivoA, status: 'finished' }]);
+
+      await m.findByText(/Todavía no hay partidos ni salas disponibles/);
+
+      expect(restablecer(m)).not.toBeInTheDocument();
+    });
+
+    it('filtros sin coincidencias se distinguen de la agenda vacía y ofrecen restablecer', async () => {
+      const user = userEvent.setup();
+      const m = await abrir([proxA, proxB]);
+      await listo(m);
+
+      await user.click(estadoDe(m, 'En vivo'));
+
+      const aviso = await m.findByRole('status');
+
+      expect(within(aviso).getByRole('heading', { level: 2 })).toHaveTextContent(
+        'No hay partidos para mostrar',
+      );
+      expect(aviso).toHaveTextContent(VENTANA);
+      expect(m.queryByText(/Todavía no hay partidos ni salas disponibles/)).not.toBeInTheDocument();
+      expect(within(aviso).getByRole('button', { name: 'Restablecer filtros' })).toBeVisible();
+      // Sin coincidencias no se cuenta: el aviso ya lo dice y no hay un «0 partidos».
+      expect(cantidad(m)).not.toBeInTheDocument();
+      expect(m.queryByText(/\b0 partidos/)).not.toBeInTheDocument();
+    });
+
+    async function restablecerDesde(
+      aplicar: (m: Vista, user: ReturnType<typeof userEvent.setup>) => Promise<void> | void,
+      matches: unknown[] = agenda,
+      favorito: string = 'team-a',
+    ) {
+      const user = userEvent.setup();
+      const m = await abrir(matches, favorito);
+      await listo(m);
+
+      await aplicar(m, user);
+      const aviso = await m.findByRole('status');
+
+      expect(aviso).toHaveTextContent(VENTANA);
+
+      await user.click(within(aviso).getByRole('button', { name: 'Restablecer filtros' }));
+
+      expect(enlaces(m)).toHaveLength(matches.length);
+      expect(equipo(m, 'Todos')).toHaveAttribute('aria-pressed', 'true');
+      expect(estadoDe(m, 'Todos')).toHaveAttribute('aria-pressed', 'true');
+      expect(m.getByLabelText('Filtrar por fecha')).toHaveValue('');
+      // El botón desaparece al restablecer: el foco no se pierde en el body.
+      expect(equipo(m, 'Todos')).toHaveFocus();
+      expect(m.queryByRole('status')).not.toBeInTheDocument();
+      expect(textoCantidad(m)).toBe(`${matches.length} partidos disponibles`);
+    }
+
+    it('Restablecer filtros desde un estado sin partidos vuelve a la lista completa', async () => {
+      await restablecerDesde((m, user) => user.click(estadoDe(m, 'En vivo')), [proxA, proxB]);
+    });
+
+    it('Restablecer filtros desde un día sin partidos vuelve a la lista completa', async () => {
+      await restablecerDesde((m) => elegirFecha(m, '2026-11-20'));
+    });
+
+    it('Restablecer filtros desde un equipo sin partidos vuelve a la lista completa', async () => {
+      await restablecerDesde(
+        (m, user) => user.click(equipo(m, 'Mi equipo')),
+        agenda,
+        'team-sin-partidos',
+      );
+    });
+  });
+
+  describe('fallos de consulta', () => {
+    it('un error al cargar no se convierte en cero resultados ni en agenda vacía', async () => {
+      conSesion();
+      fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+      renderAt('/rooms');
+      const m = await directorio();
+
+      const alerta = await m.findByRole('alert');
+
+      expect(alerta).toHaveTextContent('Algo salió mal');
+      expect(cantidad(m)).not.toBeInTheDocument();
+      expect(m.queryByText(/\b0 partidos/)).not.toBeInTheDocument();
+      expect(m.queryByText(/No hay partidos/)).not.toBeInTheDocument();
+      expect(m.queryByText(VENTANA)).not.toBeInTheDocument();
+      expect(restablecer(m)).not.toBeInTheDocument();
+    });
+
+    it('mientras carga no hay cantidad ni vacío', async () => {
+      conSesion();
+      fetchSpy.mockReturnValue(new Promise(() => {}));
+      renderAt('/rooms');
+      const m = await directorio();
+
+      await m.findByRole('status');
+
+      expect(cantidad(m)).not.toBeInTheDocument();
+      expect(m.queryByText(/No hay partidos/)).not.toBeInTheDocument();
+    });
+
+    it('si falla el perfil se sigue mostrando el listado general y la cantidad no finge un filtro', async () => {
+      const user = userEvent.setup();
+      conSesion();
+      fetchSpy.mockImplementation((input: unknown) =>
+        String(input) === PERFIL_URL
+          ? Promise.reject(new TypeError('Failed to fetch'))
+          : Promise.resolve(jsonResponse({ matches: agenda })),
+      );
+      renderAt('/rooms');
+      const m = await directorio();
+      await listo(m);
+
+      await user.click(equipo(m, 'Mi equipo'));
+
+      expect(await m.findByRole('alert')).toHaveTextContent('No pudimos cargar tu equipo');
+      expect(textoCantidad(m)).toBe('3 partidos disponibles');
+      expect(m.queryByText(/No hay partidos de tu equipo/)).not.toBeInTheDocument();
+      expect(m.queryByText(/\b0 partidos/)).not.toBeInTheDocument();
+    });
+
+    it('mientras se busca el favorito no se muestra un cero', async () => {
+      const user = userEvent.setup();
+      conSesion();
+      fetchSpy.mockImplementation((input: unknown) =>
+        String(input) === PERFIL_URL
+          ? new Promise<Response>(() => {})
+          : Promise.resolve(jsonResponse({ matches: agenda })),
+      );
+      renderAt('/rooms');
+      const m = await directorio();
+      await listo(m);
+
+      await user.click(equipo(m, 'Mi equipo'));
+
+      expect(await m.findByText(/Buscando las salas de tu equipo/)).toBeInTheDocument();
+      expect(cantidad(m)).not.toBeInTheDocument();
+      expect(m.queryByText(/\b0 partidos/)).not.toBeInTheDocument();
+    });
+
+    it('si falla al actualizar conserva el último listado y su cantidad', async () => {
+      const user = userEvent.setup();
+      let consultas = 0;
+
+      conSesion();
+      fetchSpy.mockImplementation(() => {
+        consultas += 1;
+
+        return consultas === 1
+          ? Promise.resolve(jsonResponse({ matches: agenda }))
+          : Promise.reject(new TypeError('Failed to fetch'));
+      });
+      renderAt('/rooms');
+      const m = await directorio();
+      await listo(m);
+
+      await user.click(m.getByRole('button', { name: 'Actualizar' }));
+
+      expect(await m.findByText('No pudimos actualizar')).toBeInTheDocument();
+      expect(enlaces(m)).toHaveLength(3);
+      expect(textoCantidad(m)).toBe('3 partidos disponibles');
+      expect(m.queryByText(/\b0 partidos/)).not.toBeInTheDocument();
     });
   });
 });
