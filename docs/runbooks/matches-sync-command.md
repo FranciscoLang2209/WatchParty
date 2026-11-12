@@ -6,10 +6,10 @@ Este runbook documenta el uso del comando `matches:sync`, sus códigos de salida
 
 `matches:sync` sincroniza, en una única ejecución, los fixtures del proveedor seleccionado hacia Supabase. No es un endpoint HTTP: lo dispara una persona o el workflow `Matches sync`. El proveedor se elige con `MATCHES_SYNC_PROVIDER` (una sola fuente por corrida; nunca consulta ambos):
 
-| Valor                             | Qué importa                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `football-data-org` (por defecto) | Las competiciones de `DAILY_FOOTBALL_DATA_ORG_COMPETITIONS` (WAT-284): Premier League (`PL`), Champions League (`CL`), La Liga (`PD`) y Serie A (`SA`), todas en la temporada `2026` (año de inicio según el proveedor, no el año calendario), con un pedido por competición. Si falla una, sigue con las demás. Ventana móvil de la agenda: desde las 00:00 UTC de ayer hasta las 00:00 UTC del día posterior a los próximos siete días (fin exclusivo). El filtro externo `dateTo` es el séptimo día, inclusivo. |
-| `api-football`                    | La ventana histórica aprobada por B1.1 (Liga Profesional Argentina, ID externo `128`, temporada `2023`, rango `2023-03-01` a `2023-03-14`).                                                                                                                                                                                                                                                                                                                                                                        |
+| Valor                             | Qué importa                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `football-data-org` (por defecto) | Las competiciones de `DAILY_FOOTBALL_DATA_ORG_COMPETITIONS` (WAT-284): Premier League (`PL`), Champions League (`CL`), La Liga (`PD`) y Serie A (`SA`), todas en la temporada `2026` (año de inicio según el proveedor, no el año calendario), con **un pedido por tramo de hasta 10 días** (2 por competición, 8 por corrida). Si falla una, sigue con las demás; si falla un tramo, esa competición corta y se informa como error (lo ya guardado queda: el upsert es idempotente). Ventana móvil de la agenda: desde las 00:00 UTC de ayer hasta las 00:00 UTC del día posterior a los próximos **catorce** días (fin exclusivo): ayer, hoy y los 14 siguientes, 16 días en total. El filtro externo `dateTo` es el día catorce, inclusivo, y los tramos son consecutivos (el siguiente empieza el día después de que termina el anterior: sin solapes ni huecos). |
+| `api-football`                    | La ventana histórica aprobada por B1.1 (Liga Profesional Argentina, ID externo `128`, temporada `2023`, rango `2023-03-01` a `2023-03-14`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Al cerrar el intento se guarda el resumen (importados, actualizados, omitidos, errores y consultas) en `provider_sync_state`.
 
@@ -97,11 +97,11 @@ Un código distinto de `0` hace fallar el job de GitHub Actions. Si el cierre de
 - Si el proveedor informa, en los headers de una respuesta, un restante diario menor al presupuesto local, la ejecución se corta en ese valor menor.
 - Límite por minuto: 10 solicitudes/minuto (Free plan, según B1.1). El comando espera automáticamente si hace falta.
 - Reintento: solo ante timeout o HTTP 429, máximo un reintento por solicitud, usando `Retry-After` si el proveedor lo informó, o un backoff acotado fijo en caso contrario.
-- Dos ejecuciones simultáneas del comando producen como máximo una consulta externa: la segunda no adquiere el lease y termina con código `2` sin llamar al proveedor.
+- Dos ejecuciones simultáneas del comando producen como máximo una tanda de consultas (una por tramo): la segunda no adquiere el lease y termina con código `2` sin llamar al proveedor.
 
 ## Recuperar marcadores de partidos ya terminados (WAT-274)
 
-La ventana normal va de ayer a +7 días, así que un partido que terminó fuera de esa ventana
+La ventana normal va de ayer a +14 días, así que un partido que terminó fuera de esa ventana
 (p. ej. antes de que existieran las columnas de marcador, WAT-230) queda en «Sin resultado» y no
 vuelve a pedirse. Para completarlo una sola vez:
 
@@ -109,8 +109,11 @@ vuelve a pedirse. Para completarlo una sola vez:
   más antiguo sin resultado), o localmente `MATCHES_SYNC_BACKFILL_FROM=YYYY-MM-DD`.
 - Solo aplica a football-data.org; con API-Football se ignora. Una fecha inválida termina con
   código 2 sin consultar al proveedor. Vacío (el cron diario) = ventana normal.
-- Es un único pedido para todo el rango: si el proveedor lo rechaza por largo, el resumen lo
-  informa como error; repetir con una fecha más cercana.
+- El rango se parte en tramos de hasta 10 días (un pedido por tramo), así que un `backfill_from`
+  lejano ya no es un único pedido largo. Cada tramo reserva su unidad de cuota: 40 días son 4
+  pedidos por competición (16 en total para las 4 competiciones, contra el ledger de 80 por día).
+  Si un tramo falla, la competición corta y se informa como error; lo ya guardado queda y repetir
+  con la misma fecha no duplica nada.
 - `upsert_match_fixture` no pisa un marcador existente con `NULL`: repetirlo es seguro.
 
 ## Estado de la validación

@@ -22,7 +22,8 @@ import type {
   FootballDataOrgFetchOutcome,
 } from '../infrastructure/football-data-org-client.js';
 
-// 2026-11-10 10:00 UTC: la ventana móvil va del 09-11 al 17-11 (inclusivo).
+// 2026-11-10 10:00 UTC: la ventana móvil va del 09-11 al 24-11 (inclusivo), en dos tramos:
+// 09-11 → 18-11 y 19-11 → 24-11.
 const NOW_MS = Date.UTC(2026, 10, 10, 10, 0, 0);
 
 class FakeClock implements SyncClock {
@@ -170,13 +171,12 @@ describe('syncFootballDataOrgCompetitions', () => {
       DAILY_FOOTBALL_DATA_ORG_COMPETITIONS,
     );
 
+    // Cada competición pide sus dos tramos, uno detrás del otro: 8 pedidos en total.
     expect(client.calls).toEqual(
-      ['PL', 'CL', 'PD', 'SA'].map((competitionCode) => ({
-        competitionCode,
-        season: '2026',
-        dateFrom: '2026-11-09',
-        dateTo: '2026-11-17',
-      })),
+      ['PL', 'CL', 'PD', 'SA'].flatMap((competitionCode) => [
+        { competitionCode, season: '2026', dateFrom: '2026-11-09', dateTo: '2026-11-18' },
+        { competitionCode, season: '2026', dateFrom: '2026-11-19', dateTo: '2026-11-24' },
+      ]),
     );
     expect(result.exitCode).toBe(0);
   });
@@ -190,9 +190,19 @@ describe('syncFootballDataOrgCompetitions', () => {
       { backfillFrom: '2026-10-01' },
     );
 
-    expect(client.calls.map((c) => [c.dateFrom, c.dateTo])).toEqual([
-      ['2026-10-01', '2026-11-17'],
-      ['2026-10-01', '2026-11-17'],
+    // 2026-10-01 → 2026-11-24 son 55 días: seis tramos por competición, sin huecos ni solapes.
+    const tramos = [
+      ['2026-10-01', '2026-10-10'],
+      ['2026-10-11', '2026-10-20'],
+      ['2026-10-21', '2026-10-30'],
+      ['2026-10-31', '2026-11-09'],
+      ['2026-11-10', '2026-11-19'],
+      ['2026-11-20', '2026-11-24'],
+    ];
+    expect(client.calls.map((c) => [c.dateFrom, c.dateTo])).toEqual([...tramos, ...tramos]);
+    expect(client.calls.map((c) => c.competitionCode)).toEqual([
+      ...tramos.map(() => 'PL'),
+      ...tramos.map(() => 'CL'),
     ]);
   });
 
@@ -206,7 +216,8 @@ describe('syncFootballDataOrgCompetitions', () => {
       [competition('CL'), competition('PD')],
     );
 
-    expect(client.calls.map((c) => c.competitionCode)).toEqual(['CL', 'PD']);
+    // CL falla en su primer tramo y no pide el segundo; PD pide sus dos tramos.
+    expect(client.calls.map((c) => c.competitionCode)).toEqual(['CL', 'PD', 'PD']);
     expect(result.competiciones.map((c) => [c.competitionCode, c.resultado])).toEqual([
       ['CL', 'error'],
       ['PD', 'ok'],
@@ -218,7 +229,8 @@ describe('syncFootballDataOrgCompetitions', () => {
 
   it('comparte el límite por minuto entre competiciones, reintentos incluidos', async () => {
     const clock = new FakeClock();
-    // Cada competición responde 429 y después 200: 12 pedidos para 6 competiciones.
+    // Cada pedido responde 429 y, al reintentar, 200: 4 pedidos por competición (2 tramos con
+    // su reintento), 24 para 6 competiciones.
     const client = new ScriptedClient((_params, index) =>
       index % 2 === 0 ? httpError(429) : ok(),
     );
@@ -229,13 +241,13 @@ describe('syncFootballDataOrgCompetitions', () => {
       codes.map(competition),
     );
 
-    expect(client.calls).toHaveLength(12);
+    expect(client.calls).toHaveLength(24);
     expect(result.exitCode).toBe(0);
-    // Los reintentos esperan 1 s cada uno; el 11.º pedido tiene que esperar a que
-    // se libere la ventana de un minuto abierta por el primero.
+    // Los reintentos esperan 1 s cada uno; el 11.º y el 21.º pedido tienen que esperar a que se
+    // libere la ventana de un minuto abierta por el primero de cada diez.
     const throttleWaits = clock.sleeps.filter((ms) => ms > 1_000);
-    expect(throttleWaits).toHaveLength(1);
-    expect(throttleWaits[0]).toBeGreaterThan(50_000);
+    expect(throttleWaits).toHaveLength(2);
+    for (const wait of throttleWaits) expect(wait).toBeGreaterThan(50_000);
   });
 
   it('usa la cuota diaria persistente: al agotarse, las competiciones restantes no consultan', async () => {
@@ -246,8 +258,9 @@ describe('syncFootballDataOrgCompetitions', () => {
       DAILY_FOOTBALL_DATA_ORG_COMPETITIONS,
     );
 
-    expect(client.calls.map((c) => c.competitionCode)).toEqual(['PL', 'CL']);
-    expect(result.competiciones.map((c) => c.resultado)).toEqual(['ok', 'ok', 'error', 'error']);
+    // La cuota (2) se la lleva PL con sus dos tramos: las demás no consultan.
+    expect(client.calls.map((c) => c.competitionCode)).toEqual(['PL', 'PL']);
+    expect(result.competiciones.map((c) => c.resultado)).toEqual(['ok', 'error', 'error', 'error']);
     expect(result.exitCode).toBe(1);
   });
 
@@ -261,7 +274,8 @@ describe('syncFootballDataOrgCompetitions', () => {
       [competition('PL'), competition('CL')],
     );
 
-    expect(client.calls.map((c) => c.competitionCode)).toEqual(['CL']);
+    // PL no consulta (lease tomado); CL pide sus dos tramos.
+    expect(client.calls.map((c) => c.competitionCode)).toEqual(['CL', 'CL']);
     expect(result.competiciones[0]?.resultado).toBe('lease-taken');
     expect(result.exitCode).toBe(1);
   });

@@ -2,14 +2,17 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   syncMatches,
   syncFootballDataOrgMatches,
+  importFootballDataOrgSeason,
   toFootballDataOrgDateRange,
+  toFootballDataOrgDateRanges,
+  FOOTBALL_DATA_ORG_MAX_RANGE_DAYS,
   type SyncMatchesClient,
   type SyncFootballDataOrgClient,
   type SyncFootballDataOrgConfig,
   type SyncClock,
   type SyncMatchesConfig,
 } from './sync-matches.js';
-import { agendaWindow } from '../domain/match-window.js';
+import { agendaWindow, backfillWindow } from '../domain/match-window.js';
 import type {
   MatchStore,
   SyncLeaseScope,
@@ -528,11 +531,11 @@ class FakeFootballDataOrgClient implements SyncFootballDataOrgClient {
     params: FetchFootballDataOrgMatchesParams,
   ): Promise<FootballDataOrgFetchOutcome> {
     this.calls.push(params);
+    // El sync diario pide la ventana en tramos de hasta 10 días: los tramos que la prueba no
+    // guionó explícitamente devuelven una respuesta válida y vacía. Lo que importa de cada
+    // prueba se afirma sobre `calls` o sobre el resumen.
     const next = this.responses.shift();
-    if (!next) {
-      throw new Error('FakeFootballDataOrgClient: no hay más respuestas programadas.');
-    }
-    return next;
+    return next ?? footballSuccess([]);
   }
 }
 
@@ -563,16 +566,103 @@ describe('toFootballDataOrgDateRange', () => {
   it('el filtro inclusivo termina un día antes del fin exclusivo de la ventana', () => {
     expect(toFootballDataOrgDateRange(window)).toEqual({
       dateFrom: '2026-09-11',
-      dateTo: '2026-09-19',
+      dateTo: '2026-09-26',
     });
   });
 
-  it('el séptimo día entra en el filtro inclusivo y el octavo no', () => {
+  it('el día catorce entra en el filtro inclusivo y el quince no', () => {
     const { dateFrom, dateTo } = toFootballDataOrgDateRange(window);
 
     // Comparar fechas ISO como texto equivale a compararlas como fechas.
-    expect('2026-09-19' >= dateFrom && '2026-09-19' <= dateTo).toBe(true);
-    expect('2026-09-20' >= dateFrom && '2026-09-20' <= dateTo).toBe(false);
+    expect('2026-09-26' >= dateFrom && '2026-09-26' <= dateTo).toBe(true);
+    expect('2026-09-27' >= dateFrom && '2026-09-27' <= dateTo).toBe(false);
+  });
+});
+
+describe('toFootballDataOrgDateRanges: tramos de hasta 10 días', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  /** Todos los días (YYYY-MM-DD) que cubre una lista de tramos inclusivos, en orden. */
+  function daysOf(ranges: { dateFrom: string; dateTo: string }[]): string[] {
+    return ranges.flatMap(({ dateFrom, dateTo }) => {
+      const days: string[] = [];
+      for (
+        let t = Date.parse(`${dateFrom}T00:00:00.000Z`);
+        t <= Date.parse(`${dateTo}T00:00:00.000Z`);
+        t += DAY
+      ) {
+        days.push(new Date(t).toISOString().slice(0, 10));
+      }
+      return days;
+    });
+  }
+
+  function windowOfDays(firstDay: string, days: number) {
+    const from = Date.parse(`${firstDay}T00:00:00.000Z`);
+    return { from: new Date(from).toISOString(), to: new Date(from + days * DAY).toISOString() };
+  }
+
+  it('el máximo por tramo es de 10 días', () => {
+    expect(FOOTBALL_DATA_ORG_MAX_RANGE_DAYS).toBe(10);
+  });
+
+  it('la ventana de 14 días desde 2026-11-12 son dos tramos: ayer → +9 y +10 → hoy+14', () => {
+    const window = agendaWindow(new Date(Date.UTC(2026, 10, 12, 10)));
+
+    expect(toFootballDataOrgDateRanges(window)).toEqual([
+      { dateFrom: '2026-11-11', dateTo: '2026-11-20' },
+      { dateFrom: '2026-11-21', dateTo: '2026-11-26' },
+    ]);
+    // El primer día es ayer y el último es hoy + 14.
+    expect(toFootballDataOrgDateRange(window)).toEqual({
+      dateFrom: '2026-11-11',
+      dateTo: '2026-11-26',
+    });
+  });
+
+  it('una ventana de exactamente 10 días es un solo tramo', () => {
+    expect(toFootballDataOrgDateRanges(windowOfDays('2026-11-01', 10))).toEqual([
+      { dateFrom: '2026-11-01', dateTo: '2026-11-10' },
+    ]);
+  });
+
+  it('una de 11 días son dos tramos, el segundo de un solo día', () => {
+    expect(toFootballDataOrgDateRanges(windowOfDays('2026-11-01', 11))).toEqual([
+      { dateFrom: '2026-11-01', dateTo: '2026-11-10' },
+      { dateFrom: '2026-11-11', dateTo: '2026-11-11' },
+    ]);
+  });
+
+  it('una de un solo día es un tramo de un día', () => {
+    expect(toFootballDataOrgDateRanges(windowOfDays('2026-11-01', 1))).toEqual([
+      { dateFrom: '2026-11-01', dateTo: '2026-11-01' },
+    ]);
+  });
+
+  it.each(Array.from({ length: 45 }, (_, i) => i + 1))(
+    'una ventana de %i días: cada día se pide exactamente una vez, en orden y sin tramos de más de 10',
+    (days) => {
+      const window = windowOfDays('2026-12-20', days);
+      const ranges = toFootballDataOrgDateRanges(window);
+      const expected = daysOf([toFootballDataOrgDateRange(window)]);
+
+      // Sin solapamientos ni huecos (cruza el cambio de año).
+      expect(daysOf(ranges)).toEqual(expected);
+      expect(ranges).toHaveLength(Math.ceil(days / 10));
+      for (const range of ranges) expect(daysOf([range]).length).toBeLessThanOrEqual(10);
+    },
+  );
+
+  it('una ventana de recuperación larga (40 días) son 4 tramos', () => {
+    const now = new Date(Date.UTC(2026, 10, 12, 10));
+    const window = backfillWindow(now, '2026-10-18');
+
+    expect(toFootballDataOrgDateRanges(window)).toEqual([
+      { dateFrom: '2026-10-18', dateTo: '2026-10-27' },
+      { dateFrom: '2026-10-28', dateTo: '2026-11-06' },
+      { dateFrom: '2026-11-07', dateTo: '2026-11-16' },
+      { dateFrom: '2026-11-17', dateTo: '2026-11-26' },
+    ]);
   });
 });
 
@@ -584,9 +674,112 @@ describe('syncFootballDataOrgMatches', () => {
 
     await syncFootballDataOrgMatches({ client, store, clock, owner: 'owner-1' }, FOOTBALL_CONFIG);
 
+    // La ventana de 16 días (ayer → hoy+14) se pide en dos tramos consecutivos.
     expect(client.calls).toEqual([
-      { competitionCode: 'PL', season: '2026', dateFrom: '2026-09-11', dateTo: '2026-09-19' },
+      { competitionCode: 'PL', season: '2026', dateFrom: '2026-09-11', dateTo: '2026-09-20' },
+      { competitionCode: 'PL', season: '2026', dateFrom: '2026-09-21', dateTo: '2026-09-26' },
     ]);
+  });
+
+  it('suma los partidos de los dos tramos con un pedido reservado y realizado por tramo', async () => {
+    const clock = new FakeClock(Date.UTC(2026, 10, 12, 10));
+    const store = new FakeMatchStore(clock);
+    const client = new FakeFootballDataOrgClient([
+      footballSuccess([buildMatchRaw(1)]),
+      footballSuccess([buildMatchRaw(2), buildMatchRaw(3)]),
+    ]);
+
+    const result = await syncFootballDataOrgMatches(
+      { client, store, clock, owner: 'owner-1' },
+      FOOTBALL_CONFIG,
+    );
+
+    expect(client.calls.map(({ dateFrom, dateTo }) => [dateFrom, dateTo])).toEqual([
+      ['2026-11-11', '2026-11-20'],
+      ['2026-11-21', '2026-11-26'],
+    ]);
+    expect(result).toMatchObject({
+      exitCode: 0,
+      summary: { importados: 3, consultasRealizadas: 2, consultasReservadas: 2 },
+    });
+    expect(store.storedFixtures).toHaveLength(3);
+  });
+
+  it('un error en el primer tramo no pide el segundo y la competición queda en error', async () => {
+    const clock = new FakeClock(Date.UTC(2026, 10, 12, 10));
+    const store = new FakeMatchStore(clock);
+    const client = new FakeFootballDataOrgClient([
+      footballHttpError(500),
+      footballSuccess([buildMatchRaw(2)]),
+    ]);
+
+    const result = await syncFootballDataOrgMatches(
+      { client, store, clock, owner: 'owner-1' },
+      FOOTBALL_CONFIG,
+    );
+
+    expect(client.calls).toHaveLength(1);
+    expect(result.exitCode).toBe(1);
+    if (result.exitCode !== 1) throw new Error('unreachable');
+    expect(result.summary.errores).toEqual([{ reason: 'http-error', count: 1 }]);
+    expect(store.storedFixtures).toHaveLength(0);
+  });
+
+  it('un error en el segundo tramo conserva lo ya guardado del primero y informa el error', async () => {
+    const clock = new FakeClock(Date.UTC(2026, 10, 12, 10));
+    const store = new FakeMatchStore(clock);
+    const client = new FakeFootballDataOrgClient([
+      footballSuccess([buildMatchRaw(1)]),
+      footballHttpError(500),
+    ]);
+
+    const result = await syncFootballDataOrgMatches(
+      { client, store, clock, owner: 'owner-1' },
+      FOOTBALL_CONFIG,
+    );
+
+    expect(client.calls).toHaveLength(2);
+    expect(result.exitCode).toBe(1);
+    // El upsert es idempotente: el primer tramo queda y la próxima corrida lo repite sin duplicar.
+    expect(store.storedFixtures).toHaveLength(1);
+  });
+
+  it('la cuota agotada a mitad de camino corta sin pedir el tramo siguiente', async () => {
+    const clock = new FakeClock(Date.UTC(2026, 10, 12, 10));
+    const store = new FakeMatchStore(clock);
+    const client = new FakeFootballDataOrgClient([
+      footballSuccess([buildMatchRaw(1)]),
+      footballSuccess([buildMatchRaw(2)]),
+    ]);
+
+    const result = await syncFootballDataOrgMatches(
+      { client, store, clock, owner: 'owner-1' },
+      { ...FOOTBALL_CONFIG, dailyQuotaLimit: 1 },
+    );
+
+    expect(client.calls).toHaveLength(1);
+    expect(result.exitCode).toBe(1);
+    if (result.exitCode !== 1) throw new Error('unreachable');
+    expect(result.summary).toMatchObject({
+      importados: 1,
+      consultasReservadas: 1,
+      consultasRealizadas: 1,
+      presupuestoRestante: 0,
+    });
+  });
+
+  it('la importación de la temporada completa sigue siendo un solo pedido, sin fechas', async () => {
+    const clock = new FakeClock();
+    const store = new FakeMatchStore(clock);
+    const client = new FakeFootballDataOrgClient([footballSuccess([buildMatchRaw(1)])]);
+
+    const result = await importFootballDataOrgSeason(
+      { client, store, clock, owner: 'owner-1' },
+      FOOTBALL_CONFIG,
+    );
+
+    expect(client.calls).toEqual([{ competitionCode: 'PL', season: '2026' }]);
+    expect(result).toMatchObject({ exitCode: 0, summary: { consultasRealizadas: 1 } });
   });
 
   it('con backfillFrom pide desde esa fecha hasta el fin de la ventana normal (WAT-274)', async () => {
@@ -599,23 +792,38 @@ describe('syncFootballDataOrgMatches', () => {
       { ...FOOTBALL_CONFIG, backfillFrom: '2026-08-15' },
     );
 
+    // 2026-08-15 → 2026-09-26 son 43 días: cinco tramos de hasta 10 días, sin huecos.
     expect(client.calls).toEqual([
-      { competitionCode: 'PL', season: '2026', dateFrom: '2026-08-15', dateTo: '2026-09-19' },
+      { competitionCode: 'PL', season: '2026', dateFrom: '2026-08-15', dateTo: '2026-08-24' },
+      { competitionCode: 'PL', season: '2026', dateFrom: '2026-08-25', dateTo: '2026-09-03' },
+      { competitionCode: 'PL', season: '2026', dateFrom: '2026-09-04', dateTo: '2026-09-13' },
+      { competitionCode: 'PL', season: '2026', dateFrom: '2026-09-14', dateTo: '2026-09-23' },
+      { competitionCode: 'PL', season: '2026', dateFrom: '2026-09-24', dateTo: '2026-09-26' },
     ]);
   });
 
   it.each([
-    ['cambio de mes', Date.UTC(2026, 9, 28, 10), '2026-10-27', '2026-11-04'],
-    ['cambio de año', Date.UTC(2026, 11, 28, 10), '2026-12-27', '2027-01-04'],
+    [
+      'cambio de mes',
+      Date.UTC(2026, 9, 28, 10),
+      ['2026-10-27', '2026-11-05'],
+      ['2026-11-06', '2026-11-11'],
+    ],
+    [
+      'cambio de año',
+      Date.UTC(2026, 11, 28, 10),
+      ['2026-12-27', '2027-01-05'],
+      ['2027-01-06', '2027-01-11'],
+    ],
     [
       'año calendario distinto al de la temporada',
       Date.UTC(2027, 1, 10, 10),
-      '2027-02-09',
-      '2027-02-17',
+      ['2027-02-09', '2027-02-18'],
+      ['2027-02-19', '2027-02-24'],
     ],
   ])(
     '%s: la ventana avanza y la temporada sigue siendo la verificada',
-    async (_label, nowMs, from, to) => {
+    async (_label, nowMs, [from1, to1], [from2, to2]) => {
       const clock = new FakeClock(nowMs);
       const store = new FakeMatchStore(clock);
       const client = new FakeFootballDataOrgClient([footballSuccess([])]);
@@ -623,7 +831,8 @@ describe('syncFootballDataOrgMatches', () => {
       await syncFootballDataOrgMatches({ client, store, clock, owner: 'owner-1' }, FOOTBALL_CONFIG);
 
       expect(client.calls).toEqual([
-        { competitionCode: 'PL', season: '2026', dateFrom: from, dateTo: to },
+        { competitionCode: 'PL', season: '2026', dateFrom: from1, dateTo: to1 },
+        { competitionCode: 'PL', season: '2026', dateFrom: from2, dateTo: to2 },
       ]);
     },
   );
@@ -650,7 +859,7 @@ describe('syncFootballDataOrgMatches', () => {
     );
     expect(result).toMatchObject({
       exitCode: 0,
-      summary: { importados: 1, actualizados: 0, consultasRealizadas: 1, consultasReservadas: 1 },
+      summary: { importados: 1, actualizados: 0, consultasRealizadas: 2, consultasReservadas: 2 },
     });
   });
 
@@ -704,10 +913,11 @@ describe('syncFootballDataOrgMatches', () => {
       FOOTBALL_CONFIG,
     );
 
-    expect(client.calls).toHaveLength(2);
+    // Timeout y reintento del primer tramo, más el segundo tramo.
+    expect(client.calls).toHaveLength(3);
     expect(result).toMatchObject({
       exitCode: 0,
-      summary: { importados: 1, consultasReservadas: 2, consultasRealizadas: 2 },
+      summary: { importados: 1, consultasReservadas: 3, consultasRealizadas: 3 },
     });
   });
 
@@ -808,7 +1018,7 @@ describe('syncFootballDataOrgMatches', () => {
       expect.any(String),
       true,
       expect.objectContaining({
-        summary: { imported: 1, updated: 0, skipped: 1, errors: 0, queries: 1 },
+        summary: { imported: 1, updated: 0, skipped: 1, errors: 0, queries: 2 },
       }),
     );
   });
@@ -912,7 +1122,7 @@ describe('syncFootballDataOrgMatches: idempotencia (WAT-183)', () => {
 });
 
 describe('syncFootballDataOrgMatches: concurrencia (WAT-183)', () => {
-  it('dos ejecuciones concurrentes sobre el mismo scope consultan al proveedor una sola vez', async () => {
+  it('dos ejecuciones concurrentes sobre el mismo scope consultan al proveedor una sola vez (un pedido por tramo)', async () => {
     const clock = new FakeClock();
     const store = new FakeMatchStore(clock);
     const acquireSpy = vi.spyOn(store, 'acquireSyncLease');
@@ -928,12 +1138,13 @@ describe('syncFootballDataOrgMatches: concurrencia (WAT-183)', () => {
 
     // Una completa y la otra sale por lease tomado.
     expect(results.map((result) => result.exitCode).sort()).toEqual([0, 2]);
-    expect(clientA.calls.length + clientB.calls.length).toBe(1);
+    // Solo la que tomó el lease pidió, y una sola vez cada uno de los dos tramos.
+    expect(clientA.calls.length + clientB.calls.length).toBe(2);
 
     // Solo una adquirió el lease; la otra no reservó cuota ni cerró un intento ajeno.
     const leases = await Promise.all(acquireSpy.mock.results.map((result) => result.value));
     expect(leases.filter((token) => token !== null)).toHaveLength(1);
-    expect(reserveSpy).toHaveBeenCalledTimes(1);
+    expect(reserveSpy).toHaveBeenCalledTimes(2);
     expect(recordSpy).toHaveBeenCalledTimes(1);
     expect(store.storedFixtures).toHaveLength(1);
   });
@@ -962,7 +1173,8 @@ describe('syncFootballDataOrgMatches: concurrencia (WAT-183)', () => {
 
 describe('syncFootballDataOrgMatches: cuota (WAT-183)', () => {
   it('la reserva persiste entre ejecuciones y, agotada, no se hacen nuevas solicitudes', async () => {
-    const config: SyncFootballDataOrgConfig = { ...FOOTBALL_CONFIG, dailyQuotaLimit: 2 };
+    // Cada corrida usa 2 unidades (un pedido por tramo de la ventana): con 4, entran dos corridas.
+    const config: SyncFootballDataOrgConfig = { ...FOOTBALL_CONFIG, dailyQuotaLimit: 4 };
     const clock = new FakeClock();
     const store = new FakeMatchStore(clock);
     const clientOne = new FakeFootballDataOrgClient([footballSuccess([])]);
@@ -974,8 +1186,8 @@ describe('syncFootballDataOrgMatches: cuota (WAT-183)', () => {
     const third = await runFootball(store, clock, clientThree, 'owner-3', config);
 
     expect([first.exitCode, second.exitCode, third.exitCode]).toEqual([0, 0, 1]);
-    expect(clientOne.calls).toHaveLength(1);
-    expect(clientTwo.calls).toHaveLength(1);
+    expect(clientOne.calls).toHaveLength(2);
+    expect(clientTwo.calls).toHaveLength(2);
     expect(clientThree.calls).toHaveLength(0);
 
     if (third.exitCode === 2) throw new Error('unreachable');
@@ -1023,7 +1235,7 @@ describe('syncFootballDataOrgMatches: cuota (WAT-183)', () => {
     const result = await runFootball(store, clock, client, 'owner-1');
 
     expect(result.exitCode).toBe(0);
-    expect(client.calls).toHaveLength(1);
+    expect(client.calls).toHaveLength(2);
   });
 
   it('agotar la cuota de football-data.org no bloquea a API-Football', async () => {

@@ -22,7 +22,7 @@ import { createFootballDataOrgClient } from '../modules/matches/infrastructure/f
  * El informe no incluye la clave ni los encabezados del proveedor: se puede pegar en un ticket.
  *
  * Variables opcionales: `PROBE_ACCOUNT_PLAN` (por defecto `TIER_ONE`, el plan Free),
- * `PROBE_DATE_FROM` y `PROBE_DATE_TO` (`YYYY-MM-DD`, por defecto hoy y los 7 días siguientes).
+ * `PROBE_DATE_FROM` y `PROBE_DATE_TO` (`YYYY-MM-DD`, por defecto hoy y los 14 días siguientes).
  *
  * `PROBE_PERSISTED=true` agrega los partidos persistidos en la ventana de la agenda, con la misma
  * consulta que usa la API, para contrastarlos con lo que devuelve el proveedor. Lee la base que

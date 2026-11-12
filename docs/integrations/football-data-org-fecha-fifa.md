@@ -48,13 +48,13 @@ Esto orienta la decisión pero no prueba qué puede leer la cuenta: lo que vale 
 
 Se siguió el camino del dato, del proveedor a la pantalla:
 
-| Tramo                        | Estado                                                                                                                                                                                   |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cobertura del proveedor      | **Es la causa.** La cuenta no accede a ningún torneo de selecciones con partidos esta semana.                                                                                            |
-| Sincronización diaria        | Consulta sólo `PL`, `CL`, `PD` y `SA` (`DAILY_FOOTBALL_DATA_ORG_COMPETITIONS`). No hay selecciones porque no hay una edición vigente accesible; agregar `WC` o `EC` no traería nada hoy. |
-| Ventana de fechas            | La agenda muestra desde las 00:00 UTC de ayer hasta el día posterior a los próximos siete días. Funciona como está documentada; un partido dentro de la ventana no queda excluido.       |
-| API y filtros de la interfaz | No filtran por tipo de equipo ni de competición: un partido de selecciones persistido se listaría igual que uno de clubes.                                                               |
-| Datos de producción          | **Pendiente de comprobar** en producción (ver «Comprobación en producción»).                                                                                                             |
+| Tramo                        | Estado                                                                                                                                                                                                                                                                                                                                                     |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cobertura del proveedor      | **Es la causa.** La cuenta no accede a ningún torneo de selecciones con partidos esta semana.                                                                                                                                                                                                                                                              |
+| Sincronización diaria        | Consulta sólo `PL`, `CL`, `PD` y `SA` (`DAILY_FOOTBALL_DATA_ORG_COMPETITIONS`). No hay selecciones porque no hay una edición vigente accesible; agregar `WC` o `EC` no traería nada hoy.                                                                                                                                                                   |
+| Ventana de fechas            | La agenda muestra desde las 00:00 UTC de ayer hasta el día posterior a los próximos **catorce** días (16 días en total). Se amplió de siete a catorce para que, en una semana de fecha FIFA con la agenda de clubes vacía, se vean los partidos de la semana siguiente. Funciona como está documentada; un partido dentro de la ventana no queda excluido. |
+| API y filtros de la interfaz | No filtran por tipo de equipo ni de competición: un partido de selecciones persistido se listaría igual que uno de clubes.                                                                                                                                                                                                                                 |
+| Datos de producción          | **Pendiente de comprobar** en producción (ver «Comprobación en producción»).                                                                                                                                                                                                                                                                               |
 
 La agenda de clubes también viene vacía esta semana por la misma fecha FIFA (corrida del
 2026-11-10 en `football-data-org-pilot-5000.md`): no es un fallo, los clubes no juegan.
@@ -114,7 +114,7 @@ pnpm --filter @watchparty/api matches:probe-coverage
   alcanza. Con el plan Free son tres pedidos, dentro del límite de 10 por minuto. No usa la cuota
   diaria persistente de la sincronización ni escribe en Supabase.
 - `PROBE_DATE_FROM` y `PROBE_DATE_TO` (`YYYY-MM-DD`) cambian la ventana; por defecto es hoy y los
-  siete días siguientes. `PROBE_ACCOUNT_PLAN` (por defecto `TIER_ONE`) indica el plan de la cuenta:
+  catorce días siguientes. `PROBE_ACCOUNT_PLAN` (por defecto `TIER_ONE`) indica el plan de la cuenta:
   si se amplía, hay que cambiarlo para que el sondeo consulte los torneos nuevos.
 - Un 200 cuyo cuerpo no es una lista de partidos (por ejemplo, HTML en vez de JSON) se informa como
   **respuesta inválida, sin conclusión**: nunca como cero partidos. Lo mismo vale para la lista de
