@@ -41,6 +41,9 @@ import { SupabaseMatchReviewStore } from './modules/reviews/infrastructure/supab
 import { createStatisticsRouter } from './modules/statistics/http/statistics-router.js';
 import type { UserStatisticsStore } from './modules/statistics/domain/user-statistics-store.js';
 import { SupabaseUserStatisticsStore } from './modules/statistics/infrastructure/supabase-user-statistics-store.js';
+import { createMatchEnrichmentRouter } from './modules/match-enrichment/http/match-enrichment-router.js';
+import type { MatchEnrichmentReader } from './modules/match-enrichment/domain/match-enrichment.js';
+import { SupabaseMatchEnrichmentStore } from './modules/match-enrichment/infrastructure/supabase-match-enrichment-store.js';
 
 /**
  * Cambio del ticket WAT-106: la app ya no crea su propio MatchCatalog de
@@ -65,6 +68,7 @@ export function createApp(
   matchSearch: MatchSearch,
   reviewStore: MatchReviewStore,
   reviewsCursorCodec: ReviewsCursorCodec,
+  enrichmentReader: MatchEnrichmentReader,
 ): Express {
   const app = express();
 
@@ -86,6 +90,7 @@ export function createApp(
   });
 
   app.use('/matches', createMatchesRouter(matchCatalog, undefined, matchSearch));
+  app.use('/matches', createMatchEnrichmentRouter(matchCatalog, enrichmentReader));
   app.use('/matches', createWatchedRouter(watchedStore));
   app.use(
     '/matches',
@@ -134,6 +139,7 @@ const statisticsStore = new SupabaseUserStatisticsStore(sportsDataClient);
 const matchSearch = new SupabaseMatchSearch(sportsDataClient);
 const reviewStore = new SupabaseMatchReviewStore(sportsDataClient);
 const reviewsCursorCodec = createReviewsCursorCodec(readReviewsCursorSecret());
+const enrichmentStore = new SupabaseMatchEnrichmentStore(sportsDataClient);
 
 export default createApp(
   matchCatalog,
@@ -147,4 +153,5 @@ export default createApp(
   matchSearch,
   reviewStore,
   reviewsCursorCodec,
+  enrichmentStore,
 );

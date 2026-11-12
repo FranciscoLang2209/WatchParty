@@ -20,10 +20,11 @@ desde GitHub Actions contra demo o, con `target: production`, contra producción
 | La Liga          | `PD`   | 2026      | 200, 380 partidos en calendario                |
 | Serie A          | `SA`   | 2026      | 200, 380 partidos en calendario                |
 
-- Cada competición usa `syncFootballDataOrgMatches` con la misma ventana móvil (`dateFrom` y
-  `dateTo`) y, si se dispara con `backfill_from`, con el mismo inicio adelantado.
+- Cada competición usa `syncFootballDataOrgMatches` con la misma ventana móvil (ayer → +14 días),
+  partida en tramos de hasta 10 días (`dateFrom` y `dateTo` de cada tramo) y, si se dispara con
+  `backfill_from`, con el mismo inicio adelantado.
 - El límite por minuto (10) es uno solo para toda la corrida, reintentos incluidos. La cuota
-  diaria persistente es la de siempre: un pedido por competición, 4 por corrida.
+  diaria persistente es la de siempre, un pedido por tramo: dos por competición, 8 por corrida.
 - Si una competición falla, la corrida sigue con las demás. Al final informa el resultado de cada
   una y sale con 1. Sale con 2 solo si todas tenían el lease tomado.
 - **Selecciones:** hoy no hay ningún torneo con una edición vigente. El Mundial 2026 y la Eurocopa

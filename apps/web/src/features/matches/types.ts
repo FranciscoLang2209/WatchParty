@@ -72,3 +72,65 @@ export function isCancelled(error: unknown): boolean {
 export function isUnauthorized(error: unknown): boolean {
   return error instanceof MatchesApiError && error.kind === 'unauthorized';
 }
+
+/**
+ * Detalle histórico (estadísticas y goles) de un partido terminado, tal como lo entrega
+ * `GET /matches/:matchId/historical-detail`. Son datos cerrados de un proveedor complementario,
+ * sin actualización en vivo. Espejo de `apps/api/.../historical-detail-response.ts`.
+ */
+
+/** Una métrica es un número real (el `0` es un dato) o `null` = sin dato. Nunca se mezclan. */
+export interface TeamStatistics {
+  /** Porcentaje 0–100. */
+  possessionPct: number | null;
+  totalShots: number | null;
+  shotsOnGoal: number | null;
+  cornerKicks: number | null;
+  fouls: number | null;
+}
+
+/** `complete`: ambos equipos y las cinco métricas. `partial`: cobertura restringida. */
+export type StatisticsCoverage = 'complete' | 'partial';
+
+export interface HistoricalStatistics {
+  coverage: StatisticsCoverage;
+  /** ISO 8601 UTC de la consulta al proveedor. */
+  fetchedAt: string;
+  home: TeamStatistics;
+  away: TeamStatistics;
+}
+
+export type GoalKind = 'goal' | 'own_goal' | 'penalty_goal' | 'goal_cancelled' | 'shootout_goal';
+
+export interface GoalEntry {
+  kind: GoalKind;
+  side: 'home' | 'away';
+  /** `null` cuando el proveedor no informó el autor. */
+  playerName: string | null;
+  minute: number;
+  /** Añadido (45+2 → minute 45, extraMinute 2); `null` si no hay. */
+  extraMinute: number | null;
+}
+
+/** `complete`: la cronología coincide con el marcador. `incomplete`: no se pudo comprobar. */
+export type GoalsCoverage = 'complete' | 'incomplete';
+
+export interface HistoricalGoals {
+  coverage: GoalsCoverage;
+  fetchedAt: string;
+  /** Sólo goles del juego. */
+  goals: GoalEntry[];
+  /** Anulaciones (VAR): no suman al marcador. */
+  cancelled: GoalEntry[];
+  /** Tanda de penales: no son goles del juego. */
+  shootout: GoalEntry[];
+}
+
+export interface HistoricalDetail {
+  source: 'api-football';
+  historical: true;
+  /** `null` = estas estadísticas nunca se cargaron. */
+  statistics: HistoricalStatistics | null;
+  /** `null` = la cronología nunca se cargó. */
+  goals: HistoricalGoals | null;
+}

@@ -6,6 +6,11 @@ export interface FetchFixturesPageParams {
   page: number;
 }
 
+/** Pedido de un solo fixture por su id (`GET /fixtures?id=`), para verificar una correspondencia. */
+export interface FetchFixtureByIdParams {
+  fixtureId: number;
+}
+
 export type ApiFootballFetchOutcome =
   | {
       kind: 'response';
@@ -33,64 +38,107 @@ export function createApiFootballClient({
   apiKey,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }: ApiFootballClientDeps) {
+  // Un único camino para todos los pedidos: mismo timeout, misma clave en el header (nunca en la
+  // URL) y mismo resultado tipado. Nunca lanza: un fallo se devuelve como `timeout` o `network-error`.
+  async function get(
+    path: string,
+    query: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<ApiFootballFetchOutcome> {
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
+    const combinedSignal = signal
+      ? AbortSignal.any([signal, timeoutController.signal])
+      : timeoutController.signal;
+
+    const url = new URL(path, baseUrl);
+    for (const [name, value] of Object.entries(query)) {
+      url.searchParams.set(name, value);
+    }
+
+    try {
+      const response = await fetchFn(url, {
+        headers: { 'x-apisports-key': apiKey },
+        signal: combinedSignal,
+      });
+
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch (jsonError) {
+        if (timeoutController.signal.aborted) {
+          throw jsonError;
+        }
+        body = undefined;
+      }
+
+      const rawPaging =
+        typeof body === 'object' && body !== null
+          ? (body as Record<string, unknown>).paging
+          : undefined;
+
+      return {
+        kind: 'response',
+        status: response.status,
+        ok: response.ok,
+        body,
+        paging: rawPaging,
+        headers: Object.fromEntries(response.headers.entries()),
+      };
+    } catch (error) {
+      if (timeoutController.signal.aborted) {
+        return { kind: 'timeout' };
+      }
+
+      const message = error instanceof Error ? error.message : 'unknown fetch error';
+      return { kind: 'network-error', message };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   return {
-    async fetchFixturesPage(
+    fetchFixturesPage(
       params: FetchFixturesPageParams,
       signal?: AbortSignal,
     ): Promise<ApiFootballFetchOutcome> {
-      const timeoutController = new AbortController();
-      const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
-      const combinedSignal = signal
-        ? AbortSignal.any([signal, timeoutController.signal])
-        : timeoutController.signal;
-
-      const url = new URL('/fixtures', baseUrl);
-      url.searchParams.set('league', String(params.league));
-      url.searchParams.set('season', String(params.season));
-      url.searchParams.set('from', params.from);
-      url.searchParams.set('to', params.to);
+      const query: Record<string, string> = {
+        league: String(params.league),
+        season: String(params.season),
+        from: params.from,
+        to: params.to,
+      };
       if (params.page > 1) {
-        url.searchParams.set('page', String(params.page));
+        query.page = String(params.page);
       }
-      try {
-        const response = await fetchFn(url, {
-          headers: { 'x-apisports-key': apiKey },
-          signal: combinedSignal,
-        });
 
-        let body: unknown;
-        try {
-          body = await response.json();
-        } catch (jsonError) {
-          if (timeoutController.signal.aborted) {
-            throw jsonError;
-          }
-          body = undefined;
-        }
+      return get('/fixtures', query, signal);
+    },
 
-        const rawPaging =
-          typeof body === 'object' && body !== null
-            ? (body as Record<string, unknown>).paging
-            : undefined;
+    /** `GET /fixtures?id=`: el fixture con sus equipos, fecha, liga y marcador. */
+    fetchFixtureById(
+      params: FetchFixtureByIdParams,
+      signal?: AbortSignal,
+    ): Promise<ApiFootballFetchOutcome> {
+      return get('/fixtures', { id: String(params.fixtureId) }, signal);
+    },
 
-        return {
-          kind: 'response',
-          status: response.status,
-          ok: response.ok,
-          body,
-          paging: rawPaging,
-          headers: Object.fromEntries(response.headers.entries()),
-        };
-      } catch (error) {
-        if (timeoutController.signal.aborted) {
-          return { kind: 'timeout' };
-        }
+    /** `GET /fixtures/statistics?fixture=`: estadísticas por equipo. */
+    fetchFixtureStatistics(
+      params: FetchFixtureByIdParams,
+      signal?: AbortSignal,
+    ): Promise<ApiFootballFetchOutcome> {
+      return get('/fixtures/statistics', { fixture: String(params.fixtureId) }, signal);
+    },
 
-        const message = error instanceof Error ? error.message : 'unknown fetch error';
-        return { kind: 'network-error', message };
-      } finally {
-        clearTimeout(timer);
-      }
+    /** `GET /fixtures/events?fixture=`: goles, anulaciones y otros eventos. */
+    fetchFixtureEvents(
+      params: FetchFixtureByIdParams,
+      signal?: AbortSignal,
+    ): Promise<ApiFootballFetchOutcome> {
+      return get('/fixtures/events', { fixture: String(params.fixtureId) }, signal);
     },
   };
 }
+
+export type ApiFootballClient = ReturnType<typeof createApiFootballClient>;

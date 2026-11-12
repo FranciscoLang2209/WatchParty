@@ -1,0 +1,99 @@
+name: Matches enrich batch
+
+# Enriquece partidos históricos YA guardados con estadísticas y goles de API-Football.
+# No importa fixtures ni crea partidos: sólo agrega datos a los matchId del lote aprobado.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Base de destino'
+        type: choice
+        required: true
+        default: demo
+        options:
+          - demo
+          - production
+      batch:
+        description: 'Lote aprobado de correspondencias MATCH_ID:FIXTURE_ID separadas por comas o saltos de línea (obligatorio, máximo 20).'
+        type: string
+        required: true
+      dry_run:
+        description: 'Vista previa: hace las consultas (consumen cuota) pero NO guarda estadísticas ni goles. Desmarcar para guardar.'
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+
+# Mismo grupo que la sincronización diaria y la importación por lotes: solo garantiza que no
+# corran a la vez. NO reparte cuota: el presupuesto compartido de esas dos es el de
+# football-data.org. La cuota de API-Football (80/día propios, 100/día del plan) se lleva por base
+# de datos en `provider_quota_ledger`; ver el runbook para el caso de usar la misma clave en demo
+# y producción.
+concurrency:
+  group: matches-sync-production
+  cancel-in-progress: false
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.target == 'production' && 'Production' || 'demo' }}
+
+    steps:
+      # Los inputs llegan SIEMPRE por variables de entorno: nunca se interpolan dentro de `run`.
+      - name: Check batch input
+        env:
+          ENRICHMENT_BATCH: ${{ inputs.batch }}
+        run: |
+          if [[ ! "$ENRICHMENT_BATCH" =~ [^[:space:]] ]]; then
+            echo "Ingresá el lote aprobado en batch (pares MATCH_ID:FIXTURE_ID)." >&2
+            exit 1
+          fi
+
+      - name: Check production branch
+        if: inputs.target == 'production'
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "El enriquecimiento en producción solo se puede ejecutar desde main." >&2
+            exit 1
+          fi
+
+      - name: Check demo target
+        if: inputs.target == 'demo'
+        env:
+          DEMO_SUPABASE_URL: ${{ secrets.DEMO_SUPABASE_URL }}
+          PRODUCTION_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        run: |
+          if [ -n "$DEMO_SUPABASE_URL" ] && [ "$DEMO_SUPABASE_URL" = "$PRODUCTION_SUPABASE_URL" ]; then
+            echo "DEMO_SUPABASE_URL apunta a la base de producción." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Enrich matches batch
+        run: pnpm --filter @watchparty/api matches:enrich-batch
+        env:
+          ENRICHMENT_BATCH: ${{ inputs.batch }}
+          ENRICHMENT_DRY_RUN: ${{ inputs.dry_run }}
+          API_FOOTBALL_BASE_URL: ${{ secrets.API_FOOTBALL_BASE_URL }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          SUPABASE_URL: ${{ secrets[inputs.target == 'production' && 'SUPABASE_URL' || 'DEMO_SUPABASE_URL'] }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets[inputs.target == 'production' && 'SUPABASE_SERVICE_ROLE_KEY' || 'DEMO_SUPABASE_SERVICE_ROLE_KEY'] }}
+          SUPABASE_ANON_KEY: ${{ secrets[inputs.target == 'production' && 'SUPABASE_ANON_KEY' || 'DEMO_SUPABASE_ANON_KEY'] }}
+          WEB_ORIGIN: ${{ secrets[inputs.target == 'production' && 'WEB_ORIGIN' || 'DEMO_WEB_ORIGIN'] }}

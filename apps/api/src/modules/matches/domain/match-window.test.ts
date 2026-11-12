@@ -2,13 +2,22 @@ import { describe, it, expect } from 'vitest';
 import { agendaWindow, backfillWindow } from './match-window.js';
 
 describe('agendaWindow', () => {
-  it('va desde las 00:00 UTC de ayer hasta las 00:00 UTC del día posterior a los próximos siete días', () => {
+  it('va desde las 00:00 UTC de ayer hasta las 00:00 UTC del día posterior a los próximos catorce días', () => {
     const window = agendaWindow(new Date('2026-10-10T15:30:00.000Z'));
 
     expect(window).toEqual({
       from: '2026-10-09T00:00:00.000Z',
-      to: '2026-10-18T00:00:00.000Z',
+      to: '2026-10-25T00:00:00.000Z',
     });
+  });
+
+  it('abarca 16 días: ayer, hoy y los 14 siguientes', () => {
+    const { from, to } = agendaWindow(new Date('2026-11-12T15:30:00.000Z'));
+
+    expect((Date.parse(to) - Date.parse(from)) / (24 * 60 * 60 * 1000)).toBe(16);
+    // El último día que entra es el 2026-11-26 (hoy + 14); el 27 ya no.
+    expect('2026-11-26T23:59:59.999Z' >= from && '2026-11-26T23:59:59.999Z' < to).toBe(true);
+    expect('2026-11-27T00:00:00.000Z' < to).toBe(false);
   });
 
   it('no depende de la hora del día: el primer y el último instante de un día UTC dan la misma ventana', () => {
@@ -28,18 +37,18 @@ describe('agendaWindow', () => {
   it('cruza el cambio de mes hacia atrás y hacia adelante', () => {
     expect(agendaWindow(new Date('2026-10-01T12:00:00.000Z'))).toEqual({
       from: '2026-09-30T00:00:00.000Z',
-      to: '2026-10-09T00:00:00.000Z',
+      to: '2026-10-16T00:00:00.000Z',
     });
     expect(agendaWindow(new Date('2026-10-28T12:00:00.000Z'))).toEqual({
       from: '2026-10-27T00:00:00.000Z',
-      to: '2026-11-05T00:00:00.000Z',
+      to: '2026-11-12T00:00:00.000Z',
     });
   });
 
   it('cruza el cambio de año', () => {
     expect(agendaWindow(new Date('2026-12-31T12:00:00.000Z'))).toEqual({
       from: '2026-12-30T00:00:00.000Z',
-      to: '2027-01-08T00:00:00.000Z',
+      to: '2027-01-15T00:00:00.000Z',
     });
   });
 });

@@ -2,12 +2,18 @@ import { readWebEnv } from '../../lib/env';
 import { isMatchStatus } from './format';
 import {
   MatchesApiError,
+  type GoalEntry,
+  type GoalKind,
+  type HistoricalDetail,
+  type HistoricalGoals,
+  type HistoricalStatistics,
   type Match,
   type MatchEnvelope,
   type MatchesEnvelope,
   type MatchesErrorKind,
   type MatchScore,
   type MatchSearchPage,
+  type TeamStatistics,
 } from './types';
 
 /**
@@ -223,4 +229,183 @@ export async function searchMatches(
   }
 
   return { matches: body.matches.map(toMatch), nextCursor: body.nextCursor };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Detalle histórico (estadísticas y goles)
+// ---------------------------------------------------------------------------------------------
+
+const GOAL_KINDS: readonly GoalKind[] = [
+  'goal',
+  'own_goal',
+  'penalty_goal',
+  'goal_cancelled',
+  'shootout_goal',
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isIsoInstant(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
+}
+
+/**
+ * Una métrica es un número válido o `null` (sin dato). Un valor de otro tipo, un número fuera de
+ * rango o un negativo invalidan la respuesta: nunca se «arregla» convirtiéndolo en 0.
+ */
+function parseMetric(value: unknown, max?: number): number | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
+  if (max !== undefined && value > max) return undefined;
+
+  return value;
+}
+
+function parseTeamStatistics(value: unknown): TeamStatistics | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const possessionPct = parseMetric(value.possessionPct, 100);
+  const totalShots = parseMetric(value.totalShots);
+  const shotsOnGoal = parseMetric(value.shotsOnGoal);
+  const cornerKicks = parseMetric(value.cornerKicks);
+  const fouls = parseMetric(value.fouls);
+
+  if (
+    possessionPct === undefined ||
+    totalShots === undefined ||
+    shotsOnGoal === undefined ||
+    cornerKicks === undefined ||
+    fouls === undefined ||
+    // Los conteos son enteros; sólo la posesión puede tener decimales.
+    [totalShots, shotsOnGoal, cornerKicks, fouls].some(
+      (count) => count !== null && !Number.isInteger(count),
+    )
+  ) {
+    return undefined;
+  }
+
+  return { possessionPct, totalShots, shotsOnGoal, cornerKicks, fouls };
+}
+
+function parseStatistics(value: unknown): HistoricalStatistics | null | undefined {
+  if (value === null) return null;
+  if (!isRecord(value)) return undefined;
+
+  const home = parseTeamStatistics(value.home);
+  const away = parseTeamStatistics(value.away);
+
+  if (
+    (value.coverage !== 'complete' && value.coverage !== 'partial') ||
+    !isIsoInstant(value.fetchedAt) ||
+    home === undefined ||
+    away === undefined
+  ) {
+    return undefined;
+  }
+
+  return { coverage: value.coverage, fetchedAt: value.fetchedAt, home, away };
+}
+
+function parseGoalEntry(value: unknown): GoalEntry | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const { kind, side, playerName, minute, extraMinute } = value;
+
+  if (
+    !GOAL_KINDS.includes(kind as GoalKind) ||
+    (side !== 'home' && side !== 'away') ||
+    !(playerName === null || (typeof playerName === 'string' && playerName.trim() !== '')) ||
+    typeof minute !== 'number' ||
+    !Number.isInteger(minute) ||
+    minute < 0 ||
+    !(
+      extraMinute === null ||
+      (typeof extraMinute === 'number' && Number.isInteger(extraMinute) && extraMinute >= 0)
+    )
+  ) {
+    return undefined;
+  }
+
+  return { kind: kind as GoalKind, side, playerName, minute, extraMinute };
+}
+
+function parseGoalList(value: unknown, allowed: readonly GoalKind[]): GoalEntry[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const entries = value.map(parseGoalEntry);
+
+  // Una lista con un elemento inválido no se muestra a medias: sería una cronología parcial
+  // presentada como si estuviera completa.
+  if (entries.some((entry) => entry === undefined || !allowed.includes(entry.kind))) {
+    return undefined;
+  }
+
+  return entries as GoalEntry[];
+}
+
+function parseGoals(value: unknown): HistoricalGoals | null | undefined {
+  if (value === null) return null;
+  if (!isRecord(value)) return undefined;
+
+  const goals = parseGoalList(value.goals, ['goal', 'own_goal', 'penalty_goal']);
+  const cancelled = parseGoalList(value.cancelled, ['goal_cancelled']);
+  const shootout = parseGoalList(value.shootout, ['shootout_goal']);
+
+  if (
+    (value.coverage !== 'complete' && value.coverage !== 'incomplete') ||
+    !isIsoInstant(value.fetchedAt) ||
+    goals === undefined ||
+    cancelled === undefined ||
+    shootout === undefined
+  ) {
+    return undefined;
+  }
+
+  return { coverage: value.coverage, fetchedAt: value.fetchedAt, goals, cancelled, shootout };
+}
+
+/**
+ * Se queda con los campos del contrato y valida cada uno. `null` = el partido no tiene detalle
+ * cargado. Una forma inválida no se corrige: lanza el mismo error recuperable que cualquier
+ * respuesta inesperada del servidor.
+ */
+export function parseHistoricalDetail(value: unknown): HistoricalDetail | null {
+  if (value === null) return null;
+  if (!isRecord(value)) throw fail('server');
+
+  const statistics = parseStatistics(value.statistics);
+  const goals = parseGoals(value.goals);
+
+  if (
+    value.source !== 'api-football' ||
+    value.historical !== true ||
+    statistics === undefined ||
+    goals === undefined
+  ) {
+    throw fail('server');
+  }
+
+  return { source: 'api-football', historical: true, statistics, goals };
+}
+
+/**
+ * Estadísticas y goles guardados de un partido terminado. Sólo lee lo ya cargado por el equipo:
+ * nunca dispara una consulta al proveedor externo.
+ */
+export async function getHistoricalDetail(
+  matchId: string,
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<HistoricalDetail | null> {
+  const body = await request<{ detail?: unknown }>(
+    matchesUrl(`/${encodeURIComponent(matchId)}/historical-detail`),
+    accessToken,
+    signal,
+  );
+
+  if (!isRecord(body) || !('detail' in body)) throw fail('server');
+
+  return parseHistoricalDetail(body.detail);
 }

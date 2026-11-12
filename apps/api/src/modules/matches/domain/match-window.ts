@@ -10,12 +10,14 @@ export interface MatchWindow {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Cuántos días hacia adelante, sin contar hoy, entran en la agenda. */
-const UPCOMING_DAYS = 7;
+const UPCOMING_DAYS = 14;
 
 /**
  * Ventana móvil de la agenda (WAT-189): desde las 00:00 UTC de ayer hasta las
- * 00:00 UTC del día posterior a los próximos siete días. Entran ayer, hoy y
- * los siete días siguientes; el mismo criterio que usa la importación.
+ * 00:00 UTC del día posterior a los próximos catorce días. Entran ayer, hoy y
+ * los catorce días siguientes; el mismo criterio que usa la importación.
+ * Son dos semanas para que, en una semana de fecha FIFA con la agenda de clubes
+ * vacía, igual se vean los partidos de la semana siguiente.
  */
 export function agendaWindow(now: Date): MatchWindow {
   const startOfToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());

@@ -340,24 +340,69 @@ export function toFootballDataOrgDateRange(window: MatchWindow): {
 }
 
 /**
- * `window` acota el pedido a la ventana de la agenda. Sin `window` se pide la
- * temporada completa (importación manual por lotes).
+ * Rango máximo, en días, que se le pide a football-data.org en un solo pedido
+ * (`dateFrom`/`dateTo` son inclusivos en ambos extremos, así que 10 días son
+ * `dateFrom` y los 9 siguientes).
+ *
+ * Hay documentación de terceros que dice que el proveedor rechaza rangos de más
+ * de 10 días en `/competitions/{code}/matches`. NO figura en su documentación
+ * oficial y NO lo comprobamos con la cuenta real (un pedido de 16 días): por
+ * prudencia se parte igual, a costa de un pedido más. Si se comprueba, dejar
+ * acá el resultado, como se hizo con el `dateTo` inclusivo.
+ */
+export const FOOTBALL_DATA_ORG_MAX_RANGE_DAYS = 10;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Parte la ventana en tramos consecutivos de hasta
+ * `FOOTBALL_DATA_ORG_MAX_RANGE_DAYS` días. Parte del rango ya ajustado por
+ * `toFootballDataOrgDateRange` (que conserva el `dateTo` inclusivo), y cada
+ * tramo siguiente arranca el día después de que termina el anterior: sin
+ * solaparse ni dejar huecos.
+ */
+export function toFootballDataOrgDateRanges(window: MatchWindow): {
+  dateFrom: string;
+  dateTo: string;
+}[] {
+  const { dateFrom, dateTo } = toFootballDataOrgDateRange(window);
+  const end = Date.parse(`${dateTo}T00:00:00.000Z`);
+  const ranges: { dateFrom: string; dateTo: string }[] = [];
+
+  for (let start = Date.parse(`${dateFrom}T00:00:00.000Z`); start <= end;) {
+    const chunkEnd = Math.min(start + (FOOTBALL_DATA_ORG_MAX_RANGE_DAYS - 1) * DAY_MS, end);
+
+    ranges.push({
+      dateFrom: new Date(start).toISOString().slice(0, 10),
+      dateTo: new Date(chunkEnd).toISOString().slice(0, 10),
+    });
+    start = chunkEnd + DAY_MS;
+  }
+
+  return ranges;
+}
+
+/**
+ * `window` acota los pedidos a la ventana de la agenda, partida en tramos de
+ * hasta 10 días (una «página» por tramo: así cada uno pasa por la reserva de
+ * cuota, el límite por minuto y el reintento de `runSync`). Sin `window` se
+ * pide la temporada completa en un único pedido (importación manual por lotes).
  */
 function createFootballDataOrgSource(
   client: SyncFootballDataOrgClient,
   config: { competitionCode: string; season: string },
   window?: MatchWindow,
 ): SyncSource<FootballDataOrgFetchOutcome> {
-  const dateRange = window ? toFootballDataOrgDateRange(window) : {};
+  const ranges = window ? toFootballDataOrgDateRanges(window) : [{}];
 
   return {
-    // La API no pagina: un único pedido trae toda la ventana (o la temporada),
-    // así que `page` no se usa.
-    fetchPage: () =>
+    // La API no pagina: la «página» es el tramo de fechas (o el único pedido de
+    // la temporada completa, sin `dateFrom`/`dateTo`).
+    fetchPage: (page) =>
       client.fetchMatches({
         competitionCode: config.competitionCode,
         season: config.season,
-        ...dateRange,
+        ...ranges[page - 1],
       }),
     // football-data.org no informa un restante diario en sus headers
     // (docs/integrations/football-data-org-coverage.md): no hay nada que
@@ -372,7 +417,7 @@ function createFootballDataOrgSource(
 
       return {
         kind: 'success',
-        totalPages: 1,
+        totalPages: ranges.length,
         fixtures: normalized.fixtures,
         skipped: normalized.skipped,
       };

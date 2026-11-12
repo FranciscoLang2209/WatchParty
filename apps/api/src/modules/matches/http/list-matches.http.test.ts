@@ -33,7 +33,7 @@ function buildCatalog(matches: readonly Match[]): MatchCatalog {
 
 // Reloj controlado: «hoy» es el 6 de septiembre de 2026 en UTC.
 const NOW = new Date('2026-09-06T15:00:00.000Z');
-const WINDOW = { from: '2026-09-05T00:00:00.000Z', to: '2026-09-14T00:00:00.000Z' };
+const WINDOW = { from: '2026-09-05T00:00:00.000Z', to: '2026-09-21T00:00:00.000Z' };
 
 function buildTestApp(catalog: MatchCatalog, now: () => Date = () => NOW) {
   const app = express();
@@ -139,8 +139,8 @@ describe('GET /matches', () => {
     await request(app).get('/matches').set('Authorization', 'Bearer good-token');
 
     expect(list.mock.calls).toEqual([
-      [{ from: '2026-09-29T00:00:00.000Z', to: '2026-10-08T00:00:00.000Z' }],
-      [{ from: '2026-09-30T00:00:00.000Z', to: '2026-10-09T00:00:00.000Z' }],
+      [{ from: '2026-09-29T00:00:00.000Z', to: '2026-10-15T00:00:00.000Z' }],
+      [{ from: '2026-09-30T00:00:00.000Z', to: '2026-10-16T00:00:00.000Z' }],
     ]);
   });
 
