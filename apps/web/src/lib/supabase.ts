@@ -12,7 +12,10 @@ export const supabase = createClient(env.supabaseUrl, env.supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: false,
+    // El enlace del correo de recuperación llega con la sesión en la URL: el cliente tiene que
+    // leerla para emitir `PASSWORD_RECOVERY`, la señal que habilita el cambio de contraseña.
+    // Sin esto el enlace se ignora y `/reset-password` siempre dice «enlace no válido».
+    detectSessionInUrl: true,
     // El destino real lo elige «Recordarme» en cada inicio de sesión.
     storage: rememberAwareStorage,
   },
