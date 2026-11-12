@@ -109,6 +109,7 @@ Procedimientos de validación y configuración, en [`docs/runbooks`](./docs/runb
 
 - [Validación del recorrido de partidos](./docs/runbooks/match-frontend-validation.md)
 - [Redirect URLs de la recuperación de contraseña](./docs/runbooks/password-recovery-redirects.md)
+- [SMTP propio para la recuperación de contraseña](./docs/runbooks/password-recovery-smtp.md)
 
 ## Supabase (desarrollo local)
 

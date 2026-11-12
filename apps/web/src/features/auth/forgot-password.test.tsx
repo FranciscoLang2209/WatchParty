@@ -135,6 +135,71 @@ describe('ForgotPasswordPage', () => {
     expect(screen.getByRole('button', { name: 'Enviar enlace' })).toBeEnabled();
   });
 
+  // Los fallos de envío que reportó producción: límite de envío (429) y rechazo de las
+  // credenciales SMTP. Ninguno puede llegar a la pantalla con el texto del proveedor.
+  it.each([
+    ['límite de envío', 429, 'over_email_send_rate_limit', 'email rate limit exceeded'],
+    [
+      'credenciales SMTP rechazadas',
+      500,
+      'unexpected_failure',
+      'Error sending recovery email: 535 5.7.8 Username and Password not accepted',
+    ],
+    ['proveedor caído', 503, 'unexpected_failure', 'smtp.example.test: connection timed out'],
+  ])(
+    'ante %s muestra un aviso recuperable sin datos internos',
+    async (_caso, status, code, message) => {
+      authMock.resetPasswordForEmail.mockResolvedValue({
+        data: {},
+        error: { name: 'AuthApiError', message, code, status } as AuthError,
+      });
+
+      const { user } = renderPage();
+      await pedirEnlace(user);
+
+      const aviso = await screen.findByRole('status');
+
+      expect(aviso).toHaveTextContent(
+        'No pudimos enviar el correo. Intentá de nuevo en unos instantes.',
+      );
+      expect(aviso.textContent).not.toMatch(
+        /smtp|rate limit|535|password|credential|timed out|429/i,
+      );
+      // No confirma el envío y deja reintentar con el mismo correo.
+      expect(aviso).not.toHaveTextContent('te enviamos');
+      expect(screen.getByLabelText('Correo electrónico')).toHaveValue('persona@watchparty.test');
+      expect(screen.getByRole('button', { name: 'Enviar enlace' })).toBeEnabled();
+    },
+  );
+
+  it('tras un fallo de envío, reintentar con el mismo correo puede completarse', async () => {
+    authMock.resetPasswordForEmail
+      .mockResolvedValueOnce({
+        data: {},
+        error: {
+          name: 'AuthApiError',
+          message: 'email rate limit exceeded',
+          code: 'over_email_send_rate_limit',
+          status: 429,
+        } as AuthError,
+      })
+      .mockResolvedValueOnce({ data: {}, error: null });
+
+    const { user } = renderPage();
+    await pedirEnlace(user);
+    await screen.findByText('No pudimos enviar el correo.', { exact: false });
+
+    await user.click(screen.getByRole('button', { name: 'Enviar enlace' }));
+
+    expect(
+      await screen.findByText('Si existe una cuenta con ese correo', { exact: false }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('No pudimos enviar el correo.', { exact: false }),
+    ).not.toBeInTheDocument();
+    expect(authMock.resetPasswordForEmail).toHaveBeenCalledTimes(2);
+  });
+
   it('permite volver al login', async () => {
     const { user } = renderPage();
 
