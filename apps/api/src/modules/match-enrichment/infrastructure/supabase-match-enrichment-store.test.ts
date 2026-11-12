@@ -164,6 +164,7 @@ describe('SupabaseMatchEnrichmentStore — verificación de partidos y vínculos
       matches: {
         data: {
           id: MATCH_ID,
+          provider: 'football-data-org',
           status: 'finished',
           kickoff_at: '2024-07-14T19:00:00+00:00',
           competition_external_id: '2018',
@@ -179,6 +180,7 @@ describe('SupabaseMatchEnrichmentStore — verificación de partidos y vínculos
     expect(await new SupabaseMatchEnrichmentStore(client).findMatchForEnrichment(MATCH_ID)).toEqual(
       {
         id: MATCH_ID,
+        provider: 'football-data-org',
         status: 'finished',
         kickoffAt: '2024-07-14T19:00:00.000Z',
         homeTeamName: 'Spain',
@@ -194,6 +196,7 @@ describe('SupabaseMatchEnrichmentStore — verificación de partidos y vínculos
       matches: {
         data: {
           id: MATCH_ID,
+          provider: 'football-data-org',
           status: 'finished',
           kickoff_at: '2024-07-14T19:00:00+00:00',
           competition_external_id: '2018',
@@ -272,13 +275,59 @@ describe('SupabaseMatchEnrichmentStore — verificación de partidos y vínculos
         },
         error: null,
       },
+      match_team_statistics: {
+        data: [
+          {
+            possession_pct: '58.00',
+            total_shots: 15,
+            shots_on_goal: 0,
+            corner_kicks: null,
+            fouls: null,
+          },
+          {
+            possession_pct: '42.00',
+            total_shots: null,
+            shots_on_goal: null,
+            corner_kicks: 0,
+            fouls: 14,
+          },
+        ],
+        error: null,
+      },
     });
 
     expect(
       await new SupabaseMatchEnrichmentStore(client).getStoredState('api-football', MATCH_ID),
     ).toEqual({
       statisticsCoverage: 'complete',
+      // Cuenta las métricas con valor: el 0 cuenta, el null no.
+      statisticsValueCount: 6,
       goalsCoverage: null,
+      goalsEventCount: 0,
+    });
+  });
+
+  it('el estado guardado cuenta los eventos de gol cuando hay cronología', async () => {
+    const { client } = makeClient({
+      match_enrichment: {
+        data: {
+          statistics_coverage: null,
+          statistics_fetched_at: null,
+          goals_coverage: 'incomplete',
+          goals_fetched_at: '2026-11-12T15:00:00Z',
+        },
+        error: null,
+      },
+      match_goal_events: { data: null, error: null, count: 3 },
+    });
+
+    expect(
+      await new SupabaseMatchEnrichmentStore(client).getStoredState('api-football', MATCH_ID),
+    ).toEqual({
+      statisticsCoverage: null,
+      statisticsValueCount: 0,
+      goalsCoverage: 'incomplete',
+      goalsEventCount: 3,
     });
   });
 });

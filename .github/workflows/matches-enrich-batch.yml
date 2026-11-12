@@ -26,8 +26,11 @@ on:
 permissions:
   contents: read
 
-# Mismo grupo que la sincronización diaria y la importación por lotes: comparten el presupuesto
-# de pedidos del proveedor y no se pisan.
+# Mismo grupo que la sincronización diaria y la importación por lotes: solo garantiza que no
+# corran a la vez. NO reparte cuota: el presupuesto compartido de esas dos es el de
+# football-data.org. La cuota de API-Football (80/día propios, 100/día del plan) se lleva por base
+# de datos en `provider_quota_ledger`; ver el runbook para el caso de usar la misma clave en demo
+# y producción.
 concurrency:
   group: matches-sync-production
   cancel-in-progress: false

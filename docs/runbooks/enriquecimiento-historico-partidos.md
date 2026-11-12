@@ -19,14 +19,28 @@ comentarios, calificaciones, reseñas e historial.
    competición, fecha/hora UTC (±30 min), equipos y orientación local/visitante, estado terminado
    y, cuando es comparable, el marcador. Si algo no cierra, el par se **rechaza** y se informa;
    no se gasta cuota en sus datos.
-3. Si la verificación pasa, consulta estadísticas (1 pedido) y eventos (1 pedido) y los normaliza:
-   un dato ausente es **«Sin dato»**, nunca cero; un cero real se conserva como `0`; los goles se
-   concilian con el marcador del partido, y si no cierran la cronología queda **incompleta**.
+3. Si la verificación pasa, toma las estadísticas y los eventos y los normaliza. Si el propio
+   fixture los trae **embebidos** (`GET /fixtures?id=` suele incluirlos) los usa sin pedidos
+   extra; si no vienen, vienen vacíos o no se pueden leer, los pide a `/fixtures/statistics` y
+   `/fixtures/events`. Un dato ausente es **«Sin dato»**, nunca cero; un cero real se conserva
+   como `0`; los goles se concilian con el marcador del partido, y si no cierran la cronología
+   queda **incompleta**.
 4. Con `dry_run=false` guarda, **por partido y de forma atómica**, el vínculo y las partes
-   obtenidas. Una respuesta incompleta o con error **nunca borra** lo ya confirmado.
+   obtenidas. Una respuesta incompleta o con error **nunca borra** lo ya confirmado: una carga
+   reemplaza a la guardada solo si tiene **más cobertura**, o la **misma cobertura completa**
+   (una corrección válida), o la misma cobertura no completa con **al menos tantas métricas /
+   eventos**. Dos cargas parciales no son intercambiables: una con 2 métricas no pisa a otra con 8.
 
-Cada partido consume **3 pedidos** del presupuesto diario compartido de API-Football (80 por día,
-10 por minuto; los reintentos también cuentan). El lote admite hasta **20** correspondencias.
+Cada partido consume **1 pedido** si el fixture trae estadísticas y eventos embebidos, y **3** si
+hay que pedirlos aparte (los reintentos también cuentan). El resumen indica, partido por partido,
+de dónde salió cada parte (`fixture` o `endpoint`). El lote admite hasta **20** correspondencias.
+Solo se enriquecen partidos cuyo proveedor de origen es **football-data.org**: uno de otro
+proveedor se rechaza antes de consultar (`proveedor-no-soportado`).
+
+> **Cuota entre entornos.** El ledger de cuota (`provider_quota_ledger`, 80 por día propios) es
+> **por base de datos**. Si `demo` y `Production` usan la **misma** `API_FOOTBALL_KEY`, la suma de
+> ambos puede superar los 100 pedidos diarios del plan aunque cada base respete su 80. Usá claves
+> separadas, o coordiná para que lo ejecutado entre los dos entornos en un mismo día no pase de 100.
 
 ## Preparación (la hace quien desarrolla, una sola vez)
 
@@ -106,6 +120,10 @@ Debajo de la tabla: enriquecidos / sin cobertura / rechazados / errores, **cuota
 corrida, reservados hoy y restante informado por el proveedor) y **partidos antes/después**, que
 **tiene que ser igual**: si cambia, el comando termina con error.
 
+Después viene **«Evidencia por partido»**, ya saneada y lista para pegar en la PR o el issue: ids de
+ambos sistemas, equipos de cada lado, competición/temporada del proveedor, inicios UTC, de dónde
+salió cada parte, métricas presentes y ausentes, goles con su conciliación y pedidos del partido.
+
 Códigos de salida: `0` todo bien, `1` algún partido rechazado o con error (o cambió la cantidad de
 partidos), `2` configuración inválida (no se consultó ni escribió nada).
 
@@ -117,7 +135,8 @@ autor (si se conoce), minuto y añadido (`45+2'`, `90+4'`). Se distinguen:
 - **cero real** (`0`) de **«Sin dato»**;
 - **cobertura restringida** (faltan métricas) y **cronología incompleta** (avisadas como tales);
 - **goles del juego**, **goles anulados** y **tanda de penales** (listas separadas);
-- carga, error con «Reintentar» y partido sin detalle cargado.
+- carga y error con «Reintentar». Un partido **sin detalle cargado no muestra la sección**: la
+  mayoría de los terminados no están enriquecidos y una tarjeta vacía en cada uno sería ruido.
 
 Siempre dice la fuente (API-Football) y que son **datos históricos, sin actualización en vivo**.
 La web nunca consulta al proveedor: solo lee lo guardado.
@@ -141,9 +160,10 @@ su vínculo.
 
 ## Límites conocidos
 
-- La coincidencia de nombres es **conservadora**: `Manchester City FC` ↔ `Manchester City` pasa,
-  pero un alias distinto (p. ej. `Wolverhampton Wanderers FC` ↔ `Wolves`) se **rechaza** y requiere
-  revisión manual.
+- La coincidencia de nombres **falla cerrado a propósito**: `Manchester City FC` ↔ `Manchester City`
+  pasa (uno contiene al otro sin sufijos como «FC»), pero un **apodo** o alias distinto
+  (`Wolverhampton Wanderers FC` ↔ `Wolves`) se **rechaza** como `equipos-distintos`. No es un
+  error del lote: ese par hay que revisarlo a mano, y no se fuerza.
 - En un gol en contra, API-Football no aclara si el evento trae el equipo del autor o el
   beneficiado: se prueba contra el marcador, y si ambas lecturas cierran con atribuciones
   distintas la cronología queda `incomplete`.

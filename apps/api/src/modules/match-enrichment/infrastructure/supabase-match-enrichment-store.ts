@@ -32,6 +32,7 @@ const SIDES: readonly TeamSide[] = ['home', 'away'];
 
 interface MatchRefRow {
   id: string;
+  provider: string;
   status: string;
   kickoff_at: string;
   competition_external_id: string;
@@ -112,7 +113,7 @@ export class SupabaseMatchEnrichmentStore implements MatchEnrichmentStore, Match
     const { data, error } = await this.client
       .from('matches')
       .select(
-        'id, status, kickoff_at, competition_external_id, home_score, away_score, home_team:teams!matches_home_team_id_fkey(name), away_team:teams!matches_away_team_id_fkey(name)',
+        'id, provider, status, kickoff_at, competition_external_id, home_score, away_score, home_team:teams!matches_home_team_id_fkey(name), away_team:teams!matches_away_team_id_fkey(name)',
       )
       .eq('id', matchId)
       .maybeSingle();
@@ -133,6 +134,7 @@ export class SupabaseMatchEnrichmentStore implements MatchEnrichmentStore, Match
 
     return {
       id: row.id,
+      provider: row.provider,
       status: row.status,
       kickoffAt: new Date(row.kickoff_at).toISOString(),
       homeTeamName: row.home_team.name,
@@ -178,12 +180,61 @@ export class SupabaseMatchEnrichmentStore implements MatchEnrichmentStore, Match
   async getStoredState(provider: string, matchId: string): Promise<StoredEnrichmentState> {
     const row = await this.readEnrichmentRow(provider, matchId);
 
+    const statisticsCoverage = oneOf(STATISTICS_COVERAGES, row?.statistics_coverage)
+      ? row.statistics_coverage
+      : null;
+    const goalsCoverage = oneOf(GOALS_COVERAGES, row?.goals_coverage) ? row.goals_coverage : null;
+
     return {
-      statisticsCoverage: oneOf(STATISTICS_COVERAGES, row?.statistics_coverage)
-        ? row.statistics_coverage
-        : null,
-      goalsCoverage: oneOf(GOALS_COVERAGES, row?.goals_coverage) ? row.goals_coverage : null,
+      statisticsCoverage,
+      statisticsValueCount:
+        statisticsCoverage === null ? 0 : await this.countStatisticValues(provider, matchId),
+      goalsCoverage,
+      goalsEventCount: goalsCoverage === null ? 0 : await this.countGoalEvents(provider, matchId),
     };
+  }
+
+  /** Métricas con valor (no nulas) guardadas entre los dos equipos. */
+  private async countStatisticValues(provider: string, matchId: string): Promise<number> {
+    const { data, error } = await this.client
+      .from('match_team_statistics')
+      .select('possession_pct, total_shots, shots_on_goal, corner_kicks, fouls')
+      .eq('match_id', matchId)
+      .eq('provider', provider);
+
+    if (error) {
+      throw new SupabasePersistenceError('No se pudieron leer las estadísticas guardadas.', error);
+    }
+
+    return ((data ?? []) as Omit<StatisticsRow, 'side'>[]).reduce(
+      (total, row) =>
+        total +
+        [
+          row.possession_pct,
+          row.total_shots,
+          row.shots_on_goal,
+          row.corner_kicks,
+          row.fouls,
+        ].filter((value) => value !== null).length,
+      0,
+    );
+  }
+
+  private async countGoalEvents(provider: string, matchId: string): Promise<number> {
+    const { count, error } = await this.client
+      .from('match_goal_events')
+      .select('position', { count: 'exact', head: true })
+      .eq('match_id', matchId)
+      .eq('provider', provider);
+
+    if (error || count === null) {
+      throw new SupabasePersistenceError(
+        'No se pudieron contar los goles guardados.',
+        error ?? undefined,
+      );
+    }
+
+    return count;
   }
 
   async countMatches(): Promise<number> {

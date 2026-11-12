@@ -5,6 +5,7 @@ import { teamNamesCompatible, verifyCorrespondence } from './enrichment-linking.
 
 const MATCH: EnrichmentMatchRef = {
   id: 'match-1',
+  provider: 'football-data-org',
   status: 'finished',
   kickoffAt: '2024-07-14T19:00:00.000Z',
   homeTeamName: 'Spain',
@@ -23,6 +24,8 @@ const FIXTURE: FixtureInfo = {
   home: { id: 9, name: 'Spain' },
   away: { id: 10, name: 'England' },
   goals: { home: 2, away: 1 },
+  embeddedStatistics: null,
+  embeddedEvents: null,
 };
 
 function codes(match: EnrichmentMatchRef, fixture: FixtureInfo): string[] {
@@ -116,6 +119,15 @@ describe('verifyCorrespondence', () => {
 
     expect(verdict).toMatchObject({ accepted: true });
     expect(verdict.accepted && verdict.notes.join()).toContain('no comparado');
+  });
+
+  it('exige que el partido interno venga de football-data.org: otro proveedor se rechaza explícitamente', () => {
+    expect(codes({ ...MATCH, provider: 'api-football' }, FIXTURE)).toEqual([
+      'proveedor-no-soportado',
+    ]);
+    expect(codes({ ...MATCH, provider: 'local-fixtures' }, FIXTURE)).toEqual([
+      'proveedor-no-soportado',
+    ]);
   });
 
   it('rechaza un partido interno no finalizado o un fixture que no terminó', () => {

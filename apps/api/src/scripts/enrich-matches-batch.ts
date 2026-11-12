@@ -5,6 +5,7 @@ import { createApiFootballClient } from '../modules/matches/infrastructure/api-f
 import { SupabaseProviderQuotaStore } from '../modules/matches/infrastructure/supabase-provider-quota-store.js';
 import {
   enrichMatchesBatch,
+  formatEnrichBatchEvidence,
   formatEnrichBatchTable,
 } from '../modules/match-enrichment/application/enrich-matches-batch.js';
 import {
@@ -92,7 +93,10 @@ async function main(): Promise<void> {
   // En GitHub Actions el resumen queda visible en la página de la ejecución.
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (summaryPath) {
-    appendFileSync(summaryPath, `## Enriquecimiento de partidos históricos\n\n${table}\n`);
+    appendFileSync(
+      summaryPath,
+      `## Enriquecimiento de partidos históricos\n\n${table}\n\n## Evidencia por partido\n\n${formatEnrichBatchEvidence(report)}\n`,
+    );
   }
 
   process.exitCode = report.exitCode;

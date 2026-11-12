@@ -67,15 +67,25 @@ export interface MatchEnrichmentPayload {
   goals?: MatchGoals;
 }
 
-/** Estado persistido por parte: qué cobertura tiene y cuándo se consultó. */
+/**
+ * Estado persistido por parte: qué cobertura tiene y cuánto trae. Los conteos permiten decidir,
+ * entre dos cargas de la MISMA cobertura, cuál es más completa: una respuesta parcial con menos
+ * datos nunca pisa a otra parcial con más.
+ */
 export interface StoredEnrichmentState {
   statisticsCoverage: StatisticsCoverage | null;
+  /** Métricas con valor (no nulas) entre los dos equipos, 0–10. */
+  statisticsValueCount: number;
   goalsCoverage: GoalsCoverage | null;
+  /** Eventos guardados (goles, anulaciones y tanda). */
+  goalsEventCount: number;
 }
 
 /** Lo que el importador necesita saber del partido interno para verificar una correspondencia. */
 export interface EnrichmentMatchRef {
   id: string;
+  /** Proveedor que originó el partido interno (de él depende el sentido de `competitionExternalId`). */
+  provider: string;
   status: string;
   kickoffAt: string;
   homeTeamName: string;

@@ -137,6 +137,24 @@ export interface FixtureInfo {
   away: { id: number; name: string };
   /** Goles que informa el proveedor; `null` si no los informa. */
   goals: { home: number; away: number } | null;
+  /**
+   * `GET /fixtures?id=` puede traer `statistics` y `events` embebidos, con la misma forma que sus
+   * endpoints propios. `null` si la respuesta no los trae: entonces hay que pedirlos aparte.
+   */
+  embeddedStatistics: unknown[] | null;
+  embeddedEvents: unknown[] | null;
+}
+
+/** Envuelve una lista embebida con la forma de una respuesta de endpoint, para normalizarla igual. */
+export function embeddedOutcome(items: unknown[]): ApiFootballFetchOutcome {
+  return {
+    kind: 'response',
+    status: 200,
+    ok: true,
+    body: { errors: [], results: items.length, response: items },
+    paging: undefined,
+    headers: {},
+  };
 }
 
 export type FixtureLookupResult =
@@ -194,6 +212,8 @@ export function normalizeFixtureLookup(outcome: ApiFootballFetchOutcome): Fixtur
       home: { id: home.id, name: home.name },
       away: { id: away.id, name: away.name },
       goals,
+      embeddedStatistics: Array.isArray(raw.statistics) ? raw.statistics : null,
+      embeddedEvents: Array.isArray(raw.events) ? raw.events : null,
     },
   };
 }
@@ -474,7 +494,11 @@ function resolve(
   events: readonly RawGoalEvent[],
   options: { ownGoalCredit: 'opponent' | 'self'; pairCancelled: boolean; shootoutInScore: boolean },
 ): Resolution {
+  // Goles ya anulados por una anulación, y anulaciones que ya consumieron un gol. Cada anulación
+  // consume a lo sumo UN gol: dos anulaciones del mismo equipo y minuto con un solo gol listado
+  // dejan una anulación sin emparejar, que se sigue mostrando como tal.
   const paired = new Set<number>();
+  const consumedCancellations = new Set<number>();
 
   if (options.pairCancelled) {
     for (const cancelled of events.filter((event) => event.kind === 'goal_cancelled')) {
@@ -486,7 +510,11 @@ function resolve(
           event.minute === cancelled.minute &&
           event.extraMinute === cancelled.extraMinute,
       );
-      if (candidate) paired.add(candidate.order);
+
+      if (candidate) {
+        paired.add(candidate.order);
+        consumedCancellations.add(cancelled.order);
+      }
     }
   }
 
@@ -501,19 +529,9 @@ function resolve(
         ? opposite(event.teamSide)
         : event.teamSide;
 
-    if (options.pairCancelled && event.kind === 'goal_cancelled') {
-      // La anulación se muestra sobre el gol emparejado, no como una segunda entrada.
-      const hasPair = [...paired].some((order) => {
-        const goal = events.find((candidate) => candidate.order === order);
-        return (
-          goal !== undefined &&
-          goal.teamId === event.teamId &&
-          goal.minute === event.minute &&
-          goal.extraMinute === event.extraMinute
-        );
-      });
-      if (hasPair) continue;
-    }
+    // La anulación que ya se resolvió contra un gol se muestra sobre ese gol, no como una segunda
+    // entrada; una sin gol que anular sigue apareciendo.
+    if (consumedCancellations.has(event.order)) continue;
 
     resolved.push({
       kind,

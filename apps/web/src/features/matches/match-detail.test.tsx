@@ -2436,3 +2436,20 @@ describe('Estadísticas y goles históricos en el detalle', () => {
     expect(m.getByRole('button', { name: 'Entrar a la sala' })).toBeEnabled();
   });
 });
+
+describe('Estadísticas y goles históricos: partidos sin enriquecer', () => {
+  it('un partido finalizado sin detalle cargado no muestra la sección', async () => {
+    // `responderCon` devuelve `{ detail: null }` para el detalle histórico.
+    responderCon({ match: { ...partido, status: 'finished' } });
+
+    renderAt('/matches/match-001');
+    const m = await detalle();
+    await m.findByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' });
+
+    await waitFor(() =>
+      expect(m.queryByText('Cargando estadísticas y goles…')).not.toBeInTheDocument(),
+    );
+    expect(m.queryByRole('heading', { name: 'Estadísticas y goles' })).not.toBeInTheDocument();
+    expect(m.queryByText(/Todavía no hay estadísticas/)).not.toBeInTheDocument();
+  });
+});

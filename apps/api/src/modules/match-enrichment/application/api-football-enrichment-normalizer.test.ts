@@ -108,7 +108,37 @@ describe('normalizeFixtureLookup', () => {
         home: { id: HOME, name: 'Spain' },
         away: { id: AWAY, name: 'England' },
         goals: { home: 2, away: 1 },
+        embeddedStatistics: null,
+        embeddedEvents: null,
       },
+    });
+  });
+
+  it('lee las estadísticas y los eventos embebidos cuando el fixture los trae', () => {
+    const result = normalizeFixtureLookup(
+      ok([
+        fixtureItem({
+          statistics: [{ team: { id: HOME }, statistics: [] }],
+          events: [{ type: 'Goal' }],
+        }),
+      ]),
+    );
+
+    expect(result).toMatchObject({
+      kind: 'ok',
+      fixture: {
+        embeddedStatistics: [{ team: { id: HOME }, statistics: [] }],
+        embeddedEvents: [{ type: 'Goal' }],
+      },
+    });
+  });
+
+  it('si `statistics` o `events` no son listas, se toman como no embebidos', () => {
+    const result = normalizeFixtureLookup(ok([fixtureItem({ statistics: {}, events: 'no' })]));
+
+    expect(result).toMatchObject({
+      kind: 'ok',
+      fixture: { embeddedStatistics: null, embeddedEvents: null },
     });
   });
 
@@ -560,6 +590,28 @@ describe('normalizeFixtureGoals', () => {
         },
       ]);
       expect(result.kind === 'ok' && result.reconciliation).toContain('anulaciones emparejadas');
+    });
+
+    it('dos anulaciones del mismo equipo y minuto con un solo gol listado: ninguna desaparece', () => {
+      // Marcador 1–0 (el gol del 30'). El proveedor lista otro gol local al 60' y lo anula DOS veces.
+      const result = normalizeFixtureGoals(
+        ok([
+          goal(HOME, 30),
+          goal(HOME, 60),
+          event(HOME, 'Var', 'Goal cancelled', 60),
+          event(HOME, 'Var', 'Goal Disallowed - offside', 60),
+        ]),
+        TEAMS,
+        { home: 1, away: 0 },
+      );
+
+      expect(result).toMatchObject({ kind: 'ok', goals: { coverage: 'complete' } });
+      // El gol del 30' y DOS anulaciones al 60': la que consumió el gol listado y la otra.
+      expect(result.kind === 'ok' && result.goals.events.map((e) => e.kind)).toEqual([
+        'goal',
+        'goal_cancelled',
+        'goal_cancelled',
+      ]);
     });
 
     it('si la lectura literal ya cierra con el marcador no se reinterpreta nada', () => {

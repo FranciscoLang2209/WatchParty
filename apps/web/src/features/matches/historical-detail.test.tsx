@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -256,16 +256,17 @@ describe('MatchHistoricalDetail — estados', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
-  it('un partido sin detalle cargado lo dice, sin ceros ni listas vacías', async () => {
+  it('un partido sin detalle cargado no muestra nada: ni tarjeta, ni ceros, ni listas vacías', async () => {
     responder({ detail: null });
 
-    mostrar();
+    const { container } = render(
+      <MatchHistoricalDetail match={MATCH} accessToken="token-123" onSessionExpired={vi.fn()} />,
+    );
 
-    expect(
-      await screen.findByText('Todavía no hay estadísticas ni goles cargados para este partido.'),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole('table')).not.toBeInTheDocument();
-    expect(screen.queryByRole('list')).not.toBeInTheDocument();
+    // Mientras carga se ve el estado de carga; al confirmar que no hay detalle, desaparece.
+    expect(screen.getByRole('status')).toHaveTextContent('Cargando estadísticas y goles');
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('un error muestra el aviso con «Reintentar» y reintentar vuelve a pedir', async () => {
@@ -324,6 +325,53 @@ describe('MatchHistoricalDetail — estados', () => {
     render(<MatchHistoricalDetail match={MATCH} accessToken={null} onSessionExpired={vi.fn()} />);
 
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('si el token llega después de montar, lo pide en ese momento (no queda cargando para siempre)', async () => {
+    responder({ detail: detalle() });
+    const onSessionExpired = vi.fn();
+    const { rerender } = render(
+      <MatchHistoricalDetail
+        match={MATCH}
+        accessToken={null}
+        onSessionExpired={onSessionExpired}
+      />,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    rerender(
+      <MatchHistoricalDetail
+        match={MATCH}
+        accessToken="token-123"
+        onSessionExpired={onSessionExpired}
+      />,
+    );
+
+    expect(await screen.findByRole('table')).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('renovar el token no repite el pedido', async () => {
+    responder({ detail: detalle() });
+    const onSessionExpired = vi.fn();
+    const { rerender } = render(
+      <MatchHistoricalDetail
+        match={MATCH}
+        accessToken="token-1"
+        onSessionExpired={onSessionExpired}
+      />,
+    );
+    await screen.findByRole('table');
+
+    rerender(
+      <MatchHistoricalDetail
+        match={MATCH}
+        accessToken="token-2"
+        onSessionExpired={onSessionExpired}
+      />,
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('hace un único pedido por partido', async () => {
@@ -599,8 +647,10 @@ describe('MatchHistoricalDetail — fuente y carácter histórico', () => {
   it('no muestra la fuente cuando no hay detalle cargado', async () => {
     responder({ detail: null });
 
-    mostrar();
-    await screen.findByText(/Todavía no hay estadísticas/);
+    const { container } = render(
+      <MatchHistoricalDetail match={MATCH} accessToken="token-123" onSessionExpired={vi.fn()} />,
+    );
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
 
     expect(screen.queryByText(/Fuente: API-Football/)).not.toBeInTheDocument();
   });

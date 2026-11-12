@@ -319,6 +319,7 @@ export function MatchHistoricalDetail({
   const [lectura, setLectura] = useState<Lectura>({ status: 'loading' });
   const [intento, setIntento] = useState(0);
   const token = useRef(accessToken);
+  const tieneToken = accessToken !== null;
   const tituloId = useId();
 
   useEffect(() => {
@@ -342,12 +343,18 @@ export function MatchHistoricalDetail({
       });
 
     return () => controller.abort();
-  }, [match.id, intento]);
+    // `tieneToken` (no el token) a propósito: una renovación del token no repite el pedido, pero
+    // si el componente se monta antes de que haya sesión, al llegar el token sí lo pide.
+  }, [match.id, intento, tieneToken]);
 
   const reintentar = useCallback(() => {
     setLectura({ status: 'loading' });
     setIntento((valor) => valor + 1);
   }, []);
+
+  // Un partido sin detalle cargado no muestra nada: la mayoría de los partidos terminados no
+  // están enriquecidos y una tarjeta vacía en cada uno sería ruido, no información.
+  if (lectura.status === 'ready' && lectura.detail === null) return null;
 
   const detail = lectura.status === 'ready' ? lectura.detail : null;
   const consultado =

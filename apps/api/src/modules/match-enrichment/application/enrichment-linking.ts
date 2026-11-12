@@ -1,4 +1,5 @@
 import type { EnrichmentMatchRef } from '../domain/match-enrichment.js';
+import { FOOTBALL_DATA_ORG_PROVIDER } from '../../matches/application/football-data-org-normalizer.js';
 import type { FixtureInfo } from './api-football-enrichment-normalizer.js';
 
 /**
@@ -39,6 +40,7 @@ export const KICKOFF_TOLERANCE_MINUTES = 30;
 const FINISHED_FIXTURE_STATUSES: ReadonlySet<string> = new Set(['FT', 'AET', 'PEN']);
 
 export type RejectionCode =
+  | 'proveedor-no-soportado'
   | 'partido-no-finalizado'
   | 'fixture-no-finalizado'
   | 'competicion-sin-equivalente'
@@ -108,6 +110,20 @@ export function teamNamesCompatible(a: string, b: string): boolean {
   return [...small].every((token) => large.has(token));
 }
 
+/**
+ * `competitionExternalId` sólo tiene el sentido de la tabla de ligas si el partido nació en
+ * football-data.org: de otro proveedor, los ids no son comparables y se rechaza explícitamente
+ * (no «por casualidad» al no encontrar la liga). Se consulta antes de gastar un pedido.
+ */
+export function rejectUnsupportedProvider(match: EnrichmentMatchRef): Rejection | null {
+  if (match.provider === FOOTBALL_DATA_ORG_PROVIDER) return null;
+
+  return {
+    code: 'proveedor-no-soportado',
+    message: `el partido interno viene de «${match.provider}» y sólo se enriquecen los de «${FOOTBALL_DATA_ORG_PROVIDER}»`,
+  };
+}
+
 export function verifyCorrespondence(
   match: EnrichmentMatchRef,
   fixture: FixtureInfo,
@@ -115,6 +131,9 @@ export function verifyCorrespondence(
   const rejections: Rejection[] = [];
   const notes: string[] = [];
   const reject = (code: RejectionCode, message: string) => rejections.push({ code, message });
+
+  const unsupported = rejectUnsupportedProvider(match);
+  if (unsupported) rejections.push(unsupported);
 
   if (match.status !== 'finished') {
     reject('partido-no-finalizado', `el partido interno no está finalizado (${match.status})`);

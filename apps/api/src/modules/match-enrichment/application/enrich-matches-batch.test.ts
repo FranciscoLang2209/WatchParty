@@ -10,6 +10,7 @@ import type {
 import {
   createRequestGate,
   enrichMatchesBatch,
+  formatEnrichBatchEvidence,
   formatEnrichBatchTable,
   type EnrichmentClient,
 } from './enrich-matches-batch.js';
@@ -86,6 +87,24 @@ const goal = (teamId: number, elapsed: number, extra: number | null = null) => (
   comments: null,
 });
 
+// Ocho valores (sin faltas ni córners del visitante) frente a los cuatro de PARTIAL_STATS.
+const PARTIAL_STATS_8 = ok([
+  team(HOME, {
+    'Ball Possession': '58%',
+    'Total Shots': 15,
+    'Shots on Goal': 7,
+    'Corner Kicks': 6,
+  }),
+  team(AWAY, {
+    'Ball Possession': '42%',
+    'Total Shots': 9,
+    'Shots on Goal': 3,
+    'Corner Kicks': 0,
+  }),
+]);
+
+const ONE_EVENT = ok([goal(HOME, 47)]);
+
 const FULL_EVENTS = ok([goal(HOME, 47), goal(AWAY, 73), goal(HOME, 90, 4)]);
 const PARTIAL_EVENTS = ok([goal(HOME, 47), goal(AWAY, 73)]);
 
@@ -147,6 +166,7 @@ class FakeEnrichmentStore implements MatchEnrichmentStore {
   addMatch(id: string, overrides: Partial<EnrichmentMatchRef> = {}) {
     this.matches.set(id, {
       id,
+      provider: 'football-data-org',
       status: 'finished',
       kickoffAt: '2024-07-14T19:00:00.000Z',
       homeTeamName: 'Spain',
@@ -172,9 +192,15 @@ class FakeEnrichmentStore implements MatchEnrichmentStore {
 
   async getStoredState(_provider: string, matchId: string): Promise<StoredEnrichmentState> {
     const rows = this.links.get(matchId);
+    const metrics = rows?.statistics
+      ? [rows.statistics.home, rows.statistics.away].flatMap((side) => Object.values(side))
+      : [];
+
     return {
       statisticsCoverage: rows?.statistics?.coverage ?? null,
+      statisticsValueCount: metrics.filter((value) => value !== null).length,
       goalsCoverage: rows?.goals?.coverage ?? null,
+      goalsEventCount: rows?.goals?.events.length ?? 0,
     };
   }
 
@@ -644,6 +670,253 @@ describe('enrichMatchesBatch — cobertura incompleta, sin cobertura y errores',
   });
 });
 
+describe('enrichMatchesBatch — una carga parcial no pisa otra parcial más completa', () => {
+  it('estadísticas parciales con 8 valores NO se reemplazan por parciales con 4', async () => {
+    const env = setup({
+      100: {
+        fixture: fixtureOk(100),
+        statistics: [PARTIAL_STATS_8, PARTIAL_STATS],
+        events: FULL_EVENTS,
+      },
+    });
+    env.store.addMatch(M1);
+    await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+    expect(env.store.links.get(M1)?.statistics?.coverage).toBe('partial');
+    const confirmadas = JSON.parse(JSON.stringify(env.store.links.get(M1)?.statistics));
+
+    const report = await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    expect(JSON.parse(JSON.stringify(env.store.links.get(M1)?.statistics))).toEqual(confirmadas);
+    expect(report.entries[0]?.statistics).toMatchObject({
+      status: 'conservado',
+      coverage: 'partial',
+    });
+    expect(report.entries[0]?.statistics.detail).toContain('8 valores');
+  });
+
+  it('estadísticas parciales con 4 valores SÍ se reemplazan por parciales con 8', async () => {
+    const env = setup({
+      100: {
+        fixture: fixtureOk(100),
+        statistics: [PARTIAL_STATS, PARTIAL_STATS_8],
+        events: FULL_EVENTS,
+      },
+    });
+    env.store.addMatch(M1);
+    await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    const report = await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    expect(report.entries[0]?.statistics.status).toBe('guardado');
+    expect(env.store.links.get(M1)?.statistics?.home.cornerKicks).toBe(6);
+  });
+
+  it('con la misma cantidad de valores se acepta como corrección', async () => {
+    const otraVersion = ok([
+      team(HOME, { 'Ball Possession': '60%', 'Total Shots': 16 }),
+      team(AWAY, { 'Ball Possession': '40%', 'Total Shots': 9 }),
+    ]);
+    const env = setup({
+      100: {
+        fixture: fixtureOk(100),
+        statistics: [PARTIAL_STATS, otraVersion],
+        events: FULL_EVENTS,
+      },
+    });
+    env.store.addMatch(M1);
+    await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    expect(env.store.links.get(M1)?.statistics?.home.totalShots).toBe(16);
+  });
+
+  it('una cronología incompleta con 2 eventos NO se reemplaza por otra incompleta con 1', async () => {
+    const env = setup({
+      100: { fixture: fixtureOk(100), statistics: FULL_STATS, events: [PARTIAL_EVENTS, ONE_EVENT] },
+    });
+    env.store.addMatch(M1);
+    await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+    expect(env.store.links.get(M1)?.goals).toMatchObject({ coverage: 'incomplete' });
+
+    const report = await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    expect(env.store.links.get(M1)?.goals?.events).toHaveLength(2);
+    expect(report.entries[0]?.goals).toMatchObject({
+      status: 'conservado',
+      coverage: 'incomplete',
+    });
+  });
+
+  it('una cronología incompleta con 1 evento SÍ se reemplaza por otra incompleta con 2', async () => {
+    const env = setup({
+      100: { fixture: fixtureOk(100), statistics: FULL_STATS, events: [ONE_EVENT, PARTIAL_EVENTS] },
+    });
+    env.store.addMatch(M1);
+    await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    expect(env.store.links.get(M1)?.goals?.events).toHaveLength(2);
+  });
+
+  it('una corrección COMPLETA con menos eventos sí reemplaza (se retiró una anulación)', async () => {
+    const conAnulacion = ok([
+      goal(HOME, 47),
+      goal(AWAY, 73),
+      goal(HOME, 90, 4),
+      {
+        time: { elapsed: 80, extra: null },
+        team: { id: AWAY },
+        player: { name: null },
+        type: 'Var',
+        detail: 'Goal cancelled',
+        comments: null,
+      },
+    ]);
+    const env = setup({
+      100: {
+        fixture: fixtureOk(100),
+        statistics: FULL_STATS,
+        events: [conAnulacion, FULL_EVENTS],
+      },
+    });
+    env.store.addMatch(M1);
+    await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+    expect(env.store.links.get(M1)?.goals).toMatchObject({ coverage: 'complete' });
+    expect(env.store.links.get(M1)?.goals?.events).toHaveLength(4);
+
+    const report = await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    expect(report.entries[0]?.goals.status).toBe('guardado');
+    expect(env.store.links.get(M1)?.goals?.events).toHaveLength(3);
+  });
+
+  it('una cobertura completa siempre reemplaza a una parcial', async () => {
+    const env = setup({
+      100: {
+        fixture: fixtureOk(100),
+        statistics: [PARTIAL_STATS_8, FULL_STATS],
+        events: FULL_EVENTS,
+      },
+    });
+    env.store.addMatch(M1);
+    await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    expect(env.store.links.get(M1)?.statistics?.coverage).toBe('complete');
+  });
+});
+
+describe('enrichMatchesBatch — estadísticas y eventos embebidos en el fixture', () => {
+  const embebidas = (over: Record<string, unknown> = {}) =>
+    fixtureOk(100, {
+      statistics:
+        FULL_STATS.kind === 'response' ? (FULL_STATS.body as { response: unknown[] }).response : [],
+      events:
+        FULL_EVENTS.kind === 'response'
+          ? (FULL_EVENTS.body as { response: unknown[] }).response
+          : [],
+      ...over,
+    });
+
+  it('si el fixture las trae, el partido cuesta 1 pedido en vez de 3', async () => {
+    const env = setup({ 100: { fixture: embebidas() } });
+    env.store.addMatch(M1);
+
+    const report = await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    expect(env.calls).toEqual(['fixture:100']);
+    expect(report.entries[0]).toMatchObject({
+      outcome: 'enriquecido',
+      requests: 1,
+      statistics: { status: 'guardado', coverage: 'complete' },
+      goals: { status: 'guardado', coverage: 'complete' },
+    });
+    expect(report.entries[0]?.evidence).toMatchObject({
+      statisticsSource: 'fixture',
+      goalsSource: 'fixture',
+    });
+    expect(report.quota.requestsMade).toBe(1);
+    expect(env.store.links.get(M1)?.goals?.events).toHaveLength(3);
+  });
+
+  it('lo embebido se guarda igual que lo del endpoint', async () => {
+    const embedded = setup({ 100: { fixture: embebidas() } });
+    const separate = setup({ 100: COMPLETE });
+    embedded.store.addMatch(M1);
+    separate.store.addMatch(M1);
+
+    await embedded.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+    await separate.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    expect(embedded.store.links.get(M1)).toEqual(separate.store.links.get(M1));
+  });
+
+  it('una lista embebida vacía NO se toma como «sin datos»: se confirma con el endpoint', async () => {
+    const env = setup({
+      100: {
+        fixture: embebidas({ statistics: [], events: [] }),
+        statistics: FULL_STATS,
+        events: FULL_EVENTS,
+      },
+    });
+    env.store.addMatch(M1);
+
+    const report = await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: true });
+
+    expect(env.calls).toEqual(['fixture:100', 'statistics:100', 'events:100']);
+    expect(report.entries[0]?.evidence).toMatchObject({
+      statisticsSource: 'endpoint',
+      goalsSource: 'endpoint',
+    });
+  });
+
+  it('una lista embebida ilegible cae al endpoint de respaldo', async () => {
+    const env = setup({
+      100: {
+        fixture: embebidas({ statistics: [{ team: { id: 999 }, statistics: [] }] }),
+        statistics: FULL_STATS,
+      },
+    });
+    env.store.addMatch(M1);
+
+    const report = await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: true });
+
+    // Estadísticas por endpoint (las embebidas no sirven); goles embebidos.
+    expect(env.calls).toEqual(['fixture:100', 'statistics:100']);
+    expect(report.entries[0]?.evidence).toMatchObject({
+      statisticsSource: 'endpoint',
+      goalsSource: 'fixture',
+    });
+  });
+
+  it('sin listas embebidas pide los dos endpoints, como antes', async () => {
+    const env = setup({ 100: COMPLETE });
+    env.store.addMatch(M1);
+
+    await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: true });
+
+    expect(env.calls).toEqual(['fixture:100', 'statistics:100', 'events:100']);
+  });
+});
+
+describe('enrichMatchesBatch — proveedor del partido interno', () => {
+  it('un partido de otro proveedor se rechaza explícitamente y sin gastar ningún pedido', async () => {
+    const env = setup({ 100: COMPLETE });
+    env.store.addMatch(M1, { provider: 'api-football' });
+
+    const report = await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: false });
+
+    expect(env.calls).toEqual([]);
+    expect(report.quota.requestsMade).toBe(0);
+    expect(report.entries[0]).toMatchObject({ outcome: 'rechazado', requests: 0 });
+    expect(report.entries[0]?.reasons[0]).toContain('proveedor-no-soportado');
+    expect(env.store.saves).toEqual([]);
+  });
+});
+
 describe('enrichMatchesBatch — cuota y límites', () => {
   it('con la cuota agotada no se consulta ni se escribe más, y el resto del lote se informa', async () => {
     const env = setup({ 100: COMPLETE, 200: { ...COMPLETE, fixture: fixtureOk(200) } }, 4);
@@ -775,6 +1048,47 @@ describe('createRequestGate', () => {
     await gate.request(async () => ok([]));
 
     expect(gate.stats).toMatchObject({ requestsMade: 2, lastReservedCount: 2 });
+  });
+});
+
+describe('formatEnrichBatchEvidence', () => {
+  it('arma la evidencia saneada por partido: ids, equipos, liga/temporada, inicios UTC, campos y goles', async () => {
+    const env = setup({ 100: { ...COMPLETE, statistics: PARTIAL_STATS } });
+    env.store.addMatch(M1);
+
+    const report = await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: true });
+    const evidence = formatEnrichBatchEvidence(report);
+
+    expect(evidence).toContain(`### Partido ${M1} ↔ fixture 100`);
+    expect(evidence).toContain('Spain ↔ Spain · England ↔ England');
+    expect(evidence).toContain('Euro Championship (liga 4, temporada 2024)');
+    expect(evidence).toContain('2024-07-14T19:00:00.000Z ↔ 2024-07-14T19:00:00.000Z');
+    expect(evidence).toContain('presentes: home.possessionPct');
+    expect(evidence).toContain('ausentes: home.shotsOnGoal');
+    expect(evidence).toContain('3 evento(s)');
+    expect(evidence).toContain('Pedidos de este partido: 3');
+  });
+
+  it('no incluye claves, URLs ni cabeceras', async () => {
+    const env = setup({ 100: COMPLETE });
+    env.store.addMatch(M1);
+
+    const evidence = formatEnrichBatchEvidence(
+      await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: true }),
+    );
+
+    expect(evidence).not.toMatch(/https?:\/\/|x-apisports|authorization|api[_-]?key/i);
+  });
+
+  it('un partido rechazado muestra el motivo sin datos inventados', async () => {
+    const env = setup({});
+    const report = await env.run([{ matchId: M1, fixtureId: 100 }], { dryRun: true });
+
+    const evidence = formatEnrichBatchEvidence(report);
+
+    expect(evidence).toContain('rechazado');
+    expect(evidence).toContain('partido-inexistente');
+    expect(evidence).not.toContain('Estadísticas (');
   });
 });
 

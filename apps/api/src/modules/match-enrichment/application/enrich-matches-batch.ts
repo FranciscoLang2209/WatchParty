@@ -13,14 +13,21 @@ import {
   type TeamStatistics,
 } from '../domain/match-enrichment.js';
 import {
+  embeddedOutcome,
   isRetryableEnrichmentOutcome,
   normalizeFixtureGoals,
   normalizeFixtureLookup,
   normalizeFixtureStatistics,
   type EnrichmentFetchError,
   type FixtureInfo,
+  type GoalsResult,
+  type StatisticsResult,
 } from './api-football-enrichment-normalizer.js';
-import { verifyCorrespondence, type Rejection } from './enrichment-linking.js';
+import {
+  rejectUnsupportedProvider,
+  verifyCorrespondence,
+  type Rejection,
+} from './enrichment-linking.js';
 import type { EnrichmentEntry } from './enrichment-manifest.js';
 
 /**
@@ -201,6 +208,9 @@ export interface EntryEvidence {
   homeTeam?: { internal: string; provider: string };
   awayTeam?: { internal: string; provider: string };
   fixtureStatus?: string;
+  /** `fixture`: venía embebida en `GET /fixtures?id=` (sin pedido extra); `endpoint`: se pidió aparte. */
+  statisticsSource?: 'fixture' | 'endpoint';
+  goalsSource?: 'fixture' | 'endpoint';
   statisticsPresent?: string[];
   statisticsAbsent?: string[];
   goalsStored?: number;
@@ -273,15 +283,28 @@ const STATISTICS_RANK: Record<StatisticsCoverage, number> = { partial: 1, comple
 const GOALS_RANK: Record<GoalsCoverage, number> = { incomplete: 1, complete: 2 };
 
 /**
- * Una carga nueva reemplaza a la guardada sólo si es tan completa como ella: una respuesta
- * incompleta nunca pisa datos ya confirmados, y una corrección válida (igual o mejor) sí.
+ * ¿La carga nueva reemplaza a la guardada? Nunca pierde datos confirmados:
+ *  - con menos cobertura, no;
+ *  - con más cobertura, sí;
+ *  - con la misma cobertura COMPLETA, sí (una corrección válida: ya está comprobada);
+ *  - con la misma cobertura NO completa, sólo si trae al menos tanto como lo guardado. Dos cargas
+ *    parciales no son intercambiables: una con 2 métricas no pisa a otra con 8.
  */
 function shouldReplace<C extends string>(
-  stored: C | null,
-  incoming: C,
+  stored: { coverage: C | null; count: number },
+  incoming: { coverage: C; count: number },
   rank: Record<C, number>,
 ): boolean {
-  return stored === null || rank[incoming] >= rank[stored];
+  if (stored.coverage === null) return true;
+
+  const storedRank = rank[stored.coverage];
+  const incomingRank = rank[incoming.coverage];
+  if (incomingRank !== storedRank) return incomingRank > storedRank;
+
+  const topRank = Math.max(...Object.values<number>(rank));
+  if (incomingRank === topRank) return true;
+
+  return incoming.count >= stored.count;
 }
 
 const FETCH_ERROR_TEXT: Record<EnrichmentFetchError['reason'], string> = {
@@ -322,6 +345,65 @@ function failedEntry(
   return { outcome, reasons, statistics: emptyPart(), goals: emptyPart(), evidence };
 }
 
+type Obtained<R> =
+  { kind: 'quota-exhausted' } | { kind: 'result'; result: R; source: 'fixture' | 'endpoint' };
+
+/**
+ * `GET /fixtures?id=` suele traer `statistics` y `events` embebidos: si vienen y se pueden
+ * normalizar, no hace falta un pedido más (un partido cuesta 1 pedido en vez de 3). Si no vienen,
+ * vienen vacíos o no se pueden leer, se piden a su endpoint propio como respaldo: una lista
+ * embebida vacía no se toma como «sin datos» sin confirmarla.
+ */
+async function obtainStatistics(
+  deps: EnrichMatchesDeps,
+  gate: RequestGate,
+  fixture: FixtureInfo,
+  fixtureId: number,
+): Promise<Obtained<StatisticsResult>> {
+  const teamIds = { home: fixture.home.id, away: fixture.away.id };
+
+  if (fixture.embeddedStatistics !== null && fixture.embeddedStatistics.length > 0) {
+    const embedded = normalizeFixtureStatistics(
+      embeddedOutcome(fixture.embeddedStatistics),
+      teamIds,
+    );
+    if (embedded.kind === 'ok') return { kind: 'result', result: embedded, source: 'fixture' };
+  }
+
+  const fetched = await gate.request(() => deps.client.fetchFixtureStatistics({ fixtureId }));
+  if (fetched.kind === 'quota-exhausted') return fetched;
+
+  return {
+    kind: 'result',
+    result: normalizeFixtureStatistics(fetched.outcome, teamIds),
+    source: 'endpoint',
+  };
+}
+
+async function obtainGoals(
+  deps: EnrichMatchesDeps,
+  gate: RequestGate,
+  fixture: FixtureInfo,
+  fixtureId: number,
+  score: EnrichmentMatchRef['score'],
+): Promise<Obtained<GoalsResult>> {
+  const teamIds = { home: fixture.home.id, away: fixture.away.id };
+
+  if (fixture.embeddedEvents !== null && fixture.embeddedEvents.length > 0) {
+    const embedded = normalizeFixtureGoals(embeddedOutcome(fixture.embeddedEvents), teamIds, score);
+    if (embedded.kind === 'ok') return { kind: 'result', result: embedded, source: 'fixture' };
+  }
+
+  const fetched = await gate.request(() => deps.client.fetchFixtureEvents({ fixtureId }));
+  if (fetched.kind === 'quota-exhausted') return fetched;
+
+  return {
+    kind: 'result',
+    result: normalizeFixtureGoals(fetched.outcome, teamIds, score),
+    source: 'endpoint',
+  };
+}
+
 async function processEntry(
   deps: EnrichMatchesDeps,
   gate: RequestGate,
@@ -334,6 +416,10 @@ async function processEntry(
       'partido-inexistente: el matchId no existe; este comando nunca crea partidos',
     ]);
   }
+
+  // Un partido de otro proveedor no se compara contra la tabla de ligas: se rechaza sin consultar.
+  const unsupported = rejectUnsupportedProvider(match);
+  if (unsupported) return failedEntry('rechazado', [formatRejection(unsupported)]);
 
   // La correspondencia ya guardada no se reasigna en silencio.
   const ownerOfFixture = await deps.store.findMatchIdByFixture(
@@ -380,22 +466,20 @@ async function processEntry(
   }
   evidence.notes = verdict.notes;
 
-  const teamIds = { home: fixture.home.id, away: fixture.away.id };
   const stored = await deps.store.getStoredState(ENRICHMENT_PROVIDER, match.id);
   const payload: MatchEnrichmentPayload = {};
   const reasons: string[] = [];
 
-  // 2) Estadísticas.
-  const statisticsGate = await gate.request(() =>
-    deps.client.fetchFixtureStatistics({ fixtureId: entry.fixtureId }),
-  );
+  // 2) Estadísticas: del propio fixture si las trae embebidas; si no, de su endpoint.
+  const statisticsFetch = await obtainStatistics(deps, gate, fixture, entry.fixtureId);
   let statisticsPart: PartReport;
 
-  if (statisticsGate.kind === 'quota-exhausted') {
+  if (statisticsFetch.kind === 'quota-exhausted') {
     statisticsPart = { status: 'error', detail: 'cuota agotada' };
     reasons.push('cuota-agotada: no se consultaron las estadísticas');
   } else {
-    const result = normalizeFixtureStatistics(statisticsGate.outcome, teamIds);
+    const result = statisticsFetch.result;
+    evidence.statisticsSource = statisticsFetch.source;
 
     if (result.kind === 'error') {
       statisticsPart = { status: 'error', detail: describeFetchError(result) };
@@ -414,7 +498,13 @@ async function processEntry(
         ? `valores descartados por inválidos: ${result.discarded.join(', ')}`
         : undefined;
 
-      if (shouldReplace(stored.statisticsCoverage, result.statistics.coverage, STATISTICS_RANK)) {
+      if (
+        shouldReplace(
+          { coverage: stored.statisticsCoverage, count: stored.statisticsValueCount },
+          { coverage: result.statistics.coverage, count: fields.present.length },
+          STATISTICS_RANK,
+        )
+      ) {
         payload.statistics = result.statistics;
         statisticsPart = {
           status: options.dryRun ? 'guardaria' : 'guardado',
@@ -425,23 +515,22 @@ async function processEntry(
         statisticsPart = {
           status: 'conservado',
           coverage: result.statistics.coverage,
-          detail: `se conservan las ya guardadas (${stored.statisticsCoverage}): la respuesta es menos completa`,
+          detail: `se conservan las ya guardadas (${stored.statisticsCoverage}, ${stored.statisticsValueCount} valores): la respuesta trae menos (${fields.present.length})`,
         };
       }
     }
   }
 
-  // 3) Goles.
-  const goalsGate = await gate.request(() =>
-    deps.client.fetchFixtureEvents({ fixtureId: entry.fixtureId }),
-  );
+  // 3) Goles: del propio fixture si trae los eventos embebidos; si no, de su endpoint.
+  const goalsFetch = await obtainGoals(deps, gate, fixture, entry.fixtureId, match.score);
   let goalsPart: PartReport;
 
-  if (goalsGate.kind === 'quota-exhausted') {
+  if (goalsFetch.kind === 'quota-exhausted') {
     goalsPart = { status: 'error', detail: 'cuota agotada' };
     reasons.push('cuota-agotada: no se consultaron los goles');
   } else {
-    const result = normalizeFixtureGoals(goalsGate.outcome, teamIds, match.score);
+    const result = goalsFetch.result;
+    evidence.goalsSource = goalsFetch.source;
 
     if (result.kind === 'error') {
       goalsPart = { status: 'error', detail: describeFetchError(result) };
@@ -455,7 +544,13 @@ async function processEntry(
       evidence.goalsStored = result.goals.events.length;
       evidence.goalsReconciliation = result.reconciliation;
 
-      if (shouldReplace(stored.goalsCoverage, result.goals.coverage, GOALS_RANK)) {
+      if (
+        shouldReplace(
+          { coverage: stored.goalsCoverage, count: stored.goalsEventCount },
+          { coverage: result.goals.coverage, count: result.goals.events.length },
+          GOALS_RANK,
+        )
+      ) {
         payload.goals = result.goals;
         goalsPart = {
           status: options.dryRun ? 'guardaria' : 'guardado',
@@ -466,7 +561,7 @@ async function processEntry(
         goalsPart = {
           status: 'conservado',
           coverage: result.goals.coverage,
-          detail: `se conserva la cronología ya guardada (${stored.goalsCoverage}): la respuesta es menos completa`,
+          detail: `se conserva la cronología ya guardada (${stored.goalsCoverage}, ${stored.goalsEventCount} eventos): la respuesta trae menos (${result.goals.events.length})`,
         };
       }
     }
@@ -629,4 +724,56 @@ export function formatEnrichBatchTable(report: EnrichBatchReport): string {
   ];
 
   return [...header, ...rows, ...summary].join('\n');
+}
+
+/**
+ * Evidencia saneada por partido, lista para pegar en la PR o el issue: ids de ambos sistemas,
+ * equipos, competición/temporada del proveedor, inicios UTC, de dónde salió cada parte, campos
+ * presentes/ausentes, goles y conciliación. No incluye claves, URLs de base ni cabeceras.
+ */
+export function formatEnrichBatchEvidence(report: EnrichBatchReport): string {
+  const blocks = report.entries.map((entry) => {
+    const e = entry.evidence;
+    const lines = [
+      `### Partido ${entry.matchId} ↔ fixture ${entry.fixtureId}`,
+      `- Resultado: ${entry.outcome}${entry.reasons.length ? ` (${entry.reasons.join('; ').replace(/\n/g, ' ')})` : ''}`,
+    ];
+
+    if (e.homeTeam && e.awayTeam) {
+      lines.push(
+        `- Equipos (interno ↔ proveedor): ${e.homeTeam.internal} ↔ ${e.homeTeam.provider} · ${e.awayTeam.internal} ↔ ${e.awayTeam.provider}`,
+      );
+    }
+    if (e.fixtureLeague) {
+      lines.push(
+        `- Competición/temporada del proveedor: ${e.fixtureLeague.name} (liga ${e.fixtureLeague.id}, temporada ${e.fixtureLeague.season})`,
+      );
+    }
+    if (e.matchKickoffAt && e.fixtureKickoffAt) {
+      lines.push(`- Inicio UTC (interno ↔ proveedor): ${e.matchKickoffAt} ↔ ${e.fixtureKickoffAt}`);
+    }
+    if (e.fixtureStatus) lines.push(`- Estado del fixture: ${e.fixtureStatus}`);
+    if (e.statisticsPresent || e.statisticsAbsent) {
+      lines.push(
+        `- Estadísticas (${e.statisticsSource ?? '—'}): ${entry.statistics.status}${entry.statistics.coverage ? ` (${entry.statistics.coverage})` : ''}`,
+        `  - presentes: ${e.statisticsPresent?.join(', ') || '—'}`,
+        `  - ausentes: ${e.statisticsAbsent?.join(', ') || '—'}`,
+      );
+    } else {
+      lines.push(`- Estadísticas: ${entry.statistics.status}`);
+    }
+    if (e.goalsStored !== undefined) {
+      lines.push(
+        `- Goles (${e.goalsSource ?? '—'}): ${entry.goals.status}${entry.goals.coverage ? ` (${entry.goals.coverage})` : ''} · ${e.goalsStored} evento(s) · ${e.goalsReconciliation ?? ''}`,
+      );
+    } else {
+      lines.push(`- Goles: ${entry.goals.status}`);
+    }
+    if (e.notes?.length) lines.push(`- Notas: ${e.notes.join('; ')}`);
+    lines.push(`- Pedidos de este partido: ${entry.requests}`);
+
+    return lines.join('\n');
+  });
+
+  return blocks.join('\n\n');
 }
