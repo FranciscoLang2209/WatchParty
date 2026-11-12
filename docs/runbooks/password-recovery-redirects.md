@@ -40,6 +40,20 @@ habilita **sólo** por el evento `PASSWORD_RECOVERY` y no por tener una sesión 
 colateral a tener en cuenta: otros enlaces de Supabase que vuelven con sesión en la URL (por
 ejemplo, la confirmación de un registro) también se procesan y dejan la sesión iniciada.
 
+### El hueco entre la sesión y la señal
+
+El cliente guarda la sesión del enlace, resuelve y **recién después** emite `PASSWORD_RECOVERY`. En
+ese hueco (milisegundos) ya hay sesión pero todavía no hay permiso para cambiar la contraseña, y la
+pantalla afirmaba «El enlace no es válido» a quien abría un enlace bueno (un lector de pantalla lo
+anuncia). Para evitarlo, `apps/web/src/auth/recovery-link.ts` anota, antes de que el cliente procese
+la URL, si el fragmento traía `type=recovery` con tokens. Mientras eso es cierto y la señal no llegó,
+el `AuthProvider` sigue en `loading` y la pantalla muestra «Verificando…». Se deja de esperar cuando:
+
+- llega `PASSWORD_RECOVERY` (se habilita el formulario);
+- no hay sesión (token vencido, ya usado o rechazado): se avisa enseguida;
+- pasan 2 s desde que la sesión se resolvió sin que llegue la señal: se avisa y se ofrece pedir otro
+  enlace, en vez de dejar la pantalla cargando para siempre.
+
 ## Las URLs a habilitar
 
 Todas terminan en `/reset-password`, sin barra final y sin query.
@@ -130,6 +144,9 @@ pnpm --filter web test
 | El enlace real habilita el formulario (cliente real) | `recovery-callback.test.tsx`                   |
 | Enlace vencido o sin enlace: mensaje recuperable     | `recovery-callback.test.tsx`                   |
 | Una sesión que no es de recuperación no habilita     | `recovery-callback.test.tsx`                   |
+| En el hueco antes de la señal: «Verificando…»        | `recovery-callback.test.tsx`                   |
+| Token rechazado: aviso enseguida, sin esperar        | `recovery-callback.test.tsx`                   |
+| Señal que nunca llega: aviso tras el tope            | `recovery-callback.test.tsx`                   |
 | `/reset-password` es pública                         | `router.test.tsx`                              |
 
 ### A mano, contra el stack local
