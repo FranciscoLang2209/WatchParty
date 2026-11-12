@@ -63,3 +63,7 @@ también puede considerar el usuario/API y la IP de salida al calcularla.
 
 No se importaron ni persistieron datos, no se crearon endpoints, cron, workers ni
 colas, y no se consultó API-Football desde ninguna ruta HTTP de la aplicación.
+
+## Estadísticas y eventos
+
+Esta verificación solo cubrió `fixtures` (WAT-100). **No** verificó `fixtures/statistics` ni `fixtures/events`. API-Football se usa como fuente complementaria para enriquecer partidos históricos ya guardados; el procedimiento, sus límites y lo que falta comprobar con la cuenta real están en `docs/runbooks/enriquecimiento-historico-partidos.md`. Que una liga declare `coverage.fixtures.statistics_fixtures` o `events` en `/leagues` no garantiza datos completos por partido.

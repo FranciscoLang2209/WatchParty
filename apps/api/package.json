@@ -30,6 +30,7 @@
     "verify:match-rating-journey": "tsx --env-file-if-exists=.env scripts/verify-match-rating-journey.ts",
     "matches:sync": "tsx --env-file-if-exists=.env src/scripts/sync-matches.ts",
     "matches:import-batch": "tsx --env-file-if-exists=.env src/scripts/import-matches-batch.ts",
+    "matches:enrich-batch": "tsx --env-file-if-exists=.env src/scripts/enrich-matches-batch.ts",
     "demo:seed": "tsx --env-file-if-exists=.env src/scripts/demo-seed.ts",
     "matches:probe-coverage": "tsx --env-file-if-exists=.env src/scripts/probe-football-data-coverage.ts",
     "reporter:collect": "tsx --env-file-if-exists=.env src/scripts/collect-kpis.ts",

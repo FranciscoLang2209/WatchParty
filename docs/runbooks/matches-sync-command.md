@@ -120,3 +120,7 @@ Esta corrida documentada es de diseño/tests con dobles falsos (cliente, store, 
 ## Importación manual por lotes
 
 Las temporadas cerradas no las consulta este comando. Se cargan con `matches:import-batch` y el workflow manual `Matches import batch`, que escribe en la base de demo (entorno de GitHub Actions `demo`, por defecto) o en la de producción con `target: production` (entorno `Production`, solo desde `main` y con `batch` obligatorio). El valor del lote completo y la configuración del entorno están en `docs/integrations/football-data-org-pilot-5000.md`.
+
+## Enriquecimiento histórico (estadísticas y goles)
+
+Las estadísticas y los goles de partidos **ya guardados** no los carga este comando ni el sync diario: se agregan con `matches:enrich-batch` y el workflow manual `Matches enrich batch`, sobre un lote aprobado de correspondencias `MATCH_ID:FIXTURE_ID`. Comparten el mismo grupo de concurrencia y el presupuesto de pedidos de API-Football. Ver `docs/runbooks/enriquecimiento-historico-partidos.md`.

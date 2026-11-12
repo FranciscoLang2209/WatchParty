@@ -12,6 +12,7 @@ import { MatchReviewsList } from '@/features/reviews/MatchReviewsList';
 import { getWatched, setWatched } from '@/features/watched/api';
 import { WatchedApiError, isCancelled as isWatchedCancelled } from '@/features/watched/types';
 import { formatKickoff, matchStatusLabel } from './format';
+import { MatchHistoricalDetail } from './MatchHistoricalDetail';
 import { MatchResult } from './MatchResult';
 import { getMatch } from './api';
 import { MatchesApiError, isCancelled, type Match } from './types';
@@ -472,6 +473,15 @@ function DetallePartido({ matchId }: { matchId: string }) {
               <p className="text-base font-semibold">{matchStatusLabel(estado.match.status)}</p>
               <MatchResult match={estado.match} />
             </Card>
+
+            {estado.match.status === 'finished' ? (
+              <MatchHistoricalDetail
+                key={estado.match.id}
+                match={estado.match}
+                accessToken={accessToken}
+                onSessionExpired={() => void signOut()}
+              />
+            ) : null}
 
             <Button
               type="button"

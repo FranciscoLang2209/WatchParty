@@ -61,6 +61,11 @@ function esListado(url: RequestInfo | URL): boolean {
   return String(url).split('?')[0]!.endsWith('/reviews');
 }
 
+/** Las estadísticas y goles históricos corren aparte: por defecto, el partido no tiene detalle cargado. */
+function esDetalleHistorico(url: RequestInfo | URL): boolean {
+  return String(url).endsWith('/historical-detail');
+}
+
 /**
  * Cada llamada devuelve una `Response` nueva: el cuerpo se consume una sola vez.
  * La lectura de «visto» confirma que no hay marca y el resumen que no hay votos,
@@ -75,7 +80,9 @@ function responderCon(body: unknown, status = 200) {
           ? jsonResponse({ average: null, count: 0 })
           : esListado(url)
             ? jsonResponse({ reviews: [], nextCursor: null })
-            : jsonResponse(body, status),
+            : esDetalleHistorico(url)
+              ? jsonResponse({ detail: null })
+              : jsonResponse(body, status),
     ),
   );
 }
@@ -101,7 +108,7 @@ async function detalle() {
 /** Pedidos del detalle y la sala, sin las lecturas de «visto» ni del resumen. */
 function llamadasSinVisto(): [string, RequestInit][] {
   return (fetchSpy.mock.calls as [string, RequestInit][]).filter(
-    ([url]) => !esVisto(url) && !esResumen(url) && !esListado(url),
+    ([url]) => !esVisto(url) && !esResumen(url) && !esListado(url) && !esDetalleHistorico(url),
   );
 }
 
@@ -1113,6 +1120,10 @@ describe('Calificación del partido (WAT-213)', () => {
 
       if (destino === URL_PARTIDO) {
         return Promise.resolve(jsonResponse({ match: { ...partido, status } }));
+      }
+
+      if (esDetalleHistorico(destino)) {
+        return Promise.resolve(jsonResponse({ detail: null }));
       }
 
       if (destino === URL_VISTO) {
@@ -2334,5 +2345,94 @@ describe('Calificación del partido (WAT-213)', () => {
 
       expect(await m.findByText('Reseña publicada.')).toBeInTheDocument();
     });
+  });
+});
+
+describe('Estadísticas y goles históricos en el detalle', () => {
+  const URL_DETALLE = `${API_BASE}/matches/match-001/historical-detail`;
+
+  const historico = {
+    source: 'api-football',
+    historical: true,
+    statistics: {
+      coverage: 'complete',
+      fetchedAt: '2026-11-12T15:00:00.000Z',
+      home: { possessionPct: 58, totalShots: 15, shotsOnGoal: 7, cornerKicks: 6, fouls: 11 },
+      away: { possessionPct: 42, totalShots: 9, shotsOnGoal: 3, cornerKicks: 0, fouls: 14 },
+    },
+    goals: {
+      coverage: 'complete',
+      fetchedAt: '2026-11-12T15:00:01.000Z',
+      goals: [
+        { kind: 'goal', side: 'home', playerName: 'N. Williams', minute: 45, extraMinute: 2 },
+      ],
+      cancelled: [],
+      shootout: [],
+    },
+  };
+
+  function servir(status: string) {
+    fetchSpy.mockImplementation((url: RequestInfo | URL) => {
+      const destino = String(url);
+
+      if (destino === URL_DETALLE) return Promise.resolve(jsonResponse({ detail: historico }));
+      if (esVisto(destino)) return Promise.resolve(jsonResponse({ watched: false }));
+      if (esResumen(destino)) return Promise.resolve(jsonResponse({ average: null, count: 0 }));
+      if (esListado(destino))
+        return Promise.resolve(jsonResponse({ reviews: [], nextCursor: null }));
+      if (destino.endsWith('/rating') || destino.endsWith('/review')) {
+        return Promise.resolve(jsonResponse({ rating: null, review: null }));
+      }
+
+      return Promise.resolve(jsonResponse({ match: { ...partido, status } }));
+    });
+  }
+
+  it('un partido finalizado muestra las estadísticas y los goles guardados', async () => {
+    servir('finished');
+
+    renderAt('/matches/match-001');
+    const m = await detalle();
+
+    expect(
+      await m.findByRole('heading', { level: 2, name: 'Estadísticas y goles' }),
+    ).toBeInTheDocument();
+    expect(
+      await m.findByRole('table', { name: /River Plate contra Boca Juniors/ }),
+    ).toBeInTheDocument();
+    expect(m.getByText("45+2'")).toBeInTheDocument();
+    expect(m.getByText(/Fuente: API-Football/)).toBeInTheDocument();
+  });
+
+  it('un partido que no terminó no ofrece ni pide estadísticas históricas', async () => {
+    servir('scheduled');
+
+    renderAt('/matches/match-001');
+    const m = await detalle();
+    await m.findByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' });
+
+    expect(m.queryByRole('heading', { name: 'Estadísticas y goles' })).not.toBeInTheDocument();
+    expect(
+      (fetchSpy.mock.calls as [string, RequestInit][]).some(([url]) => String(url) === URL_DETALLE),
+    ).toBe(false);
+  });
+
+  it('si falla sólo esa sección, el resto del detalle sigue funcionando', async () => {
+    servir('finished');
+    const base = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((url: RequestInfo | URL, init?: RequestInit) =>
+      String(url) === URL_DETALLE
+        ? Promise.resolve(jsonResponse({ error: { code: 'INTERNAL_ERROR' } }, 500))
+        : base(url, init),
+    );
+
+    renderAt('/matches/match-001');
+    const m = await detalle();
+
+    expect(await m.findByRole('button', { name: 'Reintentar' })).toBeInTheDocument();
+    expect(
+      m.getByRole('heading', { level: 1, name: 'River Plate vs. Boca Juniors' }),
+    ).toBeInTheDocument();
+    expect(m.getByRole('button', { name: 'Entrar a la sala' })).toBeEnabled();
   });
 });

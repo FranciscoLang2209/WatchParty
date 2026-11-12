@@ -91,6 +91,7 @@ const app = createApp(
   { search: async () => ({ kind: 'matches', items: [], nextCursor: null }) },
   noopReviewStore,
   createReviewsCursorCodec(process.env.REVIEWS_CURSOR_SECRET),
+  { findHistoricalDetail: async () => null },
 );
 
 describe('GET /health', () => {

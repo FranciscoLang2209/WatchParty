@@ -73,7 +73,7 @@ function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
-function normalizeKickoffAt(value: unknown): string | null {
+export function normalizeKickoffAt(value: unknown): string | null {
   if (typeof value !== 'string') return null;
 
   const match = ISO_DATE_TIME_PATTERN.exec(value);
