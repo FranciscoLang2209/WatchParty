@@ -1,0 +1,56 @@
+name: Matches coverage probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: matches-sync-production
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: Production
+
+    steps:
+      - name: Check production branch
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "El sondeo de producción solo se puede ejecutar desde main." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Probe coverage
+        shell: bash
+        run: pnpm --filter @watchparty/api matches:probe-coverage 2>&1 | tee matches-coverage-report.txt
+        env:
+          FOOTBALL_DATA_ORG_BASE_URL: ${{ secrets.FOOTBALL_DATA_ORG_BASE_URL }}
+          FOOTBALL_DATA_ORG_API_KEY: ${{ secrets.FOOTBALL_DATA_ORG_API_KEY }}
+          PROBE_PERSISTED: 'false'
+
+      - name: Save coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matches-coverage-${{ github.run_number }}
+          path: matches-coverage-report.txt
+          retention-days: 7
