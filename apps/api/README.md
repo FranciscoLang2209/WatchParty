@@ -21,7 +21,9 @@ pnpm --filter @watchparty/api test        # corre los tests
 
 ## Variables de entorno
 
-- `PORT` (opcional): puerto en el que escucha el servidor. Por defecto, `3000`.
+La lista completa (obligatorias y opcionales, con sus valores locales) está en
+[Variables de entorno del README principal](../../README.md#variables-de-entorno).
+El ejemplo comentado es [`.env.example`](./.env.example).
 
 ## Endpoints
 
