@@ -33,8 +33,8 @@ Arranca primero Supabase local y, cuando está listo, la API y la web en paralel
 | API (Express)  | http://127.0.0.1:3000      |
 | Supabase local | ver `pnpm supabase:status` |
 
-Antes de la primera corrida, copiar `apps/api/.env.example` y `apps/web/.env.example` a `.env`
-en cada app y completarlos con los valores locales que imprime `pnpm supabase:status`.
+Antes de la primera corrida, crear los archivos `.env` de cada app (ver
+[Variables de entorno](#variables-de-entorno)).
 
 `Ctrl+C` detiene la API y la web. **Supabase sigue corriendo**: sus contenedores se detienen
 siempre de forma explícita.
@@ -49,6 +49,82 @@ Para levantar una sola app, sin Supabase:
 pnpm dev:api   # sólo la API, en modo watch
 pnpm dev:web   # sólo la web
 ```
+
+### Primera ejecución, paso a paso
+
+1. Abrir Docker Desktop y esperar a que el motor esté en ejecución.
+2. Instalar dependencias (ver [Instalación](#instalación)).
+3. Levantar Supabase local: `pnpm supabase:start`. La primera vez descarga las imágenes de Docker,
+   aplica las migraciones de `supabase/migrations/` y carga los datos de ejemplo de
+   `supabase/seed.sql`.
+4. Ver las claves locales con `pnpm supabase:status`.
+5. Crear los `.env` a partir de los ejemplos y completarlos (ver la tabla de abajo):
+   ```sh
+   cp apps/api/.env.example apps/api/.env
+   cp apps/web/.env.example apps/web/.env
+   ```
+6. Levantar todo: `pnpm dev`.
+7. Abrir http://localhost:5173, registrarse e iniciar sesión. Para comprobar la API:
+   `curl http://127.0.0.1:3000/health` debe devolver `{"status":"ok"}`.
+
+Para volver a la base de datos inicial (migraciones + seed) en cualquier momento:
+
+```sh
+pnpm exec supabase db reset --local
+```
+
+## Variables de entorno
+
+Los archivos `.env` nunca se versionan (están en `.gitignore`). Los `.env.example` de cada app
+tienen la lista completa con comentarios. Las claves de Supabase local son claves de desarrollo
+predeterminadas y salen de `pnpm supabase:status`; las claves de producción se configuran
+directamente en Vercel y no se documentan en el repositorio.
+
+### API (`apps/api/.env`)
+
+| Variable                     | Obligatoria                    | Valor en local / de dónde sale                                                                       |
+| ---------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `SUPABASE_URL`               | Sí                             | `http://127.0.0.1:54321` (`API URL` de `pnpm supabase:status`)                                       |
+| `SUPABASE_ANON_KEY`          | Sí                             | `Publishable key` (anon) de `pnpm supabase:status`                                                   |
+| `SUPABASE_SERVICE_ROLE_KEY`  | Sí                             | `Secret key` (service_role) de `pnpm supabase:status`. Solo backend: nunca en la web ni con `VITE_`  |
+| `WEB_ORIGIN`                 | Sí                             | `http://localhost:5173` (origen del frontend permitido por CORS)                                     |
+| `REVIEWS_CURSOR_SECRET`      | Sí                             | Cualquier secreto de 32 caracteres o más. Generar con `openssl rand -base64 32`                      |
+| `PORT`                       | No                             | Puerto de la API. Por defecto, `3000`                                                                |
+| `MATCHES_SYNC_PROVIDER`      | No (solo `matches:sync`)       | `football-data-org` (por defecto) o `api-football`                                                   |
+| `FOOTBALL_DATA_ORG_BASE_URL` | Solo para sincronizar          | `https://api.football-data.org`                                                                      |
+| `FOOTBALL_DATA_ORG_API_KEY`  | Solo para sincronizar          | Token personal de [football-data.org](https://www.football-data.org/client/register) (plan gratuito) |
+| `API_FOOTBALL_BASE_URL`      | Solo con `api-football`        | `https://v3.football.api-sports.io`                                                                  |
+| `API_FOOTBALL_KEY`           | Solo con `api-football`        | Clave de [API-Football](https://dashboard.api-football.com/register)                                 |
+| `SUPABASE_DB_URL`            | Solo `verify:rated-match-rate` | `postgresql://postgres:postgres@127.0.0.1:54322/postgres` (`DB URL` de `pnpm supabase:status`)       |
+
+Si falta una variable obligatoria, la API no arranca y muestra
+`Falta la variable de entorno requerida: <NOMBRE>`.
+
+Las variables `REPORTER_*` (reporte de KPIs) y `DEMO_*` (carga de usuarios de demo) solo las usan
+comandos puntuales; están documentadas en sus runbooks
+([reporter](./docs/runbooks/reporter-collector.md), [demo](./docs/runbooks/demo-501-usuarios.md)).
+
+### Web (`apps/web/.env`)
+
+| Variable                 | Obligatoria | Valor en local                                            |
+| ------------------------ | ----------- | --------------------------------------------------------- |
+| `VITE_SUPABASE_URL`      | Sí          | `http://127.0.0.1:54321`                                  |
+| `VITE_SUPABASE_ANON_KEY` | Sí          | La misma `Publishable key` (anon) que `SUPABASE_ANON_KEY` |
+| `VITE_API_BASE_URL`      | Sí          | `http://127.0.0.1:3000`                                   |
+
+Todo lo que lleva prefijo `VITE_` queda incluido en el código que se envía al navegador: nunca poner
+ahí la service_role ni claves de proveedores.
+
+### Cargar partidos reales (opcional)
+
+El seed local trae pocos partidos de ejemplo. Para traer la agenda real desde football-data.org
+(requiere `FOOTBALL_DATA_ORG_API_KEY`):
+
+```sh
+pnpm --filter @watchparty/api matches:sync
+```
+
+Más detalle en [`docs/runbooks/matches-sync-command.md`](./docs/runbooks/matches-sync-command.md).
 
 ## Validación local
 
@@ -101,7 +177,10 @@ El nombre del job (`quality`) y del workflow (`CI`) no cambian, así que el chec
 Monorepo gestionado con pnpm workspaces (`apps/*`).
 
 - `apps/api`: backend (Node + Express + TypeScript). Ver [`apps/api/README.md`](./apps/api/README.md).
-- `apps/web`: frontend (por agregar en un ticket posterior).
+- `apps/web`: frontend (React + Vite + TypeScript + Tailwind), cliente de Supabase Auth y de la API.
+- `supabase/`: configuración del stack local, migraciones de la base de datos y datos de ejemplo
+  (`seed.sql`).
+- `docs/`: runbooks de validación y operación.
 
 ## Runbooks
 
@@ -185,10 +264,12 @@ configuración vive en los Project Settings de cada proyecto.
 | Production | https://watchparty-api-ten.vercel.app |
 | Preview    | se genera una por cada pull request   |
 
-**Variables de entorno (Production y Preview)**: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `WEB_ORIGIN`, `REVIEWS_CURSOR_SECRET` (cifra el cursor de las opiniones) — sin
-valores reales documentados acá (se configuran directo en Vercel). `SUPABASE_SERVICE_ROLE_KEY` todavía no
-está configurada; cuando se agregue (ticket de persistencia), va exclusivamente en este proyecto — nunca
-en `apps/web`, y nunca con el prefijo `VITE_`.
+**Variables de entorno (Production y Preview)**: `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
+`SUPABASE_SERVICE_ROLE_KEY`, `WEB_ORIGIN`, `REVIEWS_CURSOR_SECRET` (cifra el cursor de las
+opiniones) — sin valores reales documentados acá (se configuran directo en Vercel).
+`SUPABASE_SERVICE_ROLE_KEY` va exclusivamente en este proyecto — nunca en `apps/web`, y nunca con
+el prefijo `VITE_`. El proyecto `apps/web` usa `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` y
+`VITE_API_BASE_URL` (ver [Variables de entorno](#variables-de-entorno)).
 
 ### Ciclo de despliegue
 
